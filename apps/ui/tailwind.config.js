@@ -1,0 +1,56 @@
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: ['./src/**/*.{js,ts,jsx,tsx,mdx}'],
+  theme: {
+    extend: {
+      colors: {
+        navy: {
+          50: '#1A2550',
+          100: '#182244',
+          200: '#1B2B65',
+          300: '#2D3F7B',
+          400: '#3D5291',
+          500: '#003d73',
+          600: '#111C44',
+          700: '#001F3F',
+          800: '#0E1838',
+          900: '#0B1437',
+        },
+        slate: {
+          DEFAULT: '#708090',
+          50: '#f4f5f7',
+          100: '#e8eaed',
+          200: '#c9cdd3',
+          300: '#a9b0b9',
+          400: '#8a93a0',
+          500: '#708090',
+          600: '#5a6673',
+          700: '#434d57',
+          800: '#2d333b',
+          900: '#161a1f',
+        },
+        gold: {
+          50: '#fdf8ef',
+          100: '#f9ecd4',
+          200: '#f0d8a3',
+          300: '#e5c171',
+          400: '#d4a94a',
+          500: '#C5A059',
+          600: '#a88638',
+          700: '#8b6c2a',
+          800: '#6e541f',
+          900: '#513d16',
+        },
+        ivory: '#F9F9F9',
+        /* ── Dark dashboard palette ── */
+        'd-bg':     'rgb(var(--d-bg) / <alpha-value>)',
+        'd-card':   'rgb(var(--d-card) / <alpha-value>)',
+        'd-border': 'rgb(var(--d-border) / <alpha-value>)',
+        'd-hover':  'rgb(var(--d-hover) / <alpha-value>)',
+        'd-muted':  'rgb(var(--d-muted) / <alpha-value>)',
+        'd-dim':    'rgb(var(--d-dim) / <alpha-value>)',
+      },
+    },
+  },
+  plugins: [],
+};

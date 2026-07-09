@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ══════════════════════════════════════════════
+   Theme Variables
+   ══════════════════════════════════════════════ */
+:root {
+  --color-navy: #001F3F;
+  --color-slate: #708090;
+  --color-gold: #C5A059;
+  --color-ivory: #F9F9F9;
+  --foreground-rgb: 255, 255, 255;
+  --background-rgb: 11, 20, 55;
+  /* Dark palette (default) */
+  --d-bg: 11, 20, 55;
+  --d-card: 17, 28, 68;
+  --d-border: 27, 43, 101;
+  --d-hover: 26, 37, 80;
+  --d-muted: 163, 174, 208;
+  --d-dim: 113, 128, 150;
+}
+
+[data-theme="light"] {
+  --foreground-rgb: 30, 41, 59;
+  --background-rgb: 241, 245, 249;
+  --d-bg: 241, 245, 249;
+  --d-card: 255, 255, 255;
+  --d-border: 203, 213, 225;
+  --d-hover: 226, 232, 240;
+  --d-muted: 100, 116, 139;
+  --d-dim: 148, 163, 184;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* ── Scrollbar (theme-aware) ── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: rgb(var(--d-bg)); }
+::-webkit-scrollbar-thumb { background: rgb(var(--d-border)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--d-dim)); }
+
+/* Number input spinner arrows (dark mode only filter) */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { opacity: 1; }
+:root:not([data-theme="light"]) input[type="number"]::-webkit-inner-spin-button,
+:root:not([data-theme="light"]) input[type="number"]::-webkit-outer-spin-button {
+  filter: invert(60%) sepia(50%) saturate(500%) hue-rotate(170deg) brightness(95%);
+}
+
+/* ══════════════════════════════════════════════
+   Animations
+   ══════════════════════════════════════════════ */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fadeIn { animation: fadeIn 0.5s ease-out; }
+
+/* ══════════════════════════════════════════════
+   Light-mode readability overrides
+   ══════════════════════════════════════════════ */
+
+/* --- Text: improve contrast on light backgrounds --- */
+[data-theme="light"] .text-white { color: #1e293b; }
+[data-theme="light"] .text-white\/90 { color: rgba(30, 41, 59, 0.9); }
+[data-theme="light"] .text-slate-200 { color: #334155; }
+[data-theme="light"] .text-slate-300 { color: #475569; }
+[data-theme="light"] .text-slate-400 { color: #64748b; }
+[data-theme="light"] .text-gold-100 { color: #a88638; }
+[data-theme="light"] .text-gold-200 { color: #92700d; }
+[data-theme="light"] .text-gold-300 { color: #8b6c2a; }
+[data-theme="light"] .text-gold-400 { color: #92700d; }
+[data-theme="light"] .text-green-400 { color: #16a34a; }
+[data-theme="light"] .text-green-500 { color: #15803d; }
+[data-theme="light"] .text-red-400 { color: #dc2626; }
+[data-theme="light"] .text-red-500 { color: #b91c1c; }
+[data-theme="light"] .text-amber-400 { color: #d97706; }
+[data-theme="light"] .text-amber-500 { color: #b45309; }
+
+/* --- Preserve white text on coloured button / badge backgrounds --- */
+[data-theme="light"] [class*="bg-gold-5"].text-white,
+[data-theme="light"] [class*="bg-gold-6"].text-white { color: #FFFFFF !important; }
+
+/* --- Semi-transparent overlays: flip for light --- */
+[data-theme="light"] .bg-white\/5 { background-color: rgba(0, 0, 0, 0.04); }
+[data-theme="light"] .bg-white\/20 { background-color: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] .hover\:bg-white\/5:hover { background-color: rgba(0, 0, 0, 0.04); }
+[data-theme="light"] .bg-gold-500\/20 { background-color: rgba(146, 112, 13, 0.12); }
+[data-theme="light"] .bg-gold-500\/15 { background-color: rgba(146, 112, 13, 0.10); }
+[data-theme="light"] .bg-gold-500\/30 { background-color: rgba(146, 112, 13, 0.15); }
+
+/* --- Gradient panels: lighten navy backgrounds --- */
+[data-theme="light"] .from-navy-700 { --tw-gradient-from: #DBEAFE; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to); }
+[data-theme="light"] .to-navy-800 { --tw-gradient-to: #BFDBFE; }
+
+/* --- Charts: readable grid on light backgrounds --- */
+[data-theme="light"] .recharts-cartesian-grid line { stroke: #CBD5E1; }
+
+/* --- Navy hover: lighten for light mode --- */
+[data-theme="light"] .hover\:bg-navy-300:hover { background-color: #94A3B8; }

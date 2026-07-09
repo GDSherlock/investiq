@@ -1,0 +1,649 @@
+'use client';
+
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { getModel, createScenario, runRealtimeSensitivity } from '@/lib/api';
+import { useScenario } from '../ScenarioContext';
+import FloatingAssistant from '../FloatingAssistant';
+
+/* ── Slider config: dynamically built from sensitivity data ── */
+interface SliderDef {
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  unit: string;
+  format: (v: number) => string;
+}
+
+function buildSliderDefs(sensitivity: any, assumptions: any[]): SliderDef[] {
+  const oneWay: any[] = sensitivity?.one_way ?? [];
+  if (oneWay.length === 0) return [];
+
+  // Map sensitivity assumption names back to the model assumption names
+  // The sensitivity sheet uses short labels; we need to match them to assumption names
+  const SENS_TO_ASSUMPTION: Record<string, string> = {};
+  const ASSUMPTION_TO_SENS: Record<string, string> = {};
+
+  // Build reverse map by matching sensitivity labels to assumption names
+  const assumptionMap: Record<string, any> = {};
+  for (const a of assumptions) {
+    assumptionMap[a.name] = a;
+  }
+
+  // Known mapping between sensitivity labels and assumption keys
+  const LABEL_MAP: Record<string, string> = {
+    'Throughput fee ($/MMBtu)': 'Regasification fee (base)',
+    'Utilisation rate': 'Terminal utilisation — Steady',
+    'WACC': 'WACC (unlevered)',
+    'Gas demand growth': 'Revenue growth rate (annual)',
+    'Carbon tax ($/tonne)': 'Carbon tax — Singapore ($/tonne)',
+    'Capex overrun': 'Capex contingency %',
+    'Opex inflation rate': 'Opex inflation rate',
+    'Debt ratio': 'Debt ratio',
+  };
+
+  const defs: SliderDef[] = [];
+
+  for (const item of oneWay) {
+    const sensLabel = item.assumption;
+    // Try to find matching assumption key
+    const assumptionKey = LABEL_MAP[sensLabel] || sensLabel;
+    const assumption = assumptionMap[assumptionKey];
+
+    if (!assumption) continue;
+
+    const baseVal = parseFloat(assumption.value);
+    if (isNaN(baseVal)) continue;
+
+    // Derive min/max from the ±20% stress/upside range
+    const min = baseVal * 0.5;  // allow 50% below base
+    const max = baseVal * 2.0;  // allow 100% above base
+
+    // Determine step and format based on value range
+    let step: number;
+    let unit: string;
+    let format: (v: number) => string;
+
+    if (baseVal < 1 && baseVal > 0) {
+      // Percentage values (e.g., 0.085 = 8.5%)
+      step = baseVal * 0.05;  // 5% increments of base
+      unit = '%';
+      format = (v: number) => `${(v * 100).toFixed(1)}%`;
+    } else if (baseVal >= 1 && baseVal <= 100) {
+      // Dollar or percentage-like values
+      step = Math.max(0.01, baseVal * 0.02);
+      unit = assumption.unit || '$';
+      format = (v: number) => unit === '%' ? `${v.toFixed(1)}%` : `$${v.toFixed(2)}`;
+    } else {
+      step = Math.max(1, Math.round(baseVal * 0.02));
+      unit = assumption.unit || '';
+      format = (v: number) => unit === '$' ? `$${v.toFixed(0)}` : `${v.toFixed(0)}`;
+    }
+
+    defs.push({
+      key: assumptionKey,
+      label: sensLabel,
+      min: Math.round(min / step) * step,
+      max: Math.round(max / step) * step,
+      step,
+      unit,
+      format,
+    });
+  }
+
+  return defs;
+}
+
+export default function SensitivityPage() {
+  const [modelId, setModelId] = useState('');
+  const [scenarioId, setScenarioId] = useState('');
+  const [model, setModel] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [computing, setComputing] = useState(false);
+  const { scenario } = useScenario();
+
+  /* slider state: key→value */
+  const [sliders, setSliders] = useState<Record<string, number>>({});
+  const [baseSliders, setBaseSliders] = useState<Record<string, number>>({});
+  const [sliderDefs, setSliderDefs] = useState<SliderDef[]>([]);
+
+  /* result from real-time endpoint */
+  const [result, setResult] = useState<any>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  /* ── Load model & create scenario on mount ── */
+  const loadModel = useCallback(async (id: string, scenarioKey: string) => {
+    try {
+      const m = await getModel(id);
+      setModel(m);
+      const scenarioObj = await createScenario(id, 'Sensitivity Live', { scenario: scenarioKey });
+      setScenarioId(scenarioObj.id);
+
+      /* Build slider defs dynamically from sensitivity data */
+      const assumptions: any[] = m.parsed_json?.assumptions ?? [];
+      const sensitivity = m.parsed_json?.sensitivity ?? {};
+      const defs = buildSliderDefs(sensitivity, assumptions);
+      setSliderDefs(defs);
+
+      /* Init sliders from model assumptions */
+      const init: Record<string, number> = {};
+      for (const def of defs) {
+        const found = assumptions.find((a: any) => a.name === def.key);
+        if (found?.value != null) {
+          init[def.key] = parseFloat(found.value);
+        } else {
+          init[def.key] = (def.min + def.max) / 2;
+        }
+      }
+      setSliders(init);
+      setBaseSliders(init);
+
+      /* Initial compute */
+      const r = await runRealtimeSensitivity(scenarioObj.id, {});
+      setResult(r);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    const id = localStorage.getItem('investiq_model_id');
+    if (!id) { setLoading(false); return; }
+    setModelId(id);
+    loadModel(id, scenario);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadModel, scenario]);
+
+  /* Re-fetch when user returns to the page or model changes */
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        const id = localStorage.getItem('investiq_model_id');
+        if (id && id !== modelId) {
+          setModelId(id);
+          setLoading(true);
+          loadModel(id, scenario);
+        }
+      }
+    };
+    const handleFocus = () => {
+      const id = localStorage.getItem('investiq_model_id');
+      if (id && id !== modelId) {
+        setModelId(id);
+        setLoading(true);
+        loadModel(id, scenario);
+      }
+    };
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'investiq_model_id' && e.newValue && e.newValue !== modelId) {
+        setModelId(e.newValue);
+        setLoading(true);
+        loadModel(e.newValue, scenario);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [modelId, loadModel]);
+
+  /* ── Debounced recompute when sliders change ── */
+  const recompute = useCallback((overrides: Record<string, number>) => {
+    if (!scenarioId) return;
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setComputing(true);
+      try {
+        const r = await runRealtimeSensitivity(scenarioId, overrides);
+        setResult(r);
+      } catch { /* ignore */ }
+      setComputing(false);
+    }, 150);
+  }, [scenarioId]);
+
+  const handleSlider = (key: string, value: number) => {
+    const next = { ...sliders, [key]: value };
+    setSliders(next);
+    // only send changed values as overrides
+    const overrides: Record<string, number> = {};
+    for (const [k, v] of Object.entries(next)) {
+      if (v !== baseSliders[k]) overrides[k] = v;
+    }
+    recompute(overrides);
+  };
+
+  const resetSliders = () => {
+    setSliders({ ...baseSliders });
+    recompute({});
+  };
+
+  /* ── Helpers ── */
+  const parsed = model?.parsed_json || {};
+  const returns = parsed.returns || {};
+  const metrics = returns.metrics || [];
+  const assumptions = parsed.assumptions || [];
+
+  const sidebarKpi = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const item of metrics) m[item.metric] = item;
+    return {
+      irr: m['Project IRR (unlevered)']?.[scenario],
+      npv: m['NPV @ WACC (USD M)']?.[scenario],
+      payback: m['Payback period (years)']?.[scenario],
+      dscr: m['DSCR — average']?.[scenario],
+      dscrMin: m['DSCR — minimum (year 2030)']?.[scenario],
+    };
+  }, [metrics, scenario]);
+
+  const sidebarAssumptions = useMemo(() => {
+    return assumptions.map((a: any) => {
+      const v = a.value;
+      const n = typeof v === 'number' ? v : parseFloat(v);
+      let formatted: string;
+      if (isNaN(n)) {
+        formatted = String(v);
+      } else if (a.unit === '%' || (n > 0 && n < 1)) {
+        formatted = `${(n * 100).toFixed(1)}%`;
+      } else if (a.unit === '$/MMBtu' || a.unit === '$') {
+        formatted = `$${n}`;
+      } else {
+        formatted = String(n);
+      }
+      return { label: a.name, value: formatted };
+    }).slice(0, 12); // Show top 12 assumptions
+  }, [assumptions]);
+
+  const kpis = result?.kpis ?? {};
+  const baseKpis = result?.base_kpis ?? {};
+  const tornado = result?.tornado ?? [];
+  const twoWay = result?.two_way ?? {};
+
+  const delta = (cur: number | null | undefined, base: number | string | null | undefined): string => {
+    if (cur == null || base == null) return '+0';
+    const b = typeof base === 'string' ? parseFloat(base) : base;
+    if (isNaN(b)) return '+0';
+    const d = cur - b;
+    if (Math.abs(d) < 0.05) return '+0';
+    return `${d >= 0 ? '+' : ''}${d.toFixed(1)}`;
+  };
+
+  const isChanged = Object.keys(sliders).some(k => sliders[k] !== baseSliders[k]);
+
+  if (loading) return <div className="flex items-center justify-center h-64 text-d-muted">Loading model...</div>;
+  if (!model) return (
+    <div className="text-center py-12">
+      <p className="text-slate-300 mb-2">No model loaded. Upload a model first.</p>
+      <a href="/" className="text-gold-400 hover:underline">Go to Upload</a>
+    </div>
+  );
+
+  const cover = model.parsed_json?.cover ?? {};
+
+  const fmtSidebarPct = (v: any) => {
+    if (v == null) return '—';
+    const n = typeof v === 'number' ? v : parseFloat(v);
+    if (isNaN(n)) return String(v);
+    return n < 1 ? `${(n * 100).toFixed(1)}%` : `${n.toFixed(2)}%`;
+  };
+
+  return (
+    <div className="flex gap-4">
+      {/* ── Left Sidebar ── */}
+      <div className="w-56 flex-shrink-0 space-y-4">
+        {/* Decision Confidence */}
+        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
+          <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium mb-2">Decision Confidence</div>
+          <div className="flex items-center gap-2">
+            <div className="text-3xl font-bold text-white">{fmtSidebarPct(sidebarKpi.irr)}</div>
+            <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
+          </div>
+          <div className="text-xs text-green-400 mt-1">▲ Above hurdle — Investable</div>
+          <div className="mt-3 space-y-1">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="w-2 h-2 rounded-full bg-green-500" />
+              <span className="text-slate-300">IRR above hurdle</span>
+              <span className="ml-auto font-semibold">{fmtSidebarPct(sidebarKpi.irr)}</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="w-2 h-2 rounded-full bg-green-500" />
+              <span className="text-slate-300">DSCR covenant met</span>
+              <span className="ml-auto font-semibold">{sidebarKpi.dscr}x</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Live Model KPIs */}
+        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
+          <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium mb-2">Live Model KPIs</div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-d-bg rounded p-2">
+              <div className="text-[10px] text-d-muted">IRR</div>
+              <div className="text-lg font-bold text-gold-400">{fmtSidebarPct(sidebarKpi.irr)}</div>
+            </div>
+            <div className="bg-d-bg rounded p-2">
+              <div className="text-[10px] text-d-muted">NPV</div>
+              <div className="text-lg font-bold text-gold-400">${sidebarKpi.npv ?? '—'}M</div>
+            </div>
+            <div className="bg-d-bg rounded p-2">
+              <div className="text-[10px] text-d-muted">PAYBACK</div>
+              <div className="text-lg font-bold text-white">{sidebarKpi.payback ?? '—'}yr</div>
+            </div>
+            <div className="bg-d-bg rounded p-2">
+              <div className="text-[10px] text-d-muted">DSCR</div>
+              <div className="text-lg font-bold text-white">{sidebarKpi.dscr ?? '—'}x</div>
+              <div className="text-[9px] text-d-muted">Min: {sidebarKpi.dscrMin ?? '—'}x</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Assumptions */}
+        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
+          <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium mb-2">Assumptions</div>
+          <div className="space-y-1.5">
+            {sidebarAssumptions.map((a: { label: string; value: string }) => (
+              <div key={a.label} className="flex justify-between text-xs">
+                <span className="text-d-muted">{a.label}</span>
+                <span className="font-mono font-semibold text-white">{a.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Main Content ── */}
+      <div className="flex-1 space-y-4">
+
+      {/* ── Header bar ── */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-white">Sensitivity Analysis</h1>
+          <p className="text-sm text-d-muted">{cover.Project || model.original_filename}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {computing && <span className="text-xs text-gold-500 animate-pulse">Computing...</span>}
+          {isChanged && (
+            <button onClick={resetSliders} className="text-xs text-d-muted hover:text-white border border-d-border px-3 py-1 rounded">
+              Reset to Base
+            </button>
+          )}
+          <span className={`text-xs px-2 py-1 rounded font-medium ${isChanged ? 'bg-amber-900/30 text-amber-400' : 'bg-green-900/30 text-green-400'}`}>
+            {isChanged ? 'Scenario Modified' : 'Base Case'}
+          </span>
+        </div>
+      </div>
+
+      {/* ── KPI Cards Row ── */}
+      <div className="grid grid-cols-5 gap-3">
+        {[
+          { label: 'IRR', value: kpis.irr != null ? `${kpis.irr}%` : '—', base: baseKpis.irr, cur: kpis.irr, hurdle: '10%', color: 'text-gold-400' },
+          { label: 'NPV', value: kpis.npv != null ? `$${kpis.npv}M` : '—', base: baseKpis.npv, cur: kpis.npv, sub: 'USD M', color: 'text-gold-400' },
+          { label: 'Payback', value: kpis.payback != null ? `${kpis.payback} yrs` : '—', base: baseKpis.payback, cur: kpis.payback, sub: 'years', color: 'text-gold-400' },
+          { label: 'DSCR', value: kpis.dscr != null ? `${kpis.dscr}x` : '—', base: baseKpis.dscr, cur: kpis.dscr, sub: 'avg', color: 'text-gold-400' },
+          { label: 'Equity ×', value: kpis.equity_x != null ? `${kpis.equity_x}x` : '—', base: baseKpis.equity_x, cur: kpis.equity_x, sub: 'multiple', color: 'text-gold-400' },
+        ].map((kpi) => {
+          const d = delta(kpi.cur, kpi.base);
+          return (
+            <div key={kpi.label} className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
+              <div className="text-xs text-d-muted uppercase tracking-wide font-medium">{kpi.label}</div>
+              <div className={`text-2xl font-bold mt-1 ${kpi.color}`}>{kpi.value}</div>
+              <div className="text-xs text-d-muted mt-1">
+                vs base: <span className={d.startsWith('+') && d !== '+0' ? 'text-green-400' : d.startsWith('-') ? 'text-red-400' : 'text-d-muted'}>{d}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── 2×2 Grid ── */}
+      <div className="grid grid-cols-2 gap-4">
+
+        {/* ── TOP LEFT: Assumption Sliders ── */}
+        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-white">Assumption sliders</h2>
+              <p className="text-xs text-d-muted">Drag to simulate — KPIs update live</p>
+            </div>
+          </div>
+          <div className="space-y-4">
+            {sliderDefs.map((def) => {
+              const val = sliders[def.key] ?? (def.min + def.max) / 2;
+              const baseVal = baseSliders[def.key];
+              const changed = val !== baseVal;
+              return (
+                <div key={def.key} className="flex items-center gap-3">
+                  <div className="w-40 text-xs text-slate-300 truncate" title={def.key}>{def.label}</div>
+                  <input
+                    type="range"
+                    min={def.min}
+                    max={def.max}
+                    step={def.step}
+                    value={val}
+                    onChange={e => handleSlider(def.key, parseFloat(e.target.value))}
+                    className="flex-1 h-1.5 accent-gold-500 cursor-pointer"
+                  />
+                  <div className={`w-16 text-right text-xs font-mono font-semibold rounded px-2 py-1 ${
+                    changed ? 'bg-gold-500 text-white' : 'bg-d-bg text-white'
+                  }`}>
+                    {def.format(val)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── TOP RIGHT: IRR Tornado Chart ── */}
+        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5">
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-sm font-semibold text-white">IRR tornado chart</h2>
+            <div className="flex gap-3 text-[10px] text-d-muted">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-green-500 inline-block" /> +20% stress</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500 inline-block" /> −20% stress</span>
+            </div>
+          </div>
+          <p className="text-[10px] text-d-muted mb-3 uppercase tracking-wider font-medium">Ranked by impact</p>
+          <div className="space-y-2">
+            {tornado.map((item: any, i: number) => {
+              const baseIrr = item.base;
+              const minVal = Math.min(item.low, item.high);
+              const maxVal = Math.max(item.low, item.high);
+              // Scale bars relative to a range around the base
+              const axisMin = baseIrr - 3;
+              const axisMax = baseIrr + 3;
+              const range = axisMax - axisMin;
+
+              const leftPct = Math.max(0, ((Math.min(item.low, item.high) - axisMin) / range) * 100);
+              const rightPct = Math.max(0, ((Math.max(item.low, item.high) - axisMin) / range) * 100);
+              const basePct = ((baseIrr - axisMin) / range) * 100;
+
+              return (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="w-28 text-xs text-slate-300 text-right truncate">{item.label}</div>
+                  <div className="flex-1 relative h-5 bg-d-bg rounded overflow-hidden">
+                    {/* Base line */}
+                    <div className="absolute top-0 bottom-0 w-px bg-slate-300" style={{ left: `${basePct}%` }} />
+                    {/* Low bar (red) */}
+                    {item.low < baseIrr && (
+                      <div
+                        className="absolute top-0.5 bottom-0.5 bg-red-400 rounded-sm"
+                        style={{
+                          left: `${leftPct}%`,
+                          width: `${basePct - leftPct}%`,
+                        }}
+                      />
+                    )}
+                    {/* High bar (green) */}
+                    {item.high > baseIrr && (
+                      <div
+                        className="absolute top-0.5 bottom-0.5 bg-green-500 rounded-sm"
+                        style={{
+                          left: `${basePct}%`,
+                          width: `${rightPct - basePct}%`,
+                        }}
+                      />
+                    )}
+                    {/* When low > base (inverse) */}
+                    {item.low >= baseIrr && (
+                      <div
+                        className="absolute top-0.5 bottom-0.5 bg-green-500 rounded-sm"
+                        style={{
+                          left: `${basePct}%`,
+                          width: `${leftPct - basePct}%`,
+                        }}
+                      />
+                    )}
+                    {item.high <= baseIrr && (
+                      <div
+                        className="absolute top-0.5 bottom-0.5 bg-red-400 rounded-sm"
+                        style={{
+                          left: `${rightPct}%`,
+                          width: `${basePct - rightPct}%`,
+                        }}
+                      />
+                    )}
+                  </div>
+                  <div className="w-24 text-[10px] text-d-muted font-mono text-right">
+                    {item.low.toFixed(1)}% {item.high.toFixed(1)}%
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── BOTTOM LEFT: Scenario Comparison ── */}
+        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-white">Scenario comparison</h2>
+            <span className="text-[10px] text-d-muted">base vs current</span>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-xs text-d-muted uppercase tracking-wider">
+                <th className="text-left pb-2 font-medium">Metric</th>
+                <th className="text-right pb-2 font-medium">Base</th>
+                <th className="text-right pb-2 font-medium">Scenario</th>
+                <th className="text-right pb-2 font-medium">Δ</th>
+              </tr>
+            </thead>
+            <tbody className="text-sm">
+              {[
+                { metric: 'IRR', base: baseKpis.irr, scenario: kpis.irr, suffix: '%' },
+                { metric: 'NPV ($M)', base: baseKpis.npv, scenario: kpis.npv, prefix: '$' },
+                { metric: 'Payback (yr)', base: baseKpis.payback, scenario: kpis.payback, suffix: '' },
+                { metric: 'DSCR (avg)', base: baseKpis.dscr, scenario: kpis.dscr, suffix: 'x' },
+                { metric: 'Equity ×', base: baseKpis.equity_x, scenario: kpis.equity_x, suffix: 'x' },
+              ].map((row) => {
+                const bVal = typeof row.base === 'string' ? parseFloat(row.base) : row.base;
+                const sVal = row.scenario;
+                const d = bVal != null && sVal != null ? sVal - bVal : 0;
+                const dStr = Math.abs(d) < 0.05 ? '+0' : `${d >= 0 ? '+' : ''}${d.toFixed(1)}`;
+                return (
+                  <tr key={row.metric} className="border-b border-d-border">
+                    <td className="py-2.5 font-medium text-white">{row.metric}</td>
+                    <td className="py-2.5 text-right text-d-muted">{fmtTableVal(bVal, row.prefix, row.suffix)}</td>
+                    <td className="py-2.5 text-right font-semibold text-white">{fmtTableVal(sVal, row.prefix, row.suffix)}</td>
+                    <td className={`py-2.5 text-right font-medium ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-d-muted'}`}>{dStr}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* ── BOTTOM RIGHT: Two-Way Table ── */}
+        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5 overflow-x-auto">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-white">WACC × Throughput two-way table</h2>
+            <span className="text-[10px] text-d-muted bg-d-bg px-2 py-0.5 rounded">IRR %</span>
+          </div>
+          {twoWay?.data && twoWay.data.length > 0 ? (
+            <table className="w-full text-xs">
+              <thead>
+                <tr>
+                  <th className="p-1.5 text-left text-d-muted font-medium border-b">WACC / Fee</th>
+                  {(twoWay.columns && twoWay.columns.length > 0
+                    ? twoWay.columns
+                    : twoWay.data[0]?.values?.map((_: any, i: number) => `Col ${i + 1}`)
+                  ).map((col: any, i: number) => (
+                    <th key={i} className="p-1.5 text-right text-d-muted font-medium border-b">{col}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {twoWay.data.map((row: any, i: number) => (
+                  <tr key={i} className="border-b border-d-border">
+                    <td className="p-1.5 font-medium text-slate-300">{row.wacc}</td>
+                    {(row.values || []).map((v: any, j: number) => {
+                      const val = typeof v === 'number' ? v : parseFloat(v);
+                      const pctVal = Math.abs(val) < 1 ? val * 100 : val;
+                      const baseIrrPct = kpis.irr ?? 12.3;
+                      const isBase = Math.abs(pctVal - baseIrrPct) < 0.15;
+                      return (
+                        <td key={j} className={`p-1.5 text-right font-mono ${
+                          isBase ? 'ring-2 ring-gold-500 ring-inset font-bold bg-d-hover' :
+                          pctVal >= 10 ? 'text-green-400' : pctVal < 0 ? 'text-red-400' : 'text-amber-400'
+                        }`}>
+                          {isNaN(pctVal) ? '—' : `${pctVal.toFixed(1)}%`}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="text-center py-8 text-d-muted text-xs">
+              Two-way sensitivity data not available in model.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Assumptions sidebar (small, below grid) ── */}
+      <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5">
+        <h2 className="text-sm font-semibold text-white mb-3">Current Assumptions</h2>
+        <div className="grid grid-cols-4 gap-x-8 gap-y-1 text-xs">
+          {sliderDefs.map((def) => {
+            const val = sliders[def.key];
+            const changed = val !== baseSliders[def.key];
+            return (
+              <div key={def.key} className="flex justify-between py-1 border-b border-d-border">
+                <span className="text-d-muted">{def.label}</span>
+                <span className={`font-mono font-semibold ${changed ? 'text-gold-400' : 'text-white'}`}>
+                  {val != null ? def.format(val) : '—'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      </div>
+      <FloatingAssistant tabKey="sensitivity" pageContext="Sensitivity analysis with tornado chart, two-way heat map, and real-time scenario sliders" />
+    </div>
+  );
+}
+
+/* ── Formatting helpers ── */
+function fmtTableVal(v: any, prefix?: string, suffix?: string): string {
+  if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) return '—';
+  const num = typeof v === 'string' ? parseFloat(v) : v;
+  if (isNaN(num)) return String(v);
+  const formatted = Number.isInteger(num) ? String(num) : num.toFixed(1);
+  return `${prefix || ''}${formatted}${suffix || ''}`;
+}
+
+function formatTwoWayHeader(v: any): string {
+  if (v == null) return '—';
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  if (isNaN(n)) return String(v);
+  if (n < 1) return `${(n * 100).toFixed(1)}%`;
+  if (n < 10) return `$${n.toFixed(2)}`;
+  return `${n.toFixed(1)}%`;
+}

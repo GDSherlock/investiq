@@ -1,0 +1,84 @@
+version: "3.9"
+
+services:
+  # M3: Backend API (FastAPI)
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - DATABASE_URL=postgresql://investiq:investiq@postgres:5432/investiq
+      - USE_SQLITE=false
+      - REDIS_URL=redis://redis:6379/0
+      - UPLOAD_DIR=/app/uploads
+    volumes:
+      - upload_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # M1: Web UI (Next.js)
+  ui:
+    build:
+      context: .
+      dockerfile: apps/ui/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    depends_on:
+      - api
+
+  # M4: Orchestrator (IOE)
+  orchestrator:
+    build:
+      context: .
+      dockerfile: apps/orchestrator/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://investiq:investiq@postgres:5432/investiq
+    depends_on:
+      - postgres
+      - redis
+
+  # M8: PostgreSQL with pgvector
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: investiq
+      POSTGRES_USER: investiq
+      POSTGRES_PASSWORD: investiq
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/schema_v1.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - ./db/schema_v2_vector.sql:/docker-entrypoint-initdb.d/02_vector.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U investiq"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # M9: Redis (State/Cache)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  pg_data:
+  redis_data:
+  upload_data:

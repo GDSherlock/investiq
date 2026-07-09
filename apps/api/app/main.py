@@ -1,0 +1,86 @@
+"""InvestIQ Backend API — FastAPI application."""
+
+import sys
+import os
+import uuid
+import json
+from contextlib import asynccontextmanager
+from datetime import datetime
+
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+load_dotenv()
+
+
+class UUIDEncoder(json.JSONEncoder):
+    """JSON encoder that handles UUID and datetime objects."""
+    def default(self, obj):
+        if isinstance(obj, uuid.UUID):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+class UUIDJSONResponse(JSONResponse):
+    """JSONResponse that serializes UUID objects."""
+    def render(self, content) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            cls=UUIDEncoder,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+# Add libs to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+
+from .database import engine, Base
+from .routers import models, scenarios, debt_analysis, reports, alerts, audit, market_data, assistant, monitor
+from .routers import auth as auth_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: create tables
+    Base.metadata.create_all(bind=engine)
+    yield
+    # Shutdown
+
+
+app = FastAPI(
+    title="InvestIQ API",
+    description="Investment Capital Decision Intelligence API",
+    version="1.0.0",
+    lifespan=lifespan,
+    default_response_class=UUIDJSONResponse,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register routers
+app.include_router(auth_router.router, prefix="/api/v1", tags=["Auth"])
+app.include_router(models.router, prefix="/api/v1", tags=["Models"])
+app.include_router(scenarios.router, prefix="/api/v1", tags=["Scenarios"])
+app.include_router(debt_analysis.router, prefix="/api/v1", tags=["Debt Analysis"])
+app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
+app.include_router(alerts.router, prefix="/api/v1", tags=["Alerts"])
+app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
+app.include_router(market_data.router, prefix="/api/v1", tags=["Market Data"])
+app.include_router(assistant.router, prefix="/api/v1", tags=["Assistant"])
+app.include_router(monitor.router, prefix="/api/v1", tags=["Monitor"])
+
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "service": "investiq-api"}

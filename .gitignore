@@ -1,0 +1,22 @@
+# Secrets
+.env
+.env.local
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv_mac/
+*.db
+
+# Node / Next.js
+node_modules/
+.next/
+
+# Uploads & local data
+uploads/
+
+# Tooling
+.pytest_cache/

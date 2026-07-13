@@ -1,5 +1,7 @@
 """FastAPI contract tests for the experimental workbook-agent upload route."""
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -185,3 +187,9 @@ def test_experimental_route_has_no_database_or_auth_dependency():
 
     assert "get_db" not in dependency_names
     assert "get_current_user" not in dependency_names
+
+
+def test_dockerfile_packages_workbook_agent_source():
+    dockerfile = Path("apps/api/Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY experiments/workbook_agent_poc/ /app/experiments/workbook_agent_poc/" in dockerfile

@@ -6,8 +6,9 @@ WORKDIR /app
 COPY apps/api/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy libs and app
+# Copy libs, the experimental workbook-agent source, and app
 COPY libs/ /app/libs/
+COPY experiments/workbook_agent_poc/ /app/experiments/workbook_agent_poc/
 COPY apps/api/ /app/apps/api/
 
 EXPOSE 8000

@@ -14,9 +14,16 @@ from typing import Optional
 
 from ..database import get_db
 from ..models import FinancialModel, Investment, ModelAssumption, AuditLog, User
-from ..schemas import ModelUploadResponse, ModelParseResponse
+from ..schemas import ModelUploadResponse, ModelParseResponse, WorkbookValidationResponse
 from ..auth import get_current_user
 from ..vector_service import vectorize_and_store
+from ..workbook_validation import (
+    AzureConfigurationError,
+    AzureResponsesError,
+    InvalidWorkbookError,
+    WorkbookValidationError,
+    run_workbook_validation,
+)
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
@@ -29,13 +36,70 @@ router = APIRouter()
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./uploads")
 
 
-@router.post("/models/upload", response_model=ModelUploadResponse)
-async def upload_model(
+def _api_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": message},
+    )
+
+
+@router.post(
+    "/models/upload",
+    response_model=WorkbookValidationResponse,
+    summary="Experimental workbook-agent validation endpoint",
+    description=(
+        "Synchronous Azure Responses API workbook exploration and deterministic "
+        "validation endpoint for benchmark testing. Supports .xlsx only."
+    ),
+)
+async def upload_model(file: UploadFile = File(...)):
+    """Run the experimental workbook-agent validation flow without persistence."""
+    filename = file.filename or ""
+    if not filename.lower().endswith(".xlsx"):
+        raise _api_error(
+            415,
+            "UNSUPPORTED_WORKBOOK_FORMAT",
+            "Only .xlsx is supported; legacy .xls is not reliably readable by this toolchain.",
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise _api_error(400, "EMPTY_FILE", "Uploaded workbook is empty.")
+
+    try:
+        return run_workbook_validation(file_bytes, filename)
+    except InvalidWorkbookError:
+        raise _api_error(
+            422,
+            "INVALID_XLSX",
+            "The upload is not a readable OOXML workbook.",
+        )
+    except AzureConfigurationError:
+        raise _api_error(
+            503,
+            "AZURE_CONFIGURATION_ERROR",
+            "Required Azure OpenAI configuration is missing.",
+        )
+    except AzureResponsesError:
+        raise _api_error(
+            502,
+            "AZURE_RESPONSES_ERROR",
+            "Azure Responses API execution failed.",
+        )
+    except WorkbookValidationError:
+        raise _api_error(
+            500,
+            "WORKBOOK_VALIDATION_ERROR",
+            "Local workbook-agent validation failed.",
+        )
+
+
+async def _legacy_upload_model_for_rollback(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user),
 ):
-    """Upload an Excel financial model. Triggers parsing, vectorization, and health check."""
+    """Unregistered production upload implementation retained for easy rollback."""
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only .xlsx/.xls files accepted")
 

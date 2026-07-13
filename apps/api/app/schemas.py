@@ -19,6 +19,25 @@ class ModelUploadResponse(BaseModel):
     assumptions_count: int
 
 
+class WorkbookValidationResponse(BaseModel):
+    """Raw response for the experimental workbook-agent validation endpoint."""
+
+    endpoint_mode: str
+    filename: str
+    runtime_seconds: float
+    driver_meta: dict[str, Any]
+    submitted: bool
+    stop_reason: str
+    coverage: dict[str, Any]
+    final_extraction: dict[str, Any]
+    validation_summary: dict[str, int]
+    validation_results: list[dict[str, Any]]
+    warnings: list[dict[str, Any]]
+    errors: list[dict[str, Any]]
+    trace: list[dict[str, Any]]
+    trace_truncated: bool
+
+
 class ModelParseResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     model_id: StrFromUUID

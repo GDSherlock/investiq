@@ -17,7 +17,7 @@
 - Do not vectorize or call the legacy parser, mapper, health report, or fixed sheet-name logic.
 - Preserve legacy production code in an unregistered rollback-only function.
 - Return complete extraction, coverage, deterministic validation results, and every trace event through Swagger.
-- Use `/Users/kingjason/anaconda3/bin/python` for Python verification in this worktree.
+- Use the repository environment at `/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3` for Python verification; it has the locked `openpyxl==3.1.2` used by the API image.
 
 ---
 
@@ -48,7 +48,7 @@ Also test a short result produces `result_truncated is False`.
 Run:
 
 ```bash
-/Users/kingjason/anaconda3/bin/python -m pytest experiments/workbook_agent_poc/tests/test_agent_loop.py -q
+"/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3" -m pytest experiments/workbook_agent_poc/tests/test_agent_loop.py -q
 ```
 
 Expected: FAIL with missing `result_truncated`.
@@ -71,7 +71,7 @@ When appending each trace event, store both returned values. Keep verbose loggin
 Run:
 
 ```bash
-/Users/kingjason/anaconda3/bin/python -m pytest experiments/workbook_agent_poc/tests/test_agent_loop.py experiments/workbook_agent_poc/tests -q
+"/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3" -m pytest experiments/workbook_agent_poc/tests/test_agent_loop.py experiments/workbook_agent_poc/tests -q
 ```
 
 Expected: all PoC tests pass.
@@ -119,7 +119,7 @@ Use `monkeypatch` on `tempfile.NamedTemporaryFile` cleanup observation or a capt
 Run:
 
 ```bash
-/Users/kingjason/anaconda3/bin/python -m pytest tests/test_workbook_validation.py -q
+"/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3" -m pytest tests/test_workbook_validation.py -q
 ```
 
 Expected: collection fails because `apps.api.app.workbook_validation` does not exist.
@@ -173,7 +173,7 @@ Add the PoC directory to `sys.path` from the repository root without copying its
 Run:
 
 ```bash
-/Users/kingjason/anaconda3/bin/python -m pytest tests/test_workbook_validation.py experiments/workbook_agent_poc/tests -q
+"/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3" -m pytest tests/test_workbook_validation.py experiments/workbook_agent_poc/tests -q
 ```
 
 Expected: all selected tests pass.
@@ -220,7 +220,7 @@ Assert route dependencies do not include `get_db` or `get_current_user`, and mon
 Run:
 
 ```bash
-/Users/kingjason/anaconda3/bin/python -m pytest tests/test_experimental_workbook_upload.py -q
+"/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3" -m pytest tests/test_experimental_workbook_upload.py -q
 ```
 
 Expected: FAIL because the current route still advertises and executes legacy production upload behavior.
@@ -279,7 +279,7 @@ Rename the old handler `_legacy_upload_model_for_rollback` and leave its body an
 Run:
 
 ```bash
-/Users/kingjason/anaconda3/bin/python -m pytest tests/test_experimental_workbook_upload.py tests/test_workbook_validation.py experiments/workbook_agent_poc/tests -q
+"/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3" -m pytest tests/test_experimental_workbook_upload.py tests/test_workbook_validation.py experiments/workbook_agent_poc/tests -q
 ```
 
 Expected: all selected tests pass.
@@ -330,7 +330,7 @@ Update the PoC README to state that this worktree intentionally wires it to `POS
 Run:
 
 ```bash
-/Users/kingjason/anaconda3/bin/python -m pytest -q
+"/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3" -m pytest -q
 ```
 
 Expected: all tests pass with zero failures.
@@ -375,7 +375,7 @@ git commit -m "build: package workbook agent in API image"
 ### Final Verification
 
 - [ ] Run `git diff --check`.
-- [ ] Run `/Users/kingjason/anaconda3/bin/python -m pytest -q` and record pass/fail counts.
+- [ ] Run `"/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3" -m pytest -q` and record pass/fail counts.
 - [ ] Confirm `git status --short` contains only pre-existing unrelated user changes.
 - [ ] Confirm the live API container source matches the worktree and OpenAPI advertises the experimental contract.
 - [ ] Do not claim a real Azure workbook result unless a real upload was executed successfully in this run.

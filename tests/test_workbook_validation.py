@@ -1,0 +1,167 @@
+"""Contract tests for the experimental workbook-agent API adapter."""
+
+from pathlib import Path
+
+import pytest
+
+from apps.api.app.workbook_validation import (
+    InvalidWorkbookError,
+    run_workbook_validation,
+)
+import apps.api.app.workbook_validation as workbook_validation
+
+
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURE = ROOT / "experiments/workbook_agent_poc/fixtures/no_assumptions_sheet.xlsx"
+
+
+class PlannedWorkbookDriver:
+    """Deterministic driver that exercises the real loop, tools, gate, and validator."""
+
+    _deployment = "deterministic-test-driver"
+    usage_prompt = 101
+    usage_completion = 23
+
+    def __init__(self):
+        sheets = ["Overview", "Operations", "Funding", "Calc", "Summary"]
+        self.calls = [
+            {"name": "get_workbook_metadata", "arguments": {}},
+            {"name": "list_sheets", "arguments": {}},
+        ]
+        for sheet in sheets:
+            self.calls.extend([
+                {"name": "inspect_sheet", "arguments": {"sheet_name": sheet}},
+                {"name": "read_range", "arguments": {"sheet_name": sheet, "cell_range": "A1:H20"}},
+            ])
+        self.calls.append({
+            "name": "submit_extraction_result",
+            "arguments": {
+                "result": {
+                    "all_assumption_candidates": [{
+                        "candidate_id": "Funding!C3",
+                        "original_label": "Base capex",
+                        "submitted_role": "hardcoded_input",
+                        "raw_value": 400,
+                        "source_references": [{"sheet_name": "Funding", "cell": "C3"}],
+                    }],
+                    "output_candidates": [],
+                }
+            },
+        })
+        self.index = 0
+
+    def next_tool_call(self, trace):
+        if self.index >= len(self.calls):
+            return None
+        call = self.calls[self.index]
+        self.index += 1
+        return call
+
+    def observe(self, name, args, result):
+        pass
+
+
+class IncompleteDriver:
+    _deployment = "deterministic-incomplete-driver"
+    usage_prompt = 0
+    usage_completion = 0
+
+    def next_tool_call(self, trace):
+        return None
+
+    def observe(self, name, args, result):
+        pass
+
+
+def test_adapter_runs_real_tools_gate_and_validator():
+    result = run_workbook_validation(
+        FIXTURE.read_bytes(),
+        FIXTURE.name,
+        driver_factory=PlannedWorkbookDriver,
+    )
+
+    assert result["endpoint_mode"] == "experimental_workbook_agent_validation"
+    assert result["driver_meta"] == {
+        "api": "responses",
+        "deployment": "deterministic-test-driver",
+        "prompt_tokens": 101,
+        "completion_tokens": 23,
+    }
+    assert result["submitted"] is True
+    assert result["stop_reason"] == "submitted"
+    assert result["coverage"]["total_sheets"] == 5
+    assert result["coverage"]["inspected_sheets"] == 5
+    assert result["final_extraction"]["all_assumption_candidates"]
+    assert result["validation_summary"]["candidate_count"] == 1
+    assert result["validation_summary"]["validated"] == 1
+    assert len(result["validation_results"]) == 1
+    assert isinstance(result["warnings"], list)
+    assert result["errors"] == []
+    assert result["trace"]
+    assert result["trace_truncated"] == any(
+        event["result_truncated"] for event in result["trace"]
+    )
+
+
+def test_incomplete_run_returns_evidence_and_structured_error():
+    result = run_workbook_validation(
+        FIXTURE.read_bytes(),
+        FIXTURE.name,
+        driver_factory=IncompleteDriver,
+    )
+
+    assert result["submitted"] is False
+    assert result["stop_reason"] == "model_returned_no_tool_call"
+    assert result["coverage"]["total_sheets"] == 5
+    assert result["validation_results"] == []
+    assert result["errors"][0]["code"] == "AGENT_INCOMPLETE"
+
+
+def test_invalid_xlsx_raises_typed_error():
+    with pytest.raises(InvalidWorkbookError):
+        run_workbook_validation(
+            b"not an OOXML workbook",
+            "broken.xlsx",
+            driver_factory=PlannedWorkbookDriver,
+        )
+
+
+@pytest.mark.parametrize("valid_upload", [True, False])
+def test_temporary_workbook_is_removed_after_success_and_failure(monkeypatch, valid_upload):
+    real_temporary_directory = workbook_validation.tempfile.TemporaryDirectory
+    created_paths: list[Path] = []
+
+    class TrackingTemporaryDirectory:
+        def __init__(self, *args, **kwargs):
+            self.delegate = real_temporary_directory(*args, **kwargs)
+
+        def __enter__(self):
+            path = Path(self.delegate.__enter__())
+            created_paths.append(path)
+            return str(path)
+
+        def __exit__(self, *args):
+            return self.delegate.__exit__(*args)
+
+    monkeypatch.setattr(
+        workbook_validation.tempfile,
+        "TemporaryDirectory",
+        TrackingTemporaryDirectory,
+    )
+
+    if valid_upload:
+        run_workbook_validation(
+            FIXTURE.read_bytes(),
+            FIXTURE.name,
+            driver_factory=IncompleteDriver,
+        )
+    else:
+        with pytest.raises(InvalidWorkbookError):
+            run_workbook_validation(
+                b"not an OOXML workbook",
+                "broken.xlsx",
+                driver_factory=PlannedWorkbookDriver,
+            )
+
+    assert created_paths
+    assert all(not path.exists() for path in created_paths)

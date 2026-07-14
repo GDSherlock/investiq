@@ -188,6 +188,30 @@ class _DuplicateReadDriver(_ReadRangeDriver):
         }
 
 
+class _RepeatedObservationDriver:
+    def __init__(self):
+        self.index = 0
+        self.observed = []
+
+    def next_tool_call(self, trace):
+        plan = [
+            {"name": "get_workbook_metadata", "arguments": {}},
+            {"name": "get_workbook_metadata", "arguments": {}},
+            {"name": "list_sheets", "arguments": {}},
+            {"name": "list_sheets", "arguments": {}},
+            {"name": "inspect_sheet", "arguments": {"sheet_name": "Sheet1"}},
+            {"name": "inspect_sheet", "arguments": {"sheet_name": "Sheet1"}},
+        ]
+        if self.index >= len(plan):
+            return None
+        call = plan[self.index]
+        self.index += 1
+        return call
+
+    def observe(self, name, args, result):
+        self.observed.append((name, result))
+
+
 def test_trace_marks_a_truncated_result_preview():
     run = run_loop(_OneCallDriver(), _Tools(large_result=True))
 
@@ -341,3 +365,85 @@ def test_runtime_retries_read_range_with_smaller_chunks_for_driver_guard(tmp_pat
     assert len(driver.observed) > 1
     assert all(chunk["serialized_bytes"] <= 1_488 for chunk in driver.observed)
     assert run["coverage"]["payload_retry_count"] >= 1
+
+
+def test_repeated_metadata_list_and_inspection_return_lightweight_status():
+    driver = _RepeatedObservationDriver()
+
+    run_loop(driver, _Tools(large_result=True))
+
+    repeated = [driver.observed[index][1] for index in (1, 3, 5)]
+    assert all(result["already_completed"] is True for result in repeated)
+    assert repeated[0]["tool_name"] == "get_workbook_metadata"
+    assert repeated[1]["tool_name"] == "list_sheets"
+    assert repeated[2]["tool_name"] == "inspect_sheet"
+    assert "marker" not in repeated[1]
+
+
+def test_cover_full_range_runtime_partitions_observes_and_submits_once(tmp_path):
+    path = tmp_path / "cover-runtime.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Cover"
+    ws["A1"] = "Cover"
+    ws["L43"].number_format = "0"
+    wb.save(path)
+
+    class Driver:
+        observation_payload_budget = 12_000
+
+        def __init__(self):
+            self.index = 0
+            self.observed = []
+            self.visibility = []
+
+        def set_submission_allowed(self, allowed):
+            self.visibility.append(allowed)
+
+        def next_tool_call(self, trace):
+            plan = [
+                {"name": "get_workbook_metadata", "arguments": {}},
+                {"name": "inspect_sheet", "arguments": {"sheet_name": "Cover"}},
+                {"name": "read_range", "arguments": {
+                    "sheet_name": "Cover", "cell_range": "A1:L43",
+                }},
+                {"name": "submit_extraction_result", "arguments": {"result": {
+                    "all_assumption_candidates": [],
+                    "output_candidates": [{"candidate_id": "cover-result"}],
+                }}},
+            ]
+            call = plan[self.index]
+            self.index += 1
+            return call
+
+        def observe(self, name, args, result):
+            self.observed.append(result)
+
+        def observe_many(self, name, args, results):
+            self.observed.extend(results)
+
+        def append_runtime_status(self, status):
+            self.observed.append(status)
+
+        def require_submission(self):
+            pass
+
+    driver = Driver()
+    run = run_loop(
+        driver,
+        WorkbookToolset(file_path=str(path)),
+        caps=HardCaps(max_tool_calls=4, max_iterations=6),
+    )
+
+    telemetry = run["coverage"]["observation_telemetry"]["Cover"]
+    assert telemetry["requested_ranges"] == ["A1:L43"]
+    assert telemetry["chunk_count"] == 2
+    assert telemetry["observed_chunk_count"] == 2
+    assert telemetry["observation_complete"] is True
+    assert run["coverage"]["coverage_rejections"] == 0
+    assert run["coverage"]["submit_attempts"] == 1
+    assert run["submitted"] is True
+    assert run["stop_reason"] == "submitted"
+    assert run["final_extraction"]
+    assert driver.visibility[:3] == [False, False, False]
+    assert driver.visibility[-1] is True

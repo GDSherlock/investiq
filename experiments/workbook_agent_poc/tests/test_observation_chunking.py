@@ -194,3 +194,42 @@ def test_small_investor_returns_range_is_one_chunk(solar_tools):
     assert chunk["returned_range"] == "A1:F10"
     assert chunk["has_more"] is False
     assert chunk["continuation_token"] is None
+
+
+def test_oversized_logical_range_is_partitioned_at_physical_cell_limit(tmp_path):
+    path = tmp_path / "oversized-logical-range.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Large"
+    ws["A1"] = "content"
+    ws["W22"].number_format = "0"
+    wb.save(path)
+    tools = WorkbookToolset(file_path=str(path))
+
+    chunks = _all_chunks(tools, "Large", "A1:W22", budget=12_000)
+
+    assert len(chunks) > 1
+    assert {chunk["request_id"] for chunk in chunks} == {chunks[0]["request_id"]}
+    assert {chunk["requested_range"] for chunk in chunks} == {"A1:W22"}
+    assert all(chunk["range_cell_count"] <= 500 for chunk in chunks)
+    assert set().union(
+        *(_range_cells(chunk["returned_range"]) for chunk in chunks)
+    ) == _range_cells("A1:W22")
+
+
+def test_cover_516_cell_logical_range_completes_in_one_request(tmp_path):
+    path = tmp_path / "cover-regression.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Cover"
+    ws["A1"] = "Cover"
+    ws["L43"].number_format = "0"
+    wb.save(path)
+    tools = WorkbookToolset(file_path=str(path))
+
+    chunks = _all_chunks(tools, "Cover", "A1:L43", budget=12_000)
+
+    assert len(chunks) == 2
+    assert [chunk["chunk_index"] for chunk in chunks] == [0, 1]
+    assert all(chunk["range_cell_count"] <= 500 for chunk in chunks)
+    assert sum(chunk["range_cell_count"] for chunk in chunks) == 516

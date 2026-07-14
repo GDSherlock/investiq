@@ -167,6 +167,27 @@ def _serialized_size(result: Any) -> int:
     ).encode("utf-8"))
 
 
+def _already_completed_result(
+    cov: CoverageTracker, name: str, args: dict[str, Any]
+) -> dict[str, Any] | None:
+    completed = (
+        (name == "get_workbook_metadata" and cov.metadata_inspected)
+        or (name == "list_sheets" and cov.list_sheets_completed)
+        or (
+            name == "inspect_sheet"
+            and args.get("sheet_name") in cov.inspected
+        )
+    )
+    if not completed:
+        return None
+    return {
+        "tool_name": name,
+        "sheet_name": args.get("sheet_name"),
+        "already_completed": True,
+        "coverage_status": cov.coverage_status(),
+    }
+
+
 def run_loop(model, tools: WorkbookToolset, *, caps: HardCaps | None = None, verbose: bool = False) -> dict[str, Any]:
     caps = caps or HardCaps()
     dispatch = build_dispatch(tools)
@@ -190,6 +211,9 @@ def run_loop(model, tools: WorkbookToolset, *, caps: HardCaps | None = None, ver
                 stop_reason = "max_tool_calls_reserved_for_submit"; break
             if hasattr(model, "require_submission"):
                 model.require_submission()
+
+        if hasattr(model, "set_submission_allowed"):
+            model.set_submission_allowed(cov.submission_allowed())
 
         call = model.next_tool_call(trace)
         if call is None:
@@ -250,6 +274,7 @@ def run_loop(model, tools: WorkbookToolset, *, caps: HardCaps | None = None, ver
                         "observation_complete": True,
                         "submission_allowed": cov.submission_allowed(),
                         "continuation_managed_by_runtime": True,
+                        "coverage_status": cov.coverage_status(),
                     }
                     _observe_many(model, name, args, [result])
                     cov.record_driver_observation(_serialized_size(result))
@@ -360,6 +385,7 @@ def run_loop(model, tools: WorkbookToolset, *, caps: HardCaps | None = None, ver
                             "total_serialized_bytes": request_telemetry["total_serialized_bytes"],
                             "observation_complete": request_telemetry["coverage_complete"],
                         })
+                    request_status.update(cov.coverage_status())
                     if hasattr(model, "append_runtime_status"):
                         model.append_runtime_status(request_status)
                     if request_status["submission_allowed"] and hasattr(model, "require_submission"):
@@ -378,8 +404,13 @@ def run_loop(model, tools: WorkbookToolset, *, caps: HardCaps | None = None, ver
                     _observe_many(model, name, args, [result])
                     cov.record_driver_observation(_serialized_size(result))
                 continue
+            completed_result = _already_completed_result(cov, name, args)
             try:
-                result = dispatch[name](**args)
+                result = (
+                    completed_result
+                    if completed_result is not None
+                    else dispatch[name](**args)
+                )
             except ToolError as e:
                 result = e.as_result()
             except TypeError as e:
@@ -395,6 +426,11 @@ def run_loop(model, tools: WorkbookToolset, *, caps: HardCaps | None = None, ver
             _observe_many(model, name, args, [result])
             cov.record_observation(name, args, result)
             cov.record_driver_observation(_serialized_size(result))
+            if (
+                name in {"get_workbook_metadata", "list_sheets", "inspect_sheet"}
+                and hasattr(model, "append_runtime_status")
+            ):
+                model.append_runtime_status(cov.coverage_status())
     else:
         stop_reason = "max_iterations"
 
@@ -430,6 +466,7 @@ class AzureDriver:
         ]
         self._pending_id: str | None = None
         self._force_submit = False
+        self._submission_allowed = False
         self.usage_prompt = 0
         self.usage_completion = 0
 
@@ -452,6 +489,10 @@ class AzureDriver:
                         "parameters": tool["function"]["parameters"],
                     }
                     for tool in TOOL_SCHEMAS
+                    if (
+                        tool["function"]["name"] != "submit_extraction_result"
+                        or self._submission_allowed
+                    )
                 ],
                 tool_choice=tool_choice,
                 # The loop handles one tool call per turn and returns exactly one
@@ -514,4 +555,10 @@ class AzureDriver:
         })
 
     def require_submission(self) -> None:
+        self._submission_allowed = True
         self._force_submit = True
+
+    def set_submission_allowed(self, allowed: bool) -> None:
+        self._submission_allowed = allowed
+        if not allowed:
+            self._force_submit = False

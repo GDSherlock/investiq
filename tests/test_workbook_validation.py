@@ -13,6 +13,7 @@ import apps.api.app.workbook_validation as workbook_validation
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "experiments/workbook_agent_poc/fixtures/no_assumptions_sheet.xlsx"
+FINANCIAL_MODEL = ROOT / "Financial_Model_Data.xlsx"
 
 
 class PlannedWorkbookDriver:
@@ -73,6 +74,65 @@ class IncompleteDriver:
         pass
 
 
+class FinancialModelCoverageDriver:
+    _deployment = "deterministic-financial-model-coverage-driver"
+    usage_prompt = 0
+    usage_completion = 0
+
+    def __init__(self):
+        required_ranges = {
+            "Cover": "A1:L43",
+            "Assumptions": "A1:G74",
+            "Revenue": "A1:W16",
+            "Capex": "A1:W20",
+            "PnL": "A1:W15",
+            "Debt_Schedule": "A1:W18",
+            "CashFlows": "A1:W18",
+            "Returns": "A1:I28",
+            "Sensitivity": "A1:K25",
+            "Checks": "A1:G16",
+            "Dashboard": "A1:M11",
+        }
+        self.calls = [
+            {"name": "get_workbook_metadata", "arguments": {}},
+            {"name": "list_sheets", "arguments": {}},
+        ]
+        for sheet, cell_range in required_ranges.items():
+            self.calls.extend([
+                {"name": "inspect_sheet", "arguments": {"sheet_name": sheet}},
+                {"name": "read_range", "arguments": {
+                    "sheet_name": sheet,
+                    "cell_range": cell_range,
+                }},
+            ])
+        self.calls.append({
+            "name": "submit_extraction_result",
+            "arguments": {"result": {
+                "metadata": [{
+                    "candidate_id": "Cover!B3",
+                    "original_label": "Financial Model",
+                    "submitted_role": "metadata",
+                    "raw_value": (
+                        "Financial Model — InvestIQ Production Grade | Version 1.0 | "
+                        "April 2025"
+                    ),
+                    "source_references": [{"sheet_name": "Cover", "cell": "B3"}],
+                }],
+                "all_assumption_candidates": [],
+                "output_candidates": [],
+            }},
+        })
+        self.index = 0
+
+    def next_tool_call(self, trace):
+        call = self.calls[self.index]
+        self.index += 1
+        return call
+
+    def observe(self, name, args, result):
+        pass
+
+
 def test_adapter_runs_real_tools_gate_and_validator():
     result = run_workbook_validation(
         FIXTURE.read_bytes(),
@@ -115,6 +175,32 @@ def test_incomplete_run_returns_evidence_and_structured_error():
     assert result["coverage"]["total_sheets"] == 5
     assert result["validation_results"] == []
     assert result["errors"][0]["code"] == "AGENT_INCOMPLETE"
+
+
+def test_financial_model_data_completes_geometric_coverage_without_rejection():
+    result = run_workbook_validation(
+        FINANCIAL_MODEL.read_bytes(),
+        FINANCIAL_MODEL.name,
+        driver_factory=FinancialModelCoverageDriver,
+    )
+
+    coverage = result["coverage"]
+    assert coverage["inspected_sheets"] == coverage["total_sheets"] == 11
+    assert coverage["fully_observed_sheets"] == coverage["content_sheets"]
+    assert all(
+        not telemetry["missing_ranges"]
+        for telemetry in coverage["observation_telemetry"].values()
+    )
+    assert coverage["coverage_rejections"] == 0
+    assert coverage["submit_attempts"] == 1
+    assert result["submitted"] is True
+    assert result["stop_reason"] == "submitted"
+    assert result["final_extraction"]["metadata"]
+    assert result["errors"] == []
+    assert all(
+        "range_too_large" not in event["result_preview"]
+        for event in result["trace"]
+    )
 
 
 def test_invalid_xlsx_raises_typed_error():

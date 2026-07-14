@@ -67,14 +67,16 @@ TOOL_SCHEMAS = [
         "description": "List every worksheet with state (incl. hidden/veryHidden) and dimensions.",
         "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "get_workbook_metadata",
-        "description": "Named ranges, external links, sheet inventory. Call this early.",
+        "description": ("Named ranges, external links, sheet inventory, and the exact required_range "
+                        "that must be read for every sheet. Call this first."),
         "parameters": {"type": "object", "properties": {}, "required": []}}},
     {"type": "function", "function": {"name": "inspect_sheet",
         "description": "Summarize one sheet: dims, formula count, merged ranges, top-left preview.",
         "parameters": {"type": "object", "properties": {"sheet_name": {"type": "string"}}, "required": ["sheet_name"]}}},
     {"type": "function", "function": {"name": "read_range",
-        "description": ("Read a bounded A1 range. The runtime automatically observes every "
-                        "complete JSON chunk before your next turn; returns full evidence per cell."),
+        "description": ("Read one logical A1 range of any required size. The runtime partitions it "
+                        "into physical chunks and automatically observes every complete JSON chunk "
+                        "before your next turn; returns full evidence per non-empty cell."),
         "parameters": {"type": "object", "properties": {"sheet_name": {"type": "string"}, "cell_range": {"type": "string"}}, "required": ["sheet_name", "cell_range"]}}},
     {"type": "function", "function": {"name": "get_cell",
         "description": "Read one cell with a full evidence envelope.",
@@ -89,8 +91,7 @@ TOOL_SCHEMAS = [
         "description": "Return formula strings for a sheet (optionally a range).",
         "parameters": {"type": "object", "properties": {"sheet_name": {"type": "string"}, "cell_range": {"type": ["string", "null"]}}, "required": ["sheet_name"]}}},
     {"type": "function", "function": {"name": "submit_extraction_result",
-        "description": ("Submit final typed candidates and finish. Rejected with INSUFFICIENT_COVERAGE "
-                        "if the backend has not observed enough exploration — keep exploring, then resubmit."),
+        "description": "Submit final typed candidates and finish after coverage is complete.",
         "parameters": {"type": "object", "properties": {"result": SUBMIT_RESULT_SCHEMA}, "required": ["result"]}}},
 ]
 
@@ -102,8 +103,9 @@ SYSTEM_PROMPT = (
     "it is named Assumptions, Inputs, Drivers, Parameters (or a translation). Do NOT stop after "
     "one likely sheet. Assumptions may be distributed across ANY worksheet, including hidden ones.\n"
     "- First call get_workbook_metadata and list_sheets. Then inspect_sheet EVERY sheet (including "
-    "hidden), and read the full reported dimensions of every sheet that has content. The runtime "
-    "automatically supplies all continuation chunks before your next turn.\n"
+    "hidden). For every content sheet, read the complete `required_range` returned by metadata exactly, "
+    "including blank boundary cells; do not select only the apparent data region. The runtime automatically "
+    "partitions oversized logical ranges and supplies all continuation chunks before your next turn.\n"
     "- Identify candidate regions from evidence: non-formula hardcoded numerics, label-value adjacency, "
     "data validation dropdowns, named ranges, repeated scenario columns, formulas and their precedents, "
     "cross-sheet references, sensitivity tables, and results/summary regions.\n\n"

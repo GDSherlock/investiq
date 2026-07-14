@@ -19,7 +19,7 @@ class HardCaps:
     max_tool_calls: int = 60
     max_iterations: int = 40
     max_range_cells: int = 500
-    deadline_seconds: int = 1000
+    deadline_seconds: int = 500
     max_repeated_identical: int = 6
     max_internal_chunks_per_request: int = 64
     max_internal_chunks_per_run: int = 256
@@ -37,22 +37,41 @@ def _range_cells(cell_range: str) -> set[tuple[int, int]]:
 
 
 def _compress_cells(cells: set[tuple[int, int]]) -> list[str]:
-    """Return deterministic row-aligned A1 gaps without inventing rectangles."""
-    ranges: list[str] = []
+    """Return deterministic exact A1 rectangles, including vertical ranges."""
     by_row: dict[int, list[int]] = {}
     for row, col in sorted(cells):
         by_row.setdefault(row, []).append(col)
+
+    horizontal_runs: list[tuple[int, int, int]] = []
     for row, cols in by_row.items():
         start = previous = cols[0]
         for col in cols[1:] + [None]:
             if col is not None and col == previous + 1:
                 previous = col
                 continue
-            first = f"{get_column_letter(start)}{row}"
-            last = f"{get_column_letter(previous)}{row}"
-            ranges.append(first if first == last else f"{first}:{last}")
+            horizontal_runs.append((row, start, previous))
             if col is not None:
                 start = previous = col
+
+    rectangles: list[tuple[int, int, int, int]] = []
+    runs_by_columns: dict[tuple[int, int], list[int]] = {}
+    for row, start_col, end_col in horizontal_runs:
+        runs_by_columns.setdefault((start_col, end_col), []).append(row)
+    for (start_col, end_col), rows in runs_by_columns.items():
+        start_row = previous_row = rows[0]
+        for row in rows[1:] + [None]:
+            if row is not None and row == previous_row + 1:
+                previous_row = row
+                continue
+            rectangles.append((start_row, start_col, previous_row, end_col))
+            if row is not None:
+                start_row = previous_row = row
+
+    ranges: list[str] = []
+    for start_row, start_col, end_row, end_col in sorted(rectangles):
+        first = f"{get_column_letter(start_col)}{start_row}"
+        last = f"{get_column_letter(end_col)}{end_row}"
+        ranges.append(first if first == last else f"{first}:{last}")
     return ranges
 
 
@@ -72,14 +91,19 @@ class CoverageTracker:
         self.workbook_version = getattr(tools, "workbook_version", None)
 
         self.sheet_targets: dict[str, set[tuple[int, int]]] = {}
+        self.sheet_required_ranges: dict[str, str | None] = {}
         for sheet in self.meta["sheets"]:
+            required_range = sheet.get("required_range")
+            if not required_range:
+                max_row = sheet.get("max_row")
+                max_col = sheet.get("max_col")
+                if max_row and max_col:
+                    required_range = f"A1:{get_column_letter(max_col)}{max_row}"
+            self.sheet_required_ranges[sheet["name"]] = required_range
             if sheet["name"] not in self.content_sheets:
                 continue
-            max_row = sheet.get("max_row")
-            max_col = sheet.get("max_col")
-            if max_row and max_col:
-                target = f"A1:{get_column_letter(max_col)}{max_row}"
-                self.sheet_targets[sheet["name"]] = _range_cells(target)
+            if required_range:
+                self.sheet_targets[sheet["name"]] = _range_cells(required_range)
             else:
                 self.sheet_targets[sheet["name"]] = set()
 
@@ -97,6 +121,7 @@ class CoverageTracker:
         self.formulas_inspected: set[str] = set()
         self.data_validations_inspected: set[str] = set()
         self.metadata_inspected = False
+        self.list_sheets_completed = False
         self.named_ranges_inspected = False
 
         self.logical_model_tool_calls = 0
@@ -237,6 +262,8 @@ class CoverageTracker:
 
         if name == "inspect_sheet" and not (isinstance(result, dict) and result.get("error")):
             self.inspected.add(args.get("sheet_name"))
+        elif name == "list_sheets" and not (isinstance(result, dict) and result.get("error")):
+            self.list_sheets_completed = True
         elif name == "get_formulas":
             self.formulas_inspected.add(args.get("sheet_name"))
         elif name == "get_workbook_metadata":
@@ -417,7 +444,9 @@ class CoverageTracker:
         )
         return {
             "sheet_name": sheet_name,
+            "required_sheet_range": self.sheet_required_ranges.get(sheet_name),
             "requested_ranges": sorted({state["requested_range"] for state in requests}),
+            "observed_ranges": _compress_cells(observed & target),
             "returned_ranges": [
                 state["observed_ranges"][index]
                 for state in requests
@@ -432,6 +461,15 @@ class CoverageTracker:
             "observed_chunk_count": observed_chunk_count,
             "observed_cell_count": len(self._sheet_observed_non_empty.get(sheet_name, set())),
             "workbook_non_empty_cell_count": len(self.workbook_non_empty.get(sheet_name, set())),
+            "non_gating_metrics": {
+                "observed_cell_count": len(
+                    self._sheet_observed_non_empty.get(sheet_name, set())
+                ),
+                "workbook_non_empty_cell_count": len(
+                    self.workbook_non_empty.get(sheet_name, set())
+                ),
+                "gating": False,
+            },
             "missing_ranges": _compress_cells(missing),
             "invalid_json_count": invalid_count,
             "duplicate_chunk_ids": sorted({
@@ -507,6 +545,33 @@ class CoverageTracker:
             "submit_attempts": self.submit_attempts,
             "coverage_rejections": self.coverage_rejections,
             "max_repeated_identical": self.max_repeat_count(),
+        }
+
+    def coverage_status(self) -> dict[str, Any]:
+        sheets = []
+        required_next_reads = []
+        for sheet_name in sorted(self.content_sheets):
+            telemetry = self._sheet_telemetry(sheet_name)
+            sheet_status = {
+                "sheet_name": sheet_name,
+                "required_sheet_range": telemetry["required_sheet_range"],
+                "observed_ranges": telemetry["observed_ranges"],
+                "missing_ranges": telemetry["missing_ranges"],
+                "inspected": sheet_name in self.inspected,
+                "observation_complete": telemetry["observation_complete"],
+            }
+            sheets.append(sheet_status)
+            required_next_reads.extend(
+                {"sheet_name": sheet_name, "cell_range": cell_range}
+                for cell_range in telemetry["missing_ranges"]
+            )
+        return {
+            "type": "coverage_status",
+            "metadata_loaded": self.metadata_inspected,
+            "all_sheets_inspected": self.all_sheets <= self.inspected,
+            "sheets": sheets,
+            "required_next_reads": required_next_reads,
+            "submission_allowed": self.submission_allowed(),
         }
 
     def is_range_observed(self, sheet_name: str, cell_range: str) -> bool:

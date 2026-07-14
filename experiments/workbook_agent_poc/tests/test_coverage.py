@@ -58,6 +58,28 @@ def _observe_all(cov, args, chunks):
         cov.record_observation("read_range", call_args, chunk)
 
 
+def _record_range(tools, cov, sheet_name, cell_range, budget=12_000):
+    cov.record_logical_call(
+        "read_range", {"sheet_name": sheet_name, "cell_range": cell_range}
+    )
+    token = None
+    while True:
+        args = {"sheet_name": sheet_name, "cell_range": cell_range}
+        if token:
+            args["continuation_token"] = token
+        chunk = tools.read_range(
+            sheet_name,
+            cell_range,
+            continuation_token=token,
+            max_serialized_bytes=budget,
+        )
+        cov.record_execution("read_range", args, chunk)
+        cov.record_observation("read_range", args, chunk)
+        if not chunk["has_more"]:
+            return
+        token = chunk["continuation_token"]
+
+
 def test_last_chunk_not_observed_blocks_submission(tmp_path):
     tools, cov = _tracker(tmp_path)
     args, chunks = _chunks(tools)
@@ -211,6 +233,44 @@ def test_gate_reports_exact_missing_request_chunks_and_ranges(tmp_path):
     assert missing["request_id"] == chunks[0]["request_id"]
     assert missing["missing_chunk_indexes"] == [len(chunks) - 1]
     assert missing["missing_ranges"]
+
+
+def test_blank_boundary_geometry_returns_compact_vertical_missing_ranges(tmp_path):
+    path = tmp_path / "blank-boundary.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Revenue"
+    ws["A1"].number_format = "0"
+    for row in range(3, 17):
+        for col in range(2, 24):
+            ws.cell(row, col, f"r{row}c{col}")
+    wb.save(path)
+    tools = WorkbookToolset(file_path=str(path))
+    cov = CoverageTracker(tools)
+    cov.record("get_workbook_metadata", {}, tools.get_workbook_metadata())
+    cov.record("inspect_sheet", {"sheet_name": "Revenue"}, tools.inspect_sheet("Revenue"))
+
+    _record_range(tools, cov, "Revenue", "B3:W16")
+
+    status = cov.coverage_status()
+    sheet = status["sheets"][0]
+    assert status["submission_allowed"] is False
+    assert sheet["required_sheet_range"] == "A1:W16"
+    assert sheet["observed_ranges"] == ["B3:W16"]
+    assert sheet["missing_ranges"] == ["A1:W2", "A3:A16"]
+    assert cov.coverage_summary()["observation_telemetry"]["Revenue"][
+        "observation_complete"
+    ] is False
+
+    _record_range(tools, cov, "Revenue", "A1:W2")
+    _record_range(tools, cov, "Revenue", "A3:A16")
+
+    completed = cov.coverage_status()
+    assert completed["submission_allowed"] is True
+    assert completed["sheets"][0]["missing_ranges"] == []
+    assert cov.coverage_summary()["observation_telemetry"]["Revenue"][
+        "observation_complete"
+    ] is True
 
 
 def test_repeated_identical_calls_tracked(tmp_path):

@@ -119,9 +119,7 @@ class MockModel:
                 {"name": "list_sheets", "arguments": {}},
                 {"name": "inspect_sheet", "arguments": {"sheet_name": sheets[0]}},
                 {"name": "read_range", "arguments": {
-                    "sheet_name": sheets[0], "cell_range": self._sheet_ranges[sheets[0]]}},
-                # premature submit -> must be REJECTED by the coverage gate:
-                {"name": "submit_extraction_result", "arguments": {"result": self._submission()}}]
+                    "sheet_name": sheets[0], "cell_range": self._sheet_ranges[sheets[0]]}}]
         for s in sheets[1:]:
             plan.append({"name": "inspect_sheet", "arguments": {"sheet_name": s}})
             plan.append({"name": "read_range", "arguments": {

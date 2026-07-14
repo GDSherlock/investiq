@@ -225,6 +225,18 @@ def test_responses_protocol_one_logical_read_observes_all_chunks_then_submits(
     assert run["coverage"]["internal_chunk_fetches"] >= 1
     assert [name for name, _ in names].count("read_range") == 1
 
+    available_tool_names = [
+        {tool["name"] for tool in request["tools"]}
+        for request in calls
+    ]
+    assert all(
+        "submit_extraction_result" not in names
+        for names in available_tool_names[:3]
+    )
+    assert "submit_extraction_result" in available_tool_names[3]
+    assert run["coverage"]["coverage_rejections"] == 0
+    assert run["coverage"]["submit_attempts"] == 1
+
     post_read_input = calls[3]["input"]
     function_outputs = [
         item for item in post_read_input if item.get("type") == "function_call_output"

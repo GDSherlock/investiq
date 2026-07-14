@@ -145,12 +145,14 @@ class WorkbookToolset:
     def list_sheets(self) -> dict[str, Any]:
         out = []
         for ws in self._wb_values.worksheets:
+            required_range = f"A1:{_col_letter(ws.max_column)}{ws.max_row}"
             out.append({
                 "name": ws.title,
                 "state": ws.sheet_state,      # visible | hidden | veryHidden
                 "dimensions": ws.dimensions,
                 "max_row": ws.max_row,
                 "max_col": ws.max_column,
+                "required_range": required_range,
             })
         return {"sheets": out, "count": len(out)}
 
@@ -230,6 +232,8 @@ class WorkbookToolset:
         range_cell_count: int,
         max_serialized_bytes: int,
     ) -> bool:
+        if range_cell_count > MAX_CELLS_PER_READ:
+            return False
         # Conservative final-envelope placeholders ensure sizing includes every field,
         # including the self-reported byte count and a full continuation token.
         candidate = self._with_serialized_bytes({
@@ -368,12 +372,6 @@ class WorkbookToolset:
             min_c, min_r, max_c, max_r = range_boundaries(requested_range)
         except Exception:
             raise ToolError("bad_range", f"{cell_range!r} is not a valid A1 range")
-        n = (max_r - min_r + 1) * (max_c - min_c + 1)
-        if n > MAX_CELLS_PER_READ:
-            raise ToolError(
-                "range_too_large",
-                f"{n} cells exceeds MAX_CELLS_PER_READ={MAX_CELLS_PER_READ}. Narrow the range.",
-            )
         if not 1_000 <= max_serialized_bytes <= MAX_OBSERVATION_PAYLOAD_BYTES:
             raise ToolError(
                 "bad_payload_budget",
@@ -458,9 +456,16 @@ class WorkbookToolset:
         return {"query": query, "truncated": False, "hit_count": len(hits), "hits": hits}
 
     def get_workbook_metadata(self) -> dict[str, Any]:
-        sheets = [{"name": ws.title, "state": ws.sheet_state,
-                   "max_row": ws.max_row, "max_col": ws.max_column}
-                  for ws in self._wb_values.worksheets]
+        sheets = [
+            {
+                "name": ws.title,
+                "state": ws.sheet_state,
+                "max_row": ws.max_row,
+                "max_col": ws.max_column,
+                "required_range": f"A1:{_col_letter(ws.max_column)}{ws.max_row}",
+            }
+            for ws in self._wb_values.worksheets
+        ]
         named = [{"name": n, "target": t} for n, t in self.defined_names().items()]
         external = []
         for sheet, coord, f in self.iter_formulas():
@@ -470,6 +475,9 @@ class WorkbookToolset:
             "sheet_count": len(sheets),
             "hidden_sheet_count": sum(1 for s in sheets if s["state"] != "visible"),
             "sheets": sheets,
+            "required_sheet_ranges": {
+                sheet["name"]: sheet["required_range"] for sheet in sheets
+            },
             "named_ranges": named,
             "external_links": external,
         }

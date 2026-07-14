@@ -4,10 +4,13 @@ error-cache handling, external-ref detection, hidden-sheet access, formula graph
 import os
 import sys
 
+from openpyxl.utils import get_column_letter
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from workbook_tools import WorkbookToolset
 from dependency import build_dependency_graph, has_dependents
+from extraction_contract import SYSTEM_PROMPT
 
 FX = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "fixtures"))
 
@@ -57,6 +60,20 @@ def test_workbook_metadata_named_ranges_and_external():
     assert {"throughput", "availability"} <= names
     assert md["external_links"], "external link must be reported"
     assert "Confidential" in [s["name"] for s in md["sheets"] if s["state"] == "hidden"]
+
+
+def test_workbook_metadata_exposes_exact_required_sheet_ranges():
+    t = tools("hidden_named_injection")
+
+    md = t.get_workbook_metadata()
+
+    expected = {
+        sheet["name"]: f"A1:{get_column_letter(sheet['max_col'])}{sheet['max_row']}"
+        for sheet in md["sheets"]
+    }
+    assert md["required_sheet_ranges"] == expected
+    assert all(sheet["required_range"] for sheet in md["sheets"])
+    assert "read the complete `required_range`" in SYSTEM_PROMPT
 
 
 def test_data_validations():

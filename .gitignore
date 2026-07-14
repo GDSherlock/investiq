@@ -20,3 +20,6 @@ uploads/
 
 # Tooling
 .pytest_cache/
+
+# Workbook-agent generated reports
+experiments/workbook_agent_poc/results/

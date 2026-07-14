@@ -1,0 +1,250 @@
+{
+  "workbook_name": "multilingual.xlsx",
+  "sheets": [
+    "主页",
+    "业务测算",
+    "融资结构",
+    "测算底稿",
+    "结果页"
+  ],
+  "expected_hidden_sheets": [],
+  "expected_named_ranges": [],
+  "expected_external_refs": [],
+  "injection_cells": [],
+  "expected_assumptions": [
+    {
+      "original_label": "利用率",
+      "source_reference": "业务测算!C4",
+      "role": "hardcoded_input",
+      "raw_value": 0.42,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "电价增长率",
+      "source_reference": "业务测算!C5",
+      "role": "hardcoded_input",
+      "raw_value": 0.02,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "上网电价",
+      "source_reference": "业务测算!C6",
+      "role": "hardcoded_input",
+      "raw_value": 0.38,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "贷款利率",
+      "source_reference": "融资结构!C3",
+      "role": "hardcoded_input",
+      "raw_value": 0.049,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "偿债覆盖率门槛",
+      "source_reference": "融资结构!C4",
+      "role": "hardcoded_input",
+      "raw_value": 1.2,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "尾期市场化折扣系数",
+      "source_reference": "融资结构!C5",
+      "role": "hardcoded_input",
+      "raw_value": 0.87,
+      "is_formula": false,
+      "formula": null
+    }
+  ],
+  "expected_parameters": [
+    {
+      "original_label": "建设期",
+      "source_reference": "业务测算!C3",
+      "role": "parameter",
+      "raw_value": 3,
+      "is_formula": false,
+      "formula": null
+    }
+  ],
+  "expected_outputs": [
+    {
+      "original_label": "项目内部收益率",
+      "source_reference": "结果页!C3",
+      "role": "hardcoded_display_output",
+      "raw_value": 0.096,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "资本金内部收益率",
+      "source_reference": "结果页!C4",
+      "role": "formula_output",
+      "raw_value": 0.4494,
+      "is_formula": true,
+      "formula": "=测算底稿!C3+0.02"
+    }
+  ],
+  "expected_derived_values": [
+    {
+      "original_label": "含税电价",
+      "source_reference": "测算底稿!C3",
+      "role": "formula_derived_value",
+      "raw_value": 0.4294,
+      "is_formula": true,
+      "formula": "=业务测算!C6*(1+0.13)"
+    },
+    {
+      "original_label": "年发电量",
+      "source_reference": "测算底稿!C4",
+      "role": "formula_derived_value",
+      "raw_value": 441504,
+      "is_formula": true,
+      "formula": "=8760*0.42*120"
+    }
+  ],
+  "expected_unknown_labels": [
+    {
+      "original_label": "尾期市场化折扣系数",
+      "source_reference": "融资结构!C5"
+    }
+  ],
+  "expected_formula_no_cache": [],
+  "expected_formula_error": [],
+  "acceptable_optional_inputs": [],
+  "expected_scenario_structures": [],
+  "expected_sensitivity_drivers": [],
+  "must_not_classify_as_assumption": [
+    "主页!C3",
+    "测算底稿!C3",
+    "测算底稿!C4",
+    "结果页!C3",
+    "结果页!C4"
+  ],
+  "declarations": [
+    {
+      "original_label": "项目名称",
+      "source_reference": "主页!C3",
+      "role": "metadata",
+      "raw_value": "西部风电三期",
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "建设期",
+      "source_reference": "业务测算!C3",
+      "role": "parameter",
+      "raw_value": 3,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "利用率",
+      "source_reference": "业务测算!C4",
+      "role": "hardcoded_input",
+      "raw_value": 0.42,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "电价增长率",
+      "source_reference": "业务测算!C5",
+      "role": "hardcoded_input",
+      "raw_value": 0.02,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "上网电价",
+      "source_reference": "业务测算!C6",
+      "role": "hardcoded_input",
+      "raw_value": 0.38,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "贷款利率",
+      "source_reference": "融资结构!C3",
+      "role": "hardcoded_input",
+      "raw_value": 0.049,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "偿债覆盖率门槛",
+      "source_reference": "融资结构!C4",
+      "role": "hardcoded_input",
+      "raw_value": 1.2,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "尾期市场化折扣系数",
+      "source_reference": "融资结构!C5",
+      "role": "hardcoded_input",
+      "raw_value": 0.87,
+      "is_formula": false,
+      "formula": null,
+      "unknown": true,
+      "scenario": null
+    },
+    {
+      "original_label": "含税电价",
+      "source_reference": "测算底稿!C3",
+      "role": "formula_derived_value",
+      "raw_value": 0.4294,
+      "is_formula": true,
+      "formula": "=业务测算!C6*(1+0.13)",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "年发电量",
+      "source_reference": "测算底稿!C4",
+      "role": "formula_derived_value",
+      "raw_value": 441504,
+      "is_formula": true,
+      "formula": "=8760*0.42*120",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "项目内部收益率",
+      "source_reference": "结果页!C3",
+      "role": "hardcoded_display_output",
+      "raw_value": 0.096,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "资本金内部收益率",
+      "source_reference": "结果页!C4",
+      "role": "formula_output",
+      "raw_value": 0.4494,
+      "is_formula": true,
+      "formula": "=测算底稿!C3+0.02",
+      "unknown": false,
+      "scenario": null
+    }
+  ]
+}

@@ -1,0 +1,378 @@
+{
+  "workbook_name": "no_assumptions_sheet.xlsx",
+  "sheets": [
+    "Overview",
+    "Operations",
+    "Funding",
+    "Calc",
+    "Summary"
+  ],
+  "expected_hidden_sheets": [],
+  "expected_named_ranges": [],
+  "expected_external_refs": [],
+  "injection_cells": [],
+  "expected_assumptions": [
+    {
+      "original_label": "Annual volume growth",
+      "source_reference": "Operations!C3",
+      "role": "hardcoded_input",
+      "raw_value": 0.03,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Tariff escalation",
+      "source_reference": "Operations!C4",
+      "role": "hardcoded_input",
+      "raw_value": 0.025,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Plant utilisation",
+      "source_reference": "Operations!C5",
+      "role": "hardcoded_input",
+      "raw_value": 0.94,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Base tariff (USD/MWh)",
+      "source_reference": "Operations!C6",
+      "role": "hardcoded_input",
+      "raw_value": 45,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Base capex (USD m)",
+      "source_reference": "Funding!C3",
+      "role": "hardcoded_input",
+      "raw_value": 400,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Capex contingency %",
+      "source_reference": "Funding!C4",
+      "role": "hardcoded_input",
+      "raw_value": 0.08,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Debt margin",
+      "source_reference": "Funding!C6",
+      "role": "hardcoded_input",
+      "raw_value": 0.0185,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Gearing (debt %)",
+      "source_reference": "Funding!C7",
+      "role": "hardcoded_input",
+      "raw_value": 0.7,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Corporate tax rate",
+      "source_reference": "Calc!C3",
+      "role": "hardcoded_input",
+      "raw_value": 0.17,
+      "is_formula": false,
+      "formula": null
+    }
+  ],
+  "expected_parameters": [],
+  "expected_outputs": [
+    {
+      "original_label": "Project IRR",
+      "source_reference": "Summary!C3",
+      "role": "hardcoded_display_output",
+      "raw_value": 0.112,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Equity IRR",
+      "source_reference": "Summary!C4",
+      "role": "formula_output",
+      "raw_value": 0.3,
+      "is_formula": true,
+      "formula": "=Calc!C5/Funding!C5"
+    },
+    {
+      "original_label": "Minimum DSCR",
+      "source_reference": "Summary!C5",
+      "role": "formula_output",
+      "raw_value": 1.35,
+      "is_formula": true,
+      "formula": "=1+0.35"
+    },
+    {
+      "original_label": "Total project cost",
+      "source_reference": "Summary!C6",
+      "role": "formula_output",
+      "raw_value": 432,
+      "is_formula": true,
+      "formula": "=Funding!C5"
+    }
+  ],
+  "expected_derived_values": [
+    {
+      "original_label": "Year-1 effective tariff",
+      "source_reference": "Operations!C7",
+      "role": "formula_derived_value",
+      "raw_value": 46.125,
+      "is_formula": true,
+      "formula": "=C6*(1+C4)"
+    },
+    {
+      "original_label": "Capex including contingency",
+      "source_reference": "Funding!C5",
+      "role": "formula_derived_value",
+      "raw_value": 432,
+      "is_formula": true,
+      "formula": "=C3*(1+C4)"
+    },
+    {
+      "original_label": "Debt amount",
+      "source_reference": "Calc!C4",
+      "role": "formula_derived_value",
+      "raw_value": 302.4,
+      "is_formula": true,
+      "formula": "=Funding!C5*Funding!C7"
+    },
+    {
+      "original_label": "Equity amount",
+      "source_reference": "Calc!C5",
+      "role": "formula_derived_value",
+      "raw_value": 129.6,
+      "is_formula": true,
+      "formula": "=Funding!C5-C4"
+    }
+  ],
+  "expected_unknown_labels": [],
+  "expected_formula_no_cache": [],
+  "expected_formula_error": [],
+  "acceptable_optional_inputs": [],
+  "expected_scenario_structures": [],
+  "expected_sensitivity_drivers": [],
+  "must_not_classify_as_assumption": [
+    "Calc!C4",
+    "Calc!C5",
+    "Funding!C5",
+    "Operations!C7",
+    "Overview!C3",
+    "Overview!C4",
+    "Overview!C5",
+    "Summary!C3",
+    "Summary!C4",
+    "Summary!C5",
+    "Summary!C6"
+  ],
+  "declarations": [
+    {
+      "original_label": "Project name",
+      "source_reference": "Overview!C3",
+      "role": "metadata",
+      "raw_value": "Riverbend Solar 120MW",
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Report date",
+      "source_reference": "Overview!C4",
+      "role": "metadata",
+      "raw_value": "2026-03-01",
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Prepared by",
+      "source_reference": "Overview!C5",
+      "role": "metadata",
+      "raw_value": "Deal Team",
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Annual volume growth",
+      "source_reference": "Operations!C3",
+      "role": "hardcoded_input",
+      "raw_value": 0.03,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Tariff escalation",
+      "source_reference": "Operations!C4",
+      "role": "hardcoded_input",
+      "raw_value": 0.025,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Plant utilisation",
+      "source_reference": "Operations!C5",
+      "role": "hardcoded_input",
+      "raw_value": 0.94,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Base tariff (USD/MWh)",
+      "source_reference": "Operations!C6",
+      "role": "hardcoded_input",
+      "raw_value": 45,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Year-1 effective tariff",
+      "source_reference": "Operations!C7",
+      "role": "formula_derived_value",
+      "raw_value": 46.125,
+      "is_formula": true,
+      "formula": "=C6*(1+C4)",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Base capex (USD m)",
+      "source_reference": "Funding!C3",
+      "role": "hardcoded_input",
+      "raw_value": 400,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Capex contingency %",
+      "source_reference": "Funding!C4",
+      "role": "hardcoded_input",
+      "raw_value": 0.08,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Capex including contingency",
+      "source_reference": "Funding!C5",
+      "role": "formula_derived_value",
+      "raw_value": 432,
+      "is_formula": true,
+      "formula": "=C3*(1+C4)",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Debt margin",
+      "source_reference": "Funding!C6",
+      "role": "hardcoded_input",
+      "raw_value": 0.0185,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Gearing (debt %)",
+      "source_reference": "Funding!C7",
+      "role": "hardcoded_input",
+      "raw_value": 0.7,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Corporate tax rate",
+      "source_reference": "Calc!C3",
+      "role": "hardcoded_input",
+      "raw_value": 0.17,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Debt amount",
+      "source_reference": "Calc!C4",
+      "role": "formula_derived_value",
+      "raw_value": 302.4,
+      "is_formula": true,
+      "formula": "=Funding!C5*Funding!C7",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Equity amount",
+      "source_reference": "Calc!C5",
+      "role": "formula_derived_value",
+      "raw_value": 129.6,
+      "is_formula": true,
+      "formula": "=Funding!C5-C4",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Project IRR",
+      "source_reference": "Summary!C3",
+      "role": "hardcoded_display_output",
+      "raw_value": 0.112,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Equity IRR",
+      "source_reference": "Summary!C4",
+      "role": "formula_output",
+      "raw_value": 0.3,
+      "is_formula": true,
+      "formula": "=Calc!C5/Funding!C5",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Minimum DSCR",
+      "source_reference": "Summary!C5",
+      "role": "formula_output",
+      "raw_value": 1.35,
+      "is_formula": true,
+      "formula": "=1+0.35",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Total project cost",
+      "source_reference": "Summary!C6",
+      "role": "formula_output",
+      "raw_value": 432,
+      "is_formula": true,
+      "formula": "=Funding!C5",
+      "unknown": false,
+      "scenario": null
+    }
+  ]
+}

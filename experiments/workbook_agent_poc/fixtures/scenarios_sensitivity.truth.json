@@ -1,0 +1,494 @@
+{
+  "workbook_name": "scenarios_sensitivity.xlsx",
+  "sheets": [
+    "Demand",
+    "Costs",
+    "Cases",
+    "Result",
+    "Sensitivity"
+  ],
+  "expected_hidden_sheets": [],
+  "expected_named_ranges": [],
+  "expected_external_refs": [],
+  "injection_cells": [],
+  "expected_assumptions": [
+    {
+      "original_label": "Load factor",
+      "source_reference": "Demand!C3",
+      "role": "scenario_input",
+      "raw_value": 0.3,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Load factor",
+      "source_reference": "Demand!D3",
+      "role": "scenario_input",
+      "raw_value": 0.35,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Load factor",
+      "source_reference": "Demand!E3",
+      "role": "scenario_input",
+      "raw_value": 0.4,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Demand growth",
+      "source_reference": "Demand!C4",
+      "role": "scenario_input",
+      "raw_value": 0.01,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Demand growth",
+      "source_reference": "Demand!D4",
+      "role": "scenario_input",
+      "raw_value": 0.02,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Demand growth",
+      "source_reference": "Demand!E4",
+      "role": "scenario_input",
+      "raw_value": 0.03,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Unit opex",
+      "source_reference": "Costs!C3",
+      "role": "scenario_input",
+      "raw_value": 22,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Unit opex",
+      "source_reference": "Costs!D3",
+      "role": "scenario_input",
+      "raw_value": 20,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Unit opex",
+      "source_reference": "Costs!E3",
+      "role": "scenario_input",
+      "raw_value": 18,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Fuel price",
+      "source_reference": "Costs!C4",
+      "role": "scenario_input",
+      "raw_value": 4.5,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Fuel price",
+      "source_reference": "Costs!D4",
+      "role": "scenario_input",
+      "raw_value": 4,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "Fuel price",
+      "source_reference": "Costs!E4",
+      "role": "scenario_input",
+      "raw_value": 3.5,
+      "is_formula": false,
+      "formula": null
+    }
+  ],
+  "expected_parameters": [],
+  "expected_outputs": [
+    {
+      "original_label": "Project IRR",
+      "source_reference": "Result!C3",
+      "role": "formula_output",
+      "raw_value": 0.13,
+      "is_formula": true,
+      "formula": "=Demand!D3*0.2+Costs!D4*-0.005+0.08"
+    },
+    {
+      "original_label": "Payback (years)",
+      "source_reference": "Result!C4",
+      "role": "hardcoded_display_output",
+      "raw_value": 7.5,
+      "is_formula": false,
+      "formula": null
+    },
+    {
+      "original_label": "IRR sensitivity corner",
+      "source_reference": "Sensitivity!C4",
+      "role": "sensitivity_output",
+      "raw_value": 0.13,
+      "is_formula": true,
+      "formula": "=Result!C3"
+    }
+  ],
+  "expected_derived_values": [
+    {
+      "original_label": "sensitivity body",
+      "source_reference": "Sensitivity!D5",
+      "role": "formula_derived_value",
+      "raw_value": 13.5,
+      "is_formula": true,
+      "formula": "=$C5*D$4*10"
+    },
+    {
+      "original_label": "sensitivity body",
+      "source_reference": "Sensitivity!E5",
+      "role": "formula_derived_value",
+      "raw_value": 18,
+      "is_formula": true,
+      "formula": "=$C5*E$4*10"
+    },
+    {
+      "original_label": "sensitivity body",
+      "source_reference": "Sensitivity!D6",
+      "role": "formula_derived_value",
+      "raw_value": 10.5,
+      "is_formula": true,
+      "formula": "=$C6*D$4*10"
+    },
+    {
+      "original_label": "sensitivity body",
+      "source_reference": "Sensitivity!E6",
+      "role": "formula_derived_value",
+      "raw_value": 14,
+      "is_formula": true,
+      "formula": "=$C6*E$4*10"
+    }
+  ],
+  "expected_unknown_labels": [],
+  "expected_formula_no_cache": [],
+  "expected_formula_error": [],
+  "acceptable_optional_inputs": [
+    "Sensitivity!D4",
+    "Sensitivity!E4",
+    "Sensitivity!C5",
+    "Sensitivity!C6"
+  ],
+  "expected_scenario_structures": [
+    {
+      "concept": "Load factor",
+      "cells": [
+        "Demand!C3",
+        "Demand!D3",
+        "Demand!E3"
+      ],
+      "scenarios": [
+        "Downside",
+        "Base",
+        "Upside"
+      ]
+    },
+    {
+      "concept": "Demand growth",
+      "cells": [
+        "Demand!C4",
+        "Demand!D4",
+        "Demand!E4"
+      ],
+      "scenarios": [
+        "Downside",
+        "Base",
+        "Upside"
+      ]
+    },
+    {
+      "concept": "Unit opex",
+      "cells": [
+        "Costs!C3",
+        "Costs!D3",
+        "Costs!E3"
+      ],
+      "scenarios": [
+        "Downside",
+        "Base",
+        "Upside"
+      ]
+    },
+    {
+      "concept": "Fuel price",
+      "cells": [
+        "Costs!C4",
+        "Costs!D4",
+        "Costs!E4"
+      ],
+      "scenarios": [
+        "Downside",
+        "Base",
+        "Upside"
+      ]
+    }
+  ],
+  "expected_sensitivity_drivers": [
+    {
+      "row_driver": "Fuel price",
+      "col_driver": "Load factor",
+      "sensitized_output": "Result!C3"
+    }
+  ],
+  "must_not_classify_as_assumption": [
+    "Result!C3",
+    "Result!C4",
+    "Sensitivity!C4",
+    "Sensitivity!D5",
+    "Sensitivity!D6",
+    "Sensitivity!E5",
+    "Sensitivity!E6"
+  ],
+  "declarations": [
+    {
+      "original_label": "Load factor",
+      "source_reference": "Demand!C3",
+      "role": "scenario_input",
+      "raw_value": 0.3,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Downside"
+    },
+    {
+      "original_label": "Load factor",
+      "source_reference": "Demand!D3",
+      "role": "scenario_input",
+      "raw_value": 0.35,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Base"
+    },
+    {
+      "original_label": "Load factor",
+      "source_reference": "Demand!E3",
+      "role": "scenario_input",
+      "raw_value": 0.4,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Upside"
+    },
+    {
+      "original_label": "Demand growth",
+      "source_reference": "Demand!C4",
+      "role": "scenario_input",
+      "raw_value": 0.01,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Downside"
+    },
+    {
+      "original_label": "Demand growth",
+      "source_reference": "Demand!D4",
+      "role": "scenario_input",
+      "raw_value": 0.02,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Base"
+    },
+    {
+      "original_label": "Demand growth",
+      "source_reference": "Demand!E4",
+      "role": "scenario_input",
+      "raw_value": 0.03,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Upside"
+    },
+    {
+      "original_label": "Unit opex",
+      "source_reference": "Costs!C3",
+      "role": "scenario_input",
+      "raw_value": 22,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Downside"
+    },
+    {
+      "original_label": "Unit opex",
+      "source_reference": "Costs!D3",
+      "role": "scenario_input",
+      "raw_value": 20,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Base"
+    },
+    {
+      "original_label": "Unit opex",
+      "source_reference": "Costs!E3",
+      "role": "scenario_input",
+      "raw_value": 18,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Upside"
+    },
+    {
+      "original_label": "Fuel price",
+      "source_reference": "Costs!C4",
+      "role": "scenario_input",
+      "raw_value": 4.5,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Downside"
+    },
+    {
+      "original_label": "Fuel price",
+      "source_reference": "Costs!D4",
+      "role": "scenario_input",
+      "raw_value": 4,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Base"
+    },
+    {
+      "original_label": "Fuel price",
+      "source_reference": "Costs!E4",
+      "role": "scenario_input",
+      "raw_value": 3.5,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": "Upside"
+    },
+    {
+      "original_label": "Active case",
+      "source_reference": "Cases!C2",
+      "role": "scenario_selector",
+      "raw_value": "Base",
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Project IRR",
+      "source_reference": "Result!C3",
+      "role": "formula_output",
+      "raw_value": 0.13,
+      "is_formula": true,
+      "formula": "=Demand!D3*0.2+Costs!D4*-0.005+0.08",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Payback (years)",
+      "source_reference": "Result!C4",
+      "role": "hardcoded_display_output",
+      "raw_value": 7.5,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "IRR sensitivity corner",
+      "source_reference": "Sensitivity!C4",
+      "role": "sensitivity_output",
+      "raw_value": 0.13,
+      "is_formula": true,
+      "formula": "=Result!C3",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Load factor axis (low)",
+      "source_reference": "Sensitivity!D4",
+      "role": "hardcoded_input",
+      "raw_value": 0.3,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Load factor axis (high)",
+      "source_reference": "Sensitivity!E4",
+      "role": "hardcoded_input",
+      "raw_value": 0.4,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Fuel price axis (high)",
+      "source_reference": "Sensitivity!C5",
+      "role": "hardcoded_input",
+      "raw_value": 4.5,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "Fuel price axis (low)",
+      "source_reference": "Sensitivity!C6",
+      "role": "hardcoded_input",
+      "raw_value": 3.5,
+      "is_formula": false,
+      "formula": null,
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "sensitivity body",
+      "source_reference": "Sensitivity!D5",
+      "role": "formula_derived_value",
+      "raw_value": 13.5,
+      "is_formula": true,
+      "formula": "=$C5*D$4*10",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "sensitivity body",
+      "source_reference": "Sensitivity!E5",
+      "role": "formula_derived_value",
+      "raw_value": 18,
+      "is_formula": true,
+      "formula": "=$C5*E$4*10",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "sensitivity body",
+      "source_reference": "Sensitivity!D6",
+      "role": "formula_derived_value",
+      "raw_value": 10.5,
+      "is_formula": true,
+      "formula": "=$C6*D$4*10",
+      "unknown": false,
+      "scenario": null
+    },
+    {
+      "original_label": "sensitivity body",
+      "source_reference": "Sensitivity!E6",
+      "role": "formula_derived_value",
+      "raw_value": 14,
+      "is_formula": true,
+      "formula": "=$C6*E$4*10",
+      "unknown": false,
+      "scenario": null
+    }
+  ]
+}

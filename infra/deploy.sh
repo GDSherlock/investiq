@@ -45,8 +45,8 @@ APPGW_PIP="${APPGW_PIP:-${PROJECT_NAME}-appgw-pip}"
 AI_RESOURCE_NAME="${AI_RESOURCE_NAME:-${PROJECT_NAME}-ai}"
 AI_HUB_NAME="${AI_HUB_NAME:-${PROJECT_NAME}-hub}"
 AI_PROJECT_NAME="${AI_PROJECT_NAME:-${PROJECT_NAME}-project}"
-GPT_DEPLOYMENT="${GPT_DEPLOYMENT:-gpt-5.2}"
-EMBEDDING_DEPLOYMENT="${EMBEDDING_DEPLOYMENT:-text-embedding-3-large}"
+GPT_DEPLOYMENT="${GPT_DEPLOYMENT:-gpt-5.4-mini}"
+EMBEDDING_DEPLOYMENT="${EMBEDDING_DEPLOYMENT:-text-embedding-3-small}"
 
 echo "============================================"
 echo "InvestIQ Azure Deployment"
@@ -78,6 +78,7 @@ if ! step_active 6; then
 fi
 if ! step_active 9; then
   AI_ENDPOINT=$(az cognitiveservices account show --name "$AI_RESOURCE_NAME" --resource-group "$RESOURCE_GROUP" --query properties.endpoint -o tsv 2>/dev/null)
+  AI_ENDPOINT="${AI_ENDPOINT%/}/openai/v1/"
   AI_KEY=$(az cognitiveservices account keys list --name "$AI_RESOURCE_NAME" --resource-group "$RESOURCE_GROUP" --query key1 -o tsv 2>/dev/null)
 fi
 
@@ -347,6 +348,7 @@ AI_ENDPOINT=$(az cognitiveservices account show \
   --name "$AI_RESOURCE_NAME" \
   --resource-group "$RESOURCE_GROUP" \
   --query properties.endpoint -o tsv)
+AI_ENDPOINT="${AI_ENDPOINT%/}/openai/v1/"
 
 AI_KEY=$(az cognitiveservices account keys list \
   --name "$AI_RESOURCE_NAME" \
@@ -403,8 +405,8 @@ else
     --hub-id "$AI_HUB_ID"
 fi
 
-# 9e. Deploy GPT-5.2 (Chat completions)
-echo ">>> Deploying GPT-5.2 model..."
+# 9e. Deploy GPT-5.4-mini (Responses API)
+echo ">>> Deploying GPT-5.4-mini model..."
 if az cognitiveservices account deployment show --name "$AI_RESOURCE_NAME" --resource-group "$RESOURCE_GROUP" --deployment-name "$GPT_DEPLOYMENT" &>/dev/null; then
   echo "    Deployment '$GPT_DEPLOYMENT' already exists, skipping."
 else
@@ -412,15 +414,15 @@ else
     --name "$AI_RESOURCE_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --deployment-name "$GPT_DEPLOYMENT" \
-    --model-name gpt-5.2 \
-    --model-version "2025-12-11" \
+    --model-name gpt-5.4-mini \
+    --model-version "2026-03-17" \
     --model-format OpenAI \
     --sku-capacity 30 \
     --sku-name GlobalStandard
 fi
 
-# 9f. Deploy text-embedding-3-large (Embeddings)
-echo ">>> Deploying text-embedding-3-large model..."
+# 9f. Deploy text-embedding-3-small (Embeddings)
+echo ">>> Deploying text-embedding-3-small model..."
 if az cognitiveservices account deployment show --name "$AI_RESOURCE_NAME" --resource-group "$RESOURCE_GROUP" --deployment-name "$EMBEDDING_DEPLOYMENT" &>/dev/null; then
   echo "    Deployment '$EMBEDDING_DEPLOYMENT' already exists, skipping."
 else
@@ -428,7 +430,7 @@ else
     --name "$AI_RESOURCE_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --deployment-name "$EMBEDDING_DEPLOYMENT" \
-    --model-name text-embedding-3-large \
+    --model-name text-embedding-3-small \
     --model-version "1" \
     --model-format OpenAI \
     --sku-capacity 30 \
@@ -445,7 +447,8 @@ az keyvault secret set \
 az keyvault secret set \
   --vault-name "$KEYVAULT_NAME" \
   --name "ai-key" \
-  --value "$AI_KEY" 2>/dev/null || true
+  --value "$AI_KEY" \
+  --output none 2>/dev/null || true
 
 echo "    AI Endpoint:          ${AI_ENDPOINT}"
 echo "    GPT Deployment:       ${GPT_DEPLOYMENT}"
@@ -479,7 +482,7 @@ az containerapp create \
     "REDIS_URL=$REDIS_URL" \
     "UPLOAD_DIR=/app/uploads" \
     "AZURE_OPENAI_ENDPOINT=${AI_ENDPOINT}" \
-    "AZURE_OPENAI_KEY=${AI_KEY}" \
+    "AZURE_OPENAI_API_KEY=${AI_KEY}" \
     "AZURE_OPENAI_GPT_DEPLOYMENT=${GPT_DEPLOYMENT}" \
     "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${EMBEDDING_DEPLOYMENT}"
 
@@ -532,7 +535,7 @@ az containerapp create \
     "DATABASE_URL=$DATABASE_URL" \
     "REDIS_URL=$REDIS_URL" \
     "AZURE_OPENAI_ENDPOINT=${AI_ENDPOINT}" \
-    "AZURE_OPENAI_KEY=${AI_KEY}" \
+    "AZURE_OPENAI_API_KEY=${AI_KEY}" \
     "AZURE_OPENAI_GPT_DEPLOYMENT=${GPT_DEPLOYMENT}" \
     "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${EMBEDDING_DEPLOYMENT}"
 
@@ -560,7 +563,7 @@ for AGENT in "${AGENTS[@]}"; do
       "REDIS_URL=$REDIS_URL" \
       "AGENT_NAME=${AGENT}" \
       "AZURE_OPENAI_ENDPOINT=${AI_ENDPOINT}" \
-      "AZURE_OPENAI_KEY=${AI_KEY}" \
+      "AZURE_OPENAI_API_KEY=${AI_KEY}" \
       "AZURE_OPENAI_GPT_DEPLOYMENT=${GPT_DEPLOYMENT}" \
       "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${EMBEDDING_DEPLOYMENT}"
 done
@@ -807,5 +810,5 @@ echo ""
 echo "IMPORTANT: Store these credentials securely:"
 echo "  Postgres Password: ${POSTGRES_PASSWORD}"
 echo "  Database URL:      ${DATABASE_URL}"
-echo "  AI Key:            ${AI_KEY:-N/A}"
+echo "  AI Key Loaded:     $([ -n "${AI_KEY:-}" ] && echo true || echo false)"
 echo "============================================"

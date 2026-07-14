@@ -35,8 +35,8 @@ $AppgwPip = "$ProjectName-appgw-pip"
 $AiResourceName = "$ProjectName-ai"
 $AiHubName = "$ProjectName-hub"
 $AiProjectName = "$ProjectName-project"
-$GptDeployment = "gpt-5.2"
-$EmbeddingDeployment = "text-embedding-3-large"
+$GptDeployment = "gpt-5.4-mini"
+$EmbeddingDeployment = "text-embedding-3-small"
 
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "InvestIQ Azure Deployment" -ForegroundColor Cyan
@@ -207,6 +207,7 @@ $AiEndpoint = az cognitiveservices account show `
     --name $AiResourceName `
     --resource-group $ResourceGroup `
     --query properties.endpoint -o tsv
+$AiEndpoint = $AiEndpoint.TrimEnd("/") + "/openai/v1/"
 
 $AiKey = az cognitiveservices account keys list `
     --name $AiResourceName `
@@ -257,25 +258,25 @@ az ml workspace create `
     --resource-group $ResourceGroup `
     --hub-id $AiHubId
 
-# 9e. Deploy GPT-5.2 (Chat completions)
-Write-Host ">>> Deploying GPT-5.2 model..." -ForegroundColor Yellow
+# 9e. Deploy GPT-5.4-mini (Responses API)
+Write-Host ">>> Deploying GPT-5.4-mini model..." -ForegroundColor Yellow
 az cognitiveservices account deployment create `
     --name $AiResourceName `
     --resource-group $ResourceGroup `
     --deployment-name $GptDeployment `
-    --model-name gpt-5.2 `
-    --model-version "2025-12-11" `
+    --model-name gpt-5.4-mini `
+    --model-version "2026-03-17" `
     --model-format OpenAI `
     --sku-capacity 30 `
     --sku-name GlobalStandard
 
-# 9f. Deploy text-embedding-3-large (Embeddings)
-Write-Host ">>> Deploying text-embedding-3-large model..." -ForegroundColor Yellow
+# 9f. Deploy text-embedding-3-small (Embeddings)
+Write-Host ">>> Deploying text-embedding-3-small model..." -ForegroundColor Yellow
 az cognitiveservices account deployment create `
     --name $AiResourceName `
     --resource-group $ResourceGroup `
     --deployment-name $EmbeddingDeployment `
-    --model-name text-embedding-3-large `
+    --model-name text-embedding-3-small `
     --model-version "1" `
     --model-format OpenAI `
     --sku-capacity 30 `
@@ -284,7 +285,7 @@ az cognitiveservices account deployment create `
 # Store AI credentials in Key Vault
 Write-Host ">>> Storing AI credentials in Key Vault..." -ForegroundColor Yellow
 az keyvault secret set --vault-name $KeyVaultName --name "ai-endpoint" --value $AiEndpoint 2>$null
-az keyvault secret set --vault-name $KeyVaultName --name "ai-key" --value $AiKey 2>$null
+az keyvault secret set --vault-name $KeyVaultName --name "ai-key" --value $AiKey --output none 2>$null
 
 Write-Host "    AI Endpoint:          $AiEndpoint"
 Write-Host "    GPT Deployment:       $GptDeployment"
@@ -308,7 +309,7 @@ az containerapp create `
     --max-replicas 5 `
     --cpu 1.0 `
     --memory 2.0Gi `
-    --env-vars "DATABASE_URL=$DatabaseUrl" "USE_SQLITE=false" "REDIS_URL=$RedisUrl" "UPLOAD_DIR=/app/uploads" "AZURE_OPENAI_ENDPOINT=$AiEndpoint" "AZURE_OPENAI_KEY=$AiKey" "AZURE_OPENAI_GPT_DEPLOYMENT=$GptDeployment" "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=$EmbeddingDeployment"
+    --env-vars "DATABASE_URL=$DatabaseUrl" "USE_SQLITE=false" "REDIS_URL=$RedisUrl" "UPLOAD_DIR=/app/uploads" "AZURE_OPENAI_ENDPOINT=$AiEndpoint" "AZURE_OPENAI_API_KEY=$AiKey" "AZURE_OPENAI_GPT_DEPLOYMENT=$GptDeployment" "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=$EmbeddingDeployment"
 
 $ApiFqdn = az containerapp show `
     --name InvestIQAppNL-api `
@@ -354,7 +355,7 @@ az containerapp create `
     --max-replicas 3 `
     --cpu 1.0 `
     --memory 2.0Gi `
-    --env-vars "DATABASE_URL=$DatabaseUrl" "REDIS_URL=$RedisUrl" "AZURE_OPENAI_ENDPOINT=$AiEndpoint" "AZURE_OPENAI_KEY=$AiKey" "AZURE_OPENAI_GPT_DEPLOYMENT=$GptDeployment" "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=$EmbeddingDeployment"
+    --env-vars "DATABASE_URL=$DatabaseUrl" "REDIS_URL=$RedisUrl" "AZURE_OPENAI_ENDPOINT=$AiEndpoint" "AZURE_OPENAI_API_KEY=$AiKey" "AZURE_OPENAI_GPT_DEPLOYMENT=$GptDeployment" "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=$EmbeddingDeployment"
 
 # M5: Agent Container Apps
 $Agents = @("ingest", "sens", "mc", "cf", "debt", "monitor", "report", "assistant")
@@ -375,7 +376,7 @@ foreach ($Agent in $Agents) {
         --max-replicas 5 `
         --cpu 0.5 `
         --memory 1.0Gi `
-        --env-vars "DATABASE_URL=$DatabaseUrl" "REDIS_URL=$RedisUrl" "AGENT_NAME=$Agent" "AZURE_OPENAI_ENDPOINT=$AiEndpoint" "AZURE_OPENAI_KEY=$AiKey" "AZURE_OPENAI_GPT_DEPLOYMENT=$GptDeployment" "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=$EmbeddingDeployment"
+        --env-vars "DATABASE_URL=$DatabaseUrl" "REDIS_URL=$RedisUrl" "AGENT_NAME=$Agent" "AZURE_OPENAI_ENDPOINT=$AiEndpoint" "AZURE_OPENAI_API_KEY=$AiKey" "AZURE_OPENAI_GPT_DEPLOYMENT=$GptDeployment" "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=$EmbeddingDeployment"
 }
 
 # M7: Async Job Runner
@@ -558,5 +559,5 @@ Write-Host ""
 Write-Host "IMPORTANT - Store these credentials:" -ForegroundColor Red
 Write-Host "  Postgres Password: $PostgresPassword"
 Write-Host "  Database URL:      $DatabaseUrl"
-Write-Host "  AI Key:            $AiKey"
+Write-Host "  AI Key Loaded:     $(-not [string]::IsNullOrEmpty($AiKey))"
 Write-Host "============================================" -ForegroundColor Green

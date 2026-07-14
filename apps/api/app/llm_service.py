@@ -2,22 +2,20 @@
 
 import os
 
-from openai import AzureOpenAI
+from openai import OpenAI
 
-_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
-_DEPLOYMENT = os.getenv("AZURE_OPENAI_GPT_DEPLOYMENT", "gpt-5.2")
+_DEPLOYMENT = os.getenv("AZURE_OPENAI_GPT_DEPLOYMENT", "gpt-5.4-mini")
 
-_client: AzureOpenAI | None = None
+_client: OpenAI | None = None
 
 
-def _get_client() -> AzureOpenAI:
+def _get_client() -> OpenAI:
     """Lazily create the Azure OpenAI client so the API can boot without LLM credentials configured."""
     global _client
     if _client is None:
-        _client = AzureOpenAI(
-            api_version=_API_VERSION,
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_KEY"],
+        _client = OpenAI(
+            base_url=os.environ["AZURE_OPENAI_ENDPOINT"].rstrip("/") + "/",
+            api_key=os.environ["AZURE_OPENAI_API_KEY"],
         )
     return _client
 
@@ -113,16 +111,15 @@ def generate_report(persona: dict, model_context: str, rag_chunks: list[dict] | 
         f"{rag_context}"
     )
 
-    response = _get_client().chat.completions.create(
+    response = _get_client().responses.create(
         model=_DEPLOYMENT,
-        messages=[
-            {"role": "system", "content": system},
+        input=[
+            {"role": "developer", "content": system},
             {"role": "user", "content": user_msg},
         ],
-        temperature=0.3,
-        max_completion_tokens=4096,
+        max_output_tokens=4096,
     )
-    return response.choices[0].message.content or ""
+    return response.output_text
 
 
 def chat_response(
@@ -139,16 +136,15 @@ def chat_response(
     if rag_chunks:
         system += _format_rag_context(rag_chunks)
 
-    messages: list[dict] = [{"role": "system", "content": system}]
+    messages: list[dict] = [{"role": "developer", "content": system}]
     if history:
         for h in history[-10:]:  # Keep last 10 turns
             messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": query})
 
-    response = _get_client().chat.completions.create(
+    response = _get_client().responses.create(
         model=_DEPLOYMENT,
-        messages=messages,
-        temperature=0.4,
-        max_completion_tokens=2048,
+        input=messages,
+        max_output_tokens=2048,
     )
-    return response.choices[0].message.content or ""
+    return response.output_text

@@ -5,24 +5,22 @@ import os
 import uuid
 from typing import Any
 
-from openai import AzureOpenAI
+from openai import OpenAI
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
-_EMBEDDING_MODEL = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
+_EMBEDDING_MODEL = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "text-embedding-3-small")
 
-_client: AzureOpenAI | None = None
+_client: OpenAI | None = None
 
 
-def _get_client() -> AzureOpenAI:
+def _get_client() -> OpenAI:
     """Lazily create the Azure OpenAI client so the API can boot without LLM credentials configured."""
     global _client
     if _client is None:
-        _client = AzureOpenAI(
-            api_version=_API_VERSION,
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_KEY"],
+        _client = OpenAI(
+            base_url=os.environ["AZURE_OPENAI_ENDPOINT"].rstrip("/") + "/",
+            api_key=os.environ["AZURE_OPENAI_API_KEY"],
         )
     return _client
 

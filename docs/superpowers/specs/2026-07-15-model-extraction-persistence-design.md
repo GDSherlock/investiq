@@ -9,7 +9,9 @@
 
 ## 1. Executive Summary
 
-**Proposed.** Persist each accepted `.xlsx` as one immutable, content-addressed `workbook_versions` row whose bytes are stored in the existing application database. Reuse that workbook row when SHA-256 matches, but create a new `model_versions` row for every Model Extraction execution. Persist canonical parameters, canonical financial series, and aligned series values in relational tables with backend-generated IDs and indexed workbook provenance. Keep a JSON extraction snapshot and validation evidence on the model version only as an audit/retry artifact; it is not the canonical query model.
+**Proposed.** Persist each accepted `.xlsx` as one immutable, content-addressed `workbook_versions` row through a backend-owned `WorkbookStorage` interface; V1 uses a database adapter, while the service contract remains portable to Azure Blob or S3. Reuse that workbook row when SHA-256 matches, but create a new `model_versions` row for every Model Extraction execution. Persist canonical parameters, canonical financial series, and aligned series values in relational tables with backend-generated IDs and indexed workbook provenance. Parameters and series remain type-specific tables in V1 but share a `FinancialEntity`-compatible identity and read contract so they can later acquire a common relational supertype without changing stable IDs or consumers.
+
+Keep `extraction_snapshot_json` and validation evidence on the model version strictly as audit and persistence-retry artifacts. They are not a canonical query model. Every downstream module, including future Calculation Rule Extraction, must consume only canonical relational tables through `ModelExtractionReadService`; the downstream read contract does not expose snapshot JSON.
 
 This is the minimum architecture that satisfies the future upstream contract:
 
@@ -249,13 +251,16 @@ Evidence:
 1. **Proposed — immutable source.** A workbook version is identified by bytes, not filename, request, user, or LLM output.
 2. **Proposed — backend authority.** Workbook facts, deterministic materialization, and deterministic validation outrank LLM-submitted values and roles.
 3. **Proposed — relational canonical model.** Data that must be joined, indexed, reloaded, or referenced by later rules is relational. JSON is reserved for immutable source snapshots, telemetry, warnings, and heterogeneous scalar values.
-4. **Proposed — stable backend IDs.** LLM IDs are aliases only. Backend IDs never depend on LLM naming.
-5. **Proposed — no long database transaction around the LLM.** The model call runs between short transactions.
-6. **Proposed — failure evidence without false readiness.** A failed execution remains auditable but cannot be loaded as a materialized canonical model.
-7. **Proposed — retry without duplicate canonical rows.** Workbook ingest is content-idempotent; persistence retry is model-version-idempotent; a new extraction is a new model version.
-8. **Proposed — synchronous compatibility.** The current request still completes synchronously and returns the current response plus committed IDs.
-9. **Proposed — cross-dialect types.** SQLite development and PostgreSQL production share the same ORM semantics and constraints where both dialects support them.
-10. **Proposed — YAGNI.** No formula-rule, dependency, AST, engine, async, vector, frontend, or legacy-analytics design enters this foundation.
+4. **Proposed — canonical-only downstream consumption.** `extraction_snapshot_json` exists only for audit and same-model persistence retry. It is absent from downstream DTOs and must never be read by Calculation Rule Extraction or any other downstream module.
+5. **Proposed — one FinancialEntity evolution seam.** Parameters and series keep focused V1 tables, but share a stable entity ID namespace, an explicit `entity_kind`, and a discriminated `FinancialEntity` read contract. The design must not force future consumers to depend on table-specific IDs.
+6. **Proposed — storage port, adapter choice.** Workbook identity/catalog logic depends on `WorkbookStorage`, not on `LargeBinary`, a filesystem path, Azure Blob, or S3. Database BLOB is the V1 adapter, not the service contract.
+7. **Proposed — stable backend IDs.** LLM IDs are aliases only. Backend IDs never depend on LLM naming.
+8. **Proposed — no long database transaction around the LLM.** The model call runs between short transactions.
+9. **Proposed — failure evidence without false readiness.** A failed execution remains auditable but cannot be loaded as a materialized canonical model.
+10. **Proposed — retry without duplicate canonical rows.** Workbook ingest is content-idempotent; persistence retry is model-version-idempotent; a new extraction is a new model version.
+11. **Proposed — synchronous compatibility.** The current request still completes synchronously and returns the current response plus committed IDs.
+12. **Proposed — cross-dialect types.** SQLite development and PostgreSQL production share the same ORM semantics and constraints where both dialects support them.
+13. **Proposed — YAGNI.** No formula-rule, dependency, AST, engine, async, vector, frontend, or legacy-analytics design enters this foundation.
 
 ## 5. Considered Approaches
 
@@ -263,9 +268,9 @@ Evidence:
 |---|---:|---|---|---|---|---:|---|
 | 1. Persist `final_extraction` JSON only | Low | Preserves a response-shaped snapshot but not an independently enforceable canonical model; source workbook is still lost unless separately added | Can replay JSON, but cannot revalidate against exact bytes | Poor relational lookup; tightly coupled to the evolving LLM/API schema | Insufficient: cannot reopen exact workbook and cell/formula lookup is JSON traversal | Low initially, high when normalized later | Reject |
 | 2. Persist canonical relational entities but not workbook bytes | Medium | Canonical rows are queryable, but provenance cannot be independently re-read after request cleanup | Canonical insert retry is possible, extraction or validation replay is not trustworthy without source bytes | Good canonical queryability and lower LLM coupling | Insufficient: future extraction cannot reopen the exact workbook by ID | Medium plus later storage migration | Reject |
-| 3. Persist immutable workbook plus canonical relational entities and a noncanonical audit snapshot | Medium | Exact source, deterministic canonical rows, and validation evidence survive restart | Workbook dedupe and same-model persistence retry are deterministic; no LLM rerun is needed after snapshot commit | Strong relational queries; JSON snapshot is explicitly noncanonical | Meets the required two-ID upstream contract | Medium once | Recommend |
+| 3. Persist immutable workbook through a storage port plus canonical relational entities and a noncanonical audit snapshot | Medium | Exact source, deterministic canonical rows, and validation evidence survive restart | Workbook dedupe and same-model persistence retry are deterministic; no LLM rerun is needed after snapshot commit | Strong relational queries; JSON snapshot is explicitly unavailable to downstream consumers | Meets the required two-ID upstream contract through canonical-only read interfaces | Medium once | Recommend |
 
-**Proposed.** Approach 3 is the only approach that meets durability, auditability, reloadability, and future upstream requirements without designing any future calculation-rule schema. The additional complexity over Approach 2 is one immutable byte column and a small workbook repository; it eliminates a much larger later migration and prevents source/canonical drift.
+**Proposed.** Approach 3 is the only approach that meets durability, auditability, reloadability, and future upstream requirements without designing any future calculation-rule schema. The additional complexity over Approach 2 is an immutable workbook-storage adapter plus a small catalog repository; it eliminates a much larger later migration and prevents source/canonical drift. The storage port prevents this V1 medium choice from becoming a domain dependency.
 
 ## 6. Recommended Architecture
 
@@ -274,18 +279,23 @@ Evidence:
 ```mermaid
 flowchart LR
     A["Upload router"] --> B["ModelExtractionPersistenceService"]
-    B --> C["WorkbookRepository"]
+    B --> C["WorkbookVersionRepository"]
+    B --> S["WorkbookStorage port"]
+    S --> SA["DatabaseWorkbookStorage adapter (V1)"]
     B --> D["Current synchronous extraction pipeline"]
     D --> E["Backend materializer and validator"]
     B --> F["ModelExtractionRepository"]
     C --> G[("Application database")]
+    SA --> G
     F --> G
     H["Future Calculation Rule Extraction"] --> I["ModelExtractionReadService"]
-    I --> C
+    I --> S
     I --> F
+    B -. "audit / persistence retry only" .-> J["Snapshot access"]
+    J --> F
 ```
 
-**Proposed.** The router remains an HTTP adapter. A new backend service owns lifecycle and transaction orchestration. Repositories own database mapping, not extraction decisions. The current workbook-agent, materializer, and validator remain the domain producers. A read service exposes typed reload methods and enforces “materialized only” readiness.
+**Proposed.** The router remains an HTTP adapter. A new backend service owns lifecycle and transaction orchestration. Repositories own database mapping, not extraction decisions. The current workbook-agent, materializer, and validator remain the domain producers. A storage port isolates workbook bytes from their V1 database adapter. The read service exposes typed canonical methods and enforces “materialized only” readiness; it has no snapshot method. Snapshot access is a private persistence/audit path and is not injected into future Calculation Rule Extraction.
 
 ### 6.2 Entity relationship diagram
 
@@ -300,7 +310,9 @@ erDiagram
         uuid id PK
         char64 sha256 UK
         varchar original_filename
-        blob content_bytes
+        varchar storage_type
+        varchar storage_ref UK
+        blob content_bytes "nullable outside DB adapter"
         bigint file_size
         timestamptz created_at
     }
@@ -319,6 +331,7 @@ erDiagram
     MODEL_PARAMETERS {
         uuid id PK
         uuid model_version_id FK
+        varchar entity_kind
         varchar llm_candidate_alias
         varchar validated_role
         json validated_value_json
@@ -331,6 +344,7 @@ erDiagram
     FINANCIAL_SERIES {
         uuid id PK
         uuid model_version_id FK
+        varchar entity_kind
         varchar llm_series_alias
         varchar label
         varchar calculation_type
@@ -352,11 +366,27 @@ erDiagram
     }
 ```
 
-### 6.3 Why no `extraction_runs` table in V1
+### 6.3 `FinancialEntity` evolution seam
+
+**Proposed.** Do not add a sixth `financial_entities` table in V1 merely to host four common columns. Do not leave parameters and series unrelated either. Use the middle option:
+
+| Option | Trade-off | Decision |
+|---|---|---|
+| Add `financial_entities` supertype now | Strong relational unification, but adds shared-primary-key inheritance, more writes, and lifecycle decisions before a real cross-type consumer exists | Defer |
+| Keep type-specific tables with a common identity/read contract | Preserves simple writes now and lets a future supertype reuse the same IDs and DTO contract | Recommend |
+| Keep fully independent tables and APIs | Lowest immediate effort, but hard-codes table-specific references into future consumers and makes unification a breaking migration | Reject |
+
+V1 therefore requires both canonical tables to carry the same core contract: globally unique backend `id`, `model_version_id`, checked `entity_kind`, human label, and typed provenance. `FinancialEntityRef(id, model_version_id, entity_kind, label)` is a domain DTO/protocol, not a V1 table. `list_financial_entities` and source-cell resolution return a discriminated union built from the two relational tables.
+
+A future rule-oriented module can therefore consume `FinancialEntityRef` without treating `model_parameters` and `financial_series` as unrelated ID domains. If that module requires one database foreign key across both kinds, introduce the shared-primary-key `financial_entities` supertype first. This specification does not define that future rule schema or foreign key.
+
+If real consumers later justify a relational supertype, add `financial_entities(id, model_version_id, entity_kind, label, ...)`, bulk-copy existing IDs and common fields, and turn each existing child PK into a PK/FK to that row. Stable IDs and the `FinancialEntityRef` consumer contract do not change. This is an explicit migration seam, not an implementation of future Calculation Rule Extraction.
+
+### 6.4 Why no `extraction_runs` table in V1
 
 **Proposed.** One `model_versions` row represents exactly one Model Extraction execution and at most one canonical result. A new extraction retry creates a new model version. A persistence-only retry reuses the same model version and its saved extraction snapshot. This preserves attempt history without a second identity layer. Add a separate run table only if a later requirement needs multiple extraction attempts to compete for or replace one logical model version.
 
-### 6.4 Relationship to legacy `financial_models`
+### 6.5 Relationship to legacy `financial_models`
 
 **Observed in code.** Legacy `FinancialModel` owns a file path, response-shaped `parsed_json`, health score, investment relationship, assumptions, scenarios, and document chunks. The active experimental extraction route does not create or use it.
 
@@ -374,12 +404,15 @@ Evidence:
 |---|---|---|
 | Upload router | format/empty checks, HTTP errors, response schema | transactions, ID generation, canonical mapping |
 | `ModelExtractionPersistenceService` | lifecycle, short transaction boundaries, pipeline invocation, snapshot commit, canonical write orchestration | workbook parsing rules, SQL query details |
-| `WorkbookRepository` | insert-or-reuse by SHA-256, byte reload, integrity verification | extraction/model status |
+| `WorkbookVersionRepository` | workbook identity/catalog metadata, SHA dedupe, storage locator persistence | byte I/O, extraction/model status |
+| `WorkbookStorage` port | immutable put/load/verify contract over opaque storage locations | workbook identity, model status, provider-specific policy |
+| `DatabaseWorkbookStorage` adapter | V1 `LargeBinary` persistence through the port and caller-owned transaction | domain orchestration, Azure/S3 behavior |
 | Current workbook-agent | exploration and LLM submission | canonical IDs, database state |
 | Current backend materializer | canonical period/value axes and formula telemetry | storage and transactions |
 | Current backend validator | source/role/value validation outcomes | storage and API serialization |
 | `ModelExtractionRepository` | model version, parameters, series, values, idempotent writes | LLM invocation and workbook interpretation policy |
-| `ModelExtractionReadService` | ready-state enforcement and typed reload/query contract | Calculation Rule Extraction logic |
+| `ModelExtractionReadService` | ready-state enforcement and typed canonical/`FinancialEntity` reload contract | snapshot JSON, Calculation Rule Extraction logic |
+| Private snapshot access | authorized audit reads and persistence-only retry input | any downstream canonical query or Calculation Rule Extraction input |
 
 **Proposed.** Repository methods receive a caller-owned SQLAlchemy session. The service opens/commits/rolls back transaction units. Repository methods use `flush` when IDs or constraints must be observed but never call `commit`. This is stricter than current route-level commit conventions and is required to make the canonical write atomic.
 
@@ -388,6 +421,7 @@ Evidence:
 | Artifact / field | Source of truth | Persistence rule |
 |---|---|---|
 | Workbook bytes, SHA-256, file size | Workbook ingest/backend | Immutable `workbook_versions` |
+| Workbook storage medium/location | `WorkbookStorage` adapter selected by backend configuration | `storage_type` plus opaque `storage_ref`; never interpreted by downstream consumers |
 | First-seen original filename | User upload metadata | Immutable metadata on workbook version |
 | Filename for a particular execution | User upload metadata | `model_versions.upload_filename` |
 | LLM candidate/series ID | LLM | Alias only; never PK/FK |
@@ -398,6 +432,7 @@ Evidence:
 | Series periods, values, source cells, orientation, calculation type, formula pattern | Deterministic materializer | Canonical series/value authority |
 | Coverage and driver metadata | Runtime/driver | Model-version JSON telemetry |
 | Validation summary/results | Deterministic validator/materializer | Filtered model-version audit JSON plus relational status on canonical rows; omit `dependency_evidence` from the durable projection |
+| Extraction snapshot | Model Extraction persistence service | Audit and same-model persistence retry only; never a downstream input or canonical read DTO field |
 | `metadata` candidates | LLM; currently not deterministically validated | Snapshot only in V1 |
 | Validated output candidates that remain output-family | LLM plus validator | Snapshot/validation evidence only in V1; not canonical parameters |
 | Scenario/sensitivity structures | LLM | Snapshot only; explicitly not materialized as series |
@@ -429,7 +464,7 @@ Evidence:
 
 ### 9.1 Actual V1 tables
 
-**Proposed.** V1 creates only the five tables shown in the ERD. It does not create a generic artifact table, polymorphic provenance table, extraction-attempt table, model parent table, output table, metadata table, formula table, dependency table, or audit-event table.
+**Proposed.** V1 creates only the five tables shown in the ERD. It does not create a generic artifact table, polymorphic provenance table, extraction-attempt table, model parent table, `financial_entities` supertype table, output table, metadata table, formula table, dependency table, or audit-event table. The `FinancialEntity` seam is a shared identity/read contract in V1, with a documented no-ID-change path to a future supertype table.
 
 ### 9.2 Backend-generated ID strategy
 
@@ -437,15 +472,15 @@ Evidence:
 
 - `workbook_versions.id`: UUIDv4 when a SHA-256 is first seen; reused thereafter.
 - `model_versions.id`: UUIDv4 for each extraction execution.
-- `model_parameters.id`: UUIDv5 under the model-version namespace from `parameter|source_sheet|source_cell`.
-- `financial_series.id`: UUIDv5 under the model-version namespace from normalized period/value ranges plus scenario/entity/unit/currency context.
+- `model_parameters.id`: UUIDv5 under the model-version namespace from `financial_entity|parameter|source_sheet|source_cell`.
+- `financial_series.id`: UUIDv5 under the model-version namespace from `financial_entity|financial_series|<normalized period/value ranges plus scenario/entity/unit/currency context>`.
 - `financial_series_values.id`: UUIDv5 under the financial-series namespace from `period_index`.
 
-The child UUIDv5 policy makes persistence-only retries generate the same IDs without trusting LLM IDs. UUIDv4 model IDs keep distinct extraction executions distinct even for identical workbook bytes.
+The two entity keys share one model-version-scoped `FinancialEntityIdFactory` and an explicit kind prefix. This makes persistence-only retries generate the same IDs without trusting LLM IDs, prevents cross-type key collisions, and preserves IDs if a common `financial_entities` table is later added. UUIDv4 model IDs keep distinct extraction executions distinct even for identical workbook bytes.
 
 ### 9.3 Canonical JSON boundaries
 
-**Proposed.** JSON is permitted for:
+**Proposed.** JSON is permitted for storage only in these bounded roles:
 
 - the immutable extraction snapshot used for audit and persistence retry;
 - driver, coverage, summary, and detailed validation evidence;
@@ -454,7 +489,7 @@ The child UUIDv5 policy makes persistence-only retries generate the same IDs wit
 
 All JSON uses an explicit JSON-safe scalar codec: UUIDs become strings; dates and datetimes become ISO-8601 strings; numeric, string, boolean, and null values retain their JSON scalar types. This matches the current HTTP serializer and avoids relying on SQLAlchemy's JSON type to serialize Python date objects implicitly.
 
-JSON is not permitted as the only storage for parameters, series, point order, source cells, exact formulas, statuses, or foreign-key relationships. No JSON containment index is required in V1.
+JSON is not permitted as the only storage for parameters, series, point order, source cells, exact formulas, statuses, or foreign-key relationships. `extraction_snapshot_json` and `validation_results_json` are never projected by `ModelExtractionReadService`; only the persistence retry path and an explicitly authorized audit path may read them. A downstream module may not parse them as a fallback when a canonical field is absent. No JSON containment index is required in V1.
 
 ## 10. Field-Level Schema Decisions
 
@@ -467,11 +502,11 @@ Classification values are **Required for V1**, **Optional for V1**, **Derived �
 | `id` | UUID, not null, PK | Required for V1 | Backend UUIDv4; stable workbook identifier returned to consumers |
 | `sha256` | CHAR(64), not null | Required for V1 | Backend digest of exact bytes; content identity and unique key |
 | `original_filename` | VARCHAR(255), not null | Required for V1 | First accepted filename only; immutable metadata, not identity |
-| `content_bytes` | LargeBinary, not null | Required for V1 | Immutable `.xlsx` bytes; BYTEA on PostgreSQL, BLOB on SQLite |
+| `storage_type` | VARCHAR(32), not null | Required for V1 | Adapter discriminator; V1 writes `database`, with future adapters such as `azure_blob` or `s3` added deliberately |
+| `storage_ref` | VARCHAR(512), not null | Required for V1 | Opaque content-addressed key such as `workbooks/sha256/<digest>.xlsx`; consumers must not parse it |
+| `content_bytes` | LargeBinary, nullable | Required for V1 | Populated by `DatabaseWorkbookStorage`; nullable schema seam permits a verified future object-store migration without changing catalog identity |
 | `file_size` | BigInteger, not null | Required for V1 | Backend byte length; integrity and operational guard |
 | `created_at` | timezone-aware DateTime, not null | Required for V1 | Backend UTC first-seen timestamp |
-| `storage_type` | no column in V1 | Derived — do not store | Constant `database` while DB binary is the only implementation |
-| `storage_ref` | no column in V1 | Deferred | Add only if object/file storage migration is approved |
 
 ### 10.2 `model_versions`
 
@@ -484,7 +519,7 @@ Classification values are **Required for V1**, **Optional for V1**, **Derived �
 | `validation_status` | VARCHAR(32), not null | Required for V1 | Aggregate readiness: `not_run`, `validated`, `validated_with_warning`, `review_required`, `rejected` |
 | `submitted` | Boolean, not null | Required for V1 | Backend loop result |
 | `stop_reason` | VARCHAR(100), nullable | Optional for V1 | Backend loop stop reason; expected after pipeline attempt |
-| `extraction_snapshot_json` | JSON, nullable | Required for V1 | Saved after successful pipeline; audit/retry input, explicitly noncanonical |
+| `extraction_snapshot_json` | JSON, nullable | Required for V1 | Saved after successful pipeline; accessible only to audit and persistence retry, never canonical/downstream reads |
 | `driver_meta_json` | JSON, nullable | Required for V1 | Driver API/deployment/token metadata currently returned |
 | `coverage_json` | JSON, nullable | Required for V1 | Backend coverage evidence currently returned |
 | `validation_summary_json` | JSON, nullable | Required for V1 | Candidate validation counts |
@@ -505,6 +540,7 @@ Classification values are **Required for V1**, **Optional for V1**, **Derived �
 |---|---|---|---|
 | `id` | UUID, not null, PK | Required for V1 | Backend deterministic UUIDv5; never LLM ID |
 | `model_version_id` | UUID, not null, FK | Required for V1 | Canonical model owner |
+| `entity_kind` | VARCHAR(32), not null | Required for V1 | Checked constant `parameter`; discriminates the shared `FinancialEntity` contract and future supertype migration |
 | `llm_candidate_alias` | VARCHAR(255), nullable | Optional for V1 | LLM candidate ID retained as trace alias only |
 | `source_bucket` | VARCHAR(64), not null | Required for V1 | Submitted bucket for audit; not canonical role |
 | `label` | Text, not null | Required for V1 | Original submitted label, preserved verbatim |
@@ -541,6 +577,7 @@ Classification values are **Required for V1**, **Optional for V1**, **Derived �
 |---|---|---|---|
 | `id` | UUID, not null, PK | Required for V1 | Backend deterministic UUIDv5 from canonical source/context |
 | `model_version_id` | UUID, not null, FK | Required for V1 | Canonical model owner |
+| `entity_kind` | VARCHAR(32), not null | Required for V1 | Checked constant `financial_series`; discriminates the shared `FinancialEntity` contract and future supertype migration |
 | `llm_series_alias` | VARCHAR(255), nullable | Optional for V1 | LLM series ID retained only as alias |
 | `label` | Text, not null | Required for V1 | Submitted label retained on accepted canonical series |
 | `category` | VARCHAR(100), nullable | Optional for V1 | LLM semantic metadata |
@@ -605,15 +642,19 @@ Classification values are **Required for V1**, **Optional for V1**, **Derived �
 |---|---|---|
 | `workbook_versions` | PK `id` | Backend-generated stable workbook ID |
 | `workbook_versions` | UNIQUE `sha256` | Identical bytes converge on one workbook version |
+| `workbook_versions` | UNIQUE `(storage_type, storage_ref)` | One opaque location identifies at most one workbook artifact within an adapter |
 | `workbook_versions` | CHECK `length(sha256) = 64` and `file_size > 0` | Reject malformed digest/empty persisted workbook; empty uploads are already rejected at HTTP boundary |
+| `workbook_versions` | CHECK `storage_type <> 'database' OR content_bytes IS NOT NULL` | Database adapter rows must contain bytes; future object-store rows may keep the column null after verified migration |
 | `model_versions` | PK `id` | One ID per extraction execution |
 | `model_versions` | FK `workbook_version_id -> workbook_versions.id ON DELETE RESTRICT` | A source workbook cannot be deleted while any model version refers to it |
 | `model_versions` | CHECK lifecycle/validation status values | Portable string checks are preferable to dialect-specific enums |
 | `model_parameters` | PK `id` | Backend deterministic ID |
 | `model_parameters` | FK `model_version_id -> model_versions.id ON DELETE CASCADE` | Deleting an explicitly deleted model version deletes its canonical children, not its workbook |
+| `model_parameters` | CHECK `entity_kind = 'parameter'` | Enforces its branch of the shared `FinancialEntity` contract |
 | `model_parameters` | UNIQUE `(model_version_id, source_sheet, source_cell)` | At most one canonical parameter-family entity per source cell in a model version |
 | `financial_series` | PK `id` | Backend deterministic ID; retry uses the same source/context key |
 | `financial_series` | FK `model_version_id -> model_versions.id ON DELETE CASCADE` | Canonical child lifecycle |
+| `financial_series` | CHECK `entity_kind = 'financial_series'` | Enforces its branch of the shared `FinancialEntity` contract |
 | `financial_series` | CHECK `semantic_role = 'financial_series'` | Prevent semantic drift |
 | `financial_series_values` | PK `id` | Backend deterministic point ID |
 | `financial_series_values` | FK `financial_series_id -> financial_series.id ON DELETE CASCADE` | Series deletion removes all aligned points |
@@ -628,6 +669,7 @@ Classification values are **Required for V1**, **Optional for V1**, **Derived �
 | Index | Purpose |
 |---|---|
 | UNIQUE `workbook_versions(sha256)` | Content-addressed ingest and concurrency arbitration |
+| UNIQUE `workbook_versions(storage_type, storage_ref)` | Adapter-local storage locator integrity |
 | `model_versions(workbook_version_id, created_at)` | List executions for identical bytes |
 | `model_versions(status, created_at)` | Operational stale/failure queries |
 | `model_parameters(model_version_id, source_sheet, source_cell)` UNIQUE | Parameter source-cell resolution |
@@ -642,20 +684,20 @@ No V1 index targets JSON. Current and future canonical lookup requirements are s
 
 ### 11.3 Cell-level provenance decision
 
-**Proposed.** Use indexed source columns plus one repository-side two-query lookup. Do not create a fifth provenance/binding table or a database view in V1.
+**Proposed.** Use indexed source columns plus one repository-side two-query lookup. Do not create a sixth provenance/binding table or a database view in V1.
 
 For `resolve_entity_by_source_cell(model_version_id, sheet_name, cell_address)`:
 
 1. normalize only the A1 address to uppercase; require the exact workbook sheet title;
 2. query `model_parameters` by its unique model/sheet/cell key;
 3. query `financial_series_values` by value sheet/cell joined to `financial_series.model_version_id`;
-4. return a tagged parameter or series-value result when exactly one row exists;
+4. return a tagged result containing a common `FinancialEntityRef`; a series-value result also carries its point ID and period index;
 5. return `None` when neither exists;
 6. raise `AmbiguousSourceCellError` when both exist, rather than guessing.
 
 Period cells remain queryable through their own indexed provenance fields but do not resolve as a canonical value entity. This avoids conflating a period header with the aligned financial-series value.
 
-**Inferred.** A dedicated provenance table would make cross-entity uniqueness enforceable but would add polymorphic ownership, extra writes, and another source of truth before the repository has demonstrated a real collision. A view would still require dialect-specific deployment and would not enforce uniqueness. Indexed fields plus ambiguity detection are therefore the smallest reliable V1 choice.
+**Inferred.** A dedicated provenance table would make cross-entity uniqueness enforceable but would add polymorphic ownership, extra writes, and another source of truth before the repository has demonstrated a real collision. A view would still require dialect-specific deployment and would not enforce uniqueness. Indexed fields plus ambiguity detection and the shared `FinancialEntityRef` are therefore the smallest reliable V1 choice.
 
 ## 12. Workbook Storage Design
 
@@ -671,11 +713,39 @@ Period cells remain queryable through their own indexed provenance fields but do
 | New dependencies | None beyond SQLAlchemy | Persistent-volume deployment and file locking | Azure Storage SDK, configuration, identity/RBAC, network failure handling |
 | File-size scaling | Suitable for bounded workbook sizes; large blobs increase DB backup/WAL cost | Good for large files | Best for large files and high volume |
 | Content dedupe | UNIQUE SHA plus one row | Content-addressed path plus DB uniqueness | Content-addressed blob key plus DB uniqueness |
-| Future migration | Copy bytes to object store and add storage reference | Move files to object store/database | Already final production medium |
+| Future migration | Copy bytes through a new adapter and switch the existing storage discriminator/reference | Move files to object store/database | Already the likely high-scale production medium, but still requires application wiring |
 
-### 12.2 V1 recommendation
+### 12.2 Required storage port
 
-**Proposed.** Choose Option A: database binary storage. Use SQLAlchemy `LargeBinary`; it maps to PostgreSQL BYTEA and SQLite BLOB. Store no `storage_type` or `storage_ref` column in V1 because there is one implementation. Add a configurable pre-LLM maximum upload size; the design recommendation is **25 MiB** until measured workbook distributions justify a different value.
+**Proposed.** All workbook byte I/O goes through a backend-owned port. Domain/application services depend on this contract, not on SQLAlchemy columns, filesystem paths, Azure SDK types, bucket/container names, or provider URIs:
+
+```text
+WorkbookStorageLocation(storage_type: str, storage_ref: str)
+
+WorkbookStorage.location_for(storage_key: str) -> WorkbookStorageLocation
+
+WorkbookStorage.store_if_absent(
+    location: WorkbookStorageLocation,
+    content_bytes: bytes,
+    expected_sha256: str,
+) -> None
+
+WorkbookStorage.load(location: WorkbookStorageLocation) -> bytes
+
+WorkbookStorage.verify(
+    location: WorkbookStorageLocation,
+    expected_sha256: str,
+    expected_size: int,
+) -> None
+```
+
+`storage_ref` is an opaque content-addressed key and contains no credentials. Only the configured adapter interprets it. `location_for` makes provider selection/configuration an adapter concern. `store_if_absent` must be immutable and idempotent for the same location/content; conflicting content at an existing location raises `WorkbookIntegrityError`. Delete is deliberately absent from the V1 port because retention/deletion policy is out of scope.
+
+`WorkbookVersionRepository` owns workbook identity, SHA dedupe, filenames, timestamps, and the persisted storage location. It does not expose or read `content_bytes`. `DatabaseWorkbookStorage` is the only V1 adapter and may share the repository's caller-owned unit of work internally, but the port exposes no SQLAlchemy `Session`. Future `AzureBlobWorkbookStorage` or `S3WorkbookStorage` adapters implement the same contract without changing persistence orchestration or read-service consumers.
+
+### 12.3 V1 adapter recommendation
+
+**Proposed.** Choose Option A as the V1 adapter: `DatabaseWorkbookStorage` stores bytes in `workbook_versions.content_bytes` using SQLAlchemy `LargeBinary`, which maps to PostgreSQL BYTEA and SQLite BLOB. The catalog still records `storage_type='database'` and a content-addressed `storage_ref`. Add a configurable pre-LLM maximum upload size; the design recommendation is **25 MiB** until measured workbook distributions justify a different value.
 
 Rationale:
 
@@ -686,7 +756,7 @@ Rationale:
 - production filesystem durability is not configured;
 - Blob infrastructure is provisioned but not wired into the API, so selecting it now expands deployment, credentials, SDK, and failure scope.
 
-### 12.3 Identity, deduplication, and filenames
+### 12.4 Identity, deduplication, and filenames
 
 **Proposed.** `sha256` is the workbook content identity. `workbook_version_id` is the stable opaque backend ID for that content. Identical bytes reuse both values. Filename is metadata only:
 
@@ -696,22 +766,24 @@ Rationale:
 
 This avoids a filename-alias table while retaining per-execution audit context.
 
-### 12.4 Insert concurrency and integrity
+### 12.5 Insert concurrency and integrity
 
-**Proposed.** `WorkbookRepository.get_or_create` computes digest and size before the transaction, selects by digest, and attempts an insert within a savepoint. If the unique constraint loses a concurrent race, it reloads the winner. On every reuse and reload it verifies stored byte length and recomputed SHA-256. A size or digest mismatch raises `WorkbookIntegrityError`; it never overwrites the existing immutable row.
+**Proposed.** The ingest service computes digest, size, and `storage_key = workbooks/sha256/<digest>.xlsx`, then obtains an opaque location from `WorkbookStorage.location_for`. `WorkbookVersionRepository` and the storage adapter coordinate insert-or-reuse inside the caller-owned T1 unit of work: the repository owns catalog fields; only `DatabaseWorkbookStorage` supplies/reads `content_bytes` before the new row is flushed. If the SHA unique constraint loses a concurrent race, the service reloads the winner and calls `WorkbookStorage.verify`. A size or digest mismatch raises `WorkbookIntegrityError`; neither adapter nor repository overwrites the existing immutable content.
 
-`load_workbook_version` returns a fresh immutable byte value after verifying:
+`load_workbook_version` resolves the catalog location, calls `WorkbookStorage.load`, and returns a fresh immutable byte value after `WorkbookStorage.verify` establishes:
 
 ```text
-len(content_bytes) == file_size
-sha256(content_bytes) == sha256 column
+len(loaded_bytes) == file_size
+sha256(loaded_bytes) == sha256 column
 ```
 
-The database backup therefore contains both the artifact and the checksum needed to detect corruption.
+With the V1 database adapter, the database backup contains both the artifact and the checksum needed to detect corruption.
 
-### 12.5 Future object-store migration
+### 12.6 Future object-store migration
 
-**Proposed.** If measured workbook volume makes database blobs unsuitable, add `storage_type`, `storage_ref`, and a check that exactly one of DB bytes/object reference is active; copy each blob under a content-addressed key such as `workbooks/sha256/<digest>.xlsx`; verify digest after upload; then null DB bytes only after reference verification. That migration is intentionally deferred and does not change V1 interfaces.
+**Proposed.** If measured workbook volume makes database blobs unsuitable, implement an Azure Blob or S3 adapter behind `WorkbookStorage`; copy each BLOB to its existing content-addressed `storage_ref`; verify digest and size through the new adapter; update `storage_type`; then null DB bytes only after reference verification. During migration, dual presence is allowed so verification can complete before cutover. The model/version/read-service interfaces and all stable IDs remain unchanged. Provider credentials, container/bucket names, retries, and orphan cleanup stay adapter/deployment concerns.
+
+For a future nontransactional object adapter, `store_if_absent` must finish before the catalog commit; an adapter-specific coordinator may perform that idempotent put before opening the database transaction to avoid holding a connection during network I/O. A later catalog failure may leave an unreferenced content-addressed object, which can be safely detected and cleaned later; no distributed transaction is introduced. This compensation path is documented now but not implemented in V1.
 
 ## 13. Model Version Lifecycle
 
@@ -758,7 +830,7 @@ Aggregate validation mapping:
 ```mermaid
 flowchart TD
     A["1. Receive and validate .xlsx bytes"] --> B["2. Compute SHA-256 and prepare WorkbookToolset"]
-    B --> C["T1: insert/reuse workbook; create model_version=extracting; commit"]
+    B --> C["T1: WorkbookStorage put/verify; insert/reuse catalog; create model_version=extracting; commit"]
     C --> D["3. Run current synchronous agent, materializer, validator outside DB transaction"]
     D -->|exception or submitted=false| E["T-fail: save failure telemetry; mark extraction_failed; commit"]
     D -->|submitted=true| F["T2: save extraction/validation snapshot; status=extracted; commit"]
@@ -783,16 +855,18 @@ Evidence:
 
 **Proposed.** In one short transaction:
 
-1. insert or reuse `workbook_versions` by SHA-256;
-2. generate a new `model_version_id`;
-3. insert `model_versions(status='extracting', validation_status='not_run', submitted=false)`;
-4. commit.
+1. derive the opaque content-addressed storage key and call `WorkbookStorage.location_for`;
+2. insert or reuse the `workbook_versions` catalog row by SHA-256 and persist its storage location;
+3. call `WorkbookStorage.store_if_absent`/`verify` before the new catalog row is flushed or committed;
+4. generate a new `model_version_id`;
+5. insert `model_versions(status='extracting', validation_status='not_run', submitted=false)`;
+6. commit.
 
-This occurs before the LLM request so an extraction failure has a stable model ID and exact source. No database transaction remains open during model calls.
+This occurs before the LLM request so an extraction failure has a stable model ID and exact source. `DatabaseWorkbookStorage` participates in this transaction through its adapter-specific unit of work, preserving V1 atomicity without leaking SQLAlchemy into the port. No database transaction remains open during model calls.
 
 ### 14.4 Pipeline execution
 
-**Proposed.** Run the existing exploration, coverage gate, financial-series materializer, and validator synchronously. Preserve current behavior and response contents. If the pipeline returns `submitted=false`, commit coverage/driver/stop/error evidence with `status='extraction_failed'` and do not enter canonical persistence. If it returns `submitted=true`, capture a deep, JSON-safe extraction snapshot; it includes the mutated canonical `financial_series`, preserved `financial_series_descriptors`, candidate buckets, and output/metadata candidates. Store filtered validation results in their separate model-version field. The snapshot is retry/audit input, not the canonical query API.
+**Proposed.** Run the existing exploration, coverage gate, financial-series materializer, and validator synchronously. Preserve current behavior and response contents. If the pipeline returns `submitted=false`, commit coverage/driver/stop/error evidence with `status='extraction_failed'` and do not enter canonical persistence. If it returns `submitted=true`, capture a deep, JSON-safe extraction snapshot; it includes the mutated canonical `financial_series`, preserved `financial_series_descriptors`, candidate buckets, and output/metadata candidates. Store filtered validation results in their separate model-version field. The snapshot is retry/audit input only: canonicalization may consume it within T3/retry, but no downstream service may query or parse it.
 
 ### 14.5 Transaction T2 — durable snapshot
 
@@ -802,11 +876,11 @@ If T2 itself fails, retry T2 within the request while the in-memory result exist
 
 ### 14.6 Transaction T3 — canonical relational write
 
-**Proposed.** Reload and integrity-check workbook bytes, then build parameter and series/value rows outside the transaction or before the first flush. In one transaction:
+**Proposed.** Resolve workbook storage location through `WorkbookVersionRepository`, reload and integrity-check bytes through `WorkbookStorage`, then build parameter and series/value rows outside the transaction or before the first flush. In one transaction:
 
 1. lock/read the model version and require `status in {'extracted', 'persistence_failed'}`;
-2. insert deterministic-ID `model_parameters`;
-3. insert deterministic-ID `financial_series`;
+2. insert deterministic-ID `model_parameters` with `entity_kind='parameter'`;
+3. insert deterministic-ID `financial_series` with `entity_kind='financial_series'`;
 4. insert all `financial_series_values`;
 5. verify expected inserted counts and source conflicts;
 6. set `status='materialized'`, validation status, and `completed_at`;
@@ -826,13 +900,16 @@ Any exception rolls back all child rows and the status update. A new short trans
 
 ### 15.1 Ownership
 
-**Proposed.** `ModelExtractionReadService` is an internal backend service used by future Calculation Rule Extraction. It returns typed domain DTOs, not SQLAlchemy entities and not the original API response JSON. V1 does not add a public reload HTTP endpoint.
+**Proposed.** `ModelExtractionReadService` is the only upstream interface exposed to future Calculation Rule Extraction. It returns typed domain DTOs assembled solely from canonical relational tables, not SQLAlchemy entities, the original API response JSON, `extraction_snapshot_json`, or `validation_results_json`. V1 does not add a public reload HTTP endpoint.
+
+The persistence service may use a private `load_extraction_snapshot_for_retry(model_version_id)` repository method only while recovering `extracted`/`persistence_failed` states. An authorized audit path may read the raw snapshot separately. Neither method is part of `ModelExtractionReadService`, and neither may be injected into downstream modules.
 
 ### 15.2 Interfaces
 
 ```text
 load_workbook_version(workbook_version_id: UUID) -> WorkbookVersionData
 load_model_version(model_version_id: UUID, require_materialized: bool = True) -> ModelVersionData
+list_financial_entities(model_version_id: UUID) -> list[FinancialEntity]
 list_parameters(model_version_id: UUID) -> list[CanonicalParameter]
 list_financial_series(model_version_id: UUID) -> list[CanonicalFinancialSeries]
 list_financial_series_values(model_version_id: UUID, financial_series_id: UUID | None = None)
@@ -844,13 +921,32 @@ resolve_entity_by_source_cell(
 ) -> SourceResolvedEntity | None
 ```
 
-`WorkbookVersionData` contains ID, SHA-256, first-seen filename, file size, created timestamp, and verified bytes. `ModelVersionData` contains both IDs, lifecycle/validation status, upload filename, submitted/stop metadata, summaries, timestamps, and optional audit evidence. Canonical series values are returned ordered by `(financial_series_id, period_index)`.
+`WorkbookVersionData` contains ID, SHA-256, first-seen filename, file size, created timestamp, and bytes loaded/verified through `WorkbookStorage`; it does not expose `storage_ref`. `ModelVersionData` contains both IDs, lifecycle/validation status, upload filename, submitted/stop metadata, and timestamps. It contains no extraction snapshot, driver/coverage/summary JSON, or detailed validation JSON. Canonical series values are returned ordered by `(financial_series_id, period_index)`.
+
+`FinancialEntity` is a discriminated union with the common reference contract:
+
+```text
+FinancialEntityRef(
+    id: UUID,
+    model_version_id: UUID,
+    entity_kind: Literal["parameter", "financial_series"],
+    label: str,
+)
+
+FinancialEntity = CanonicalParameter | CanonicalFinancialSeries
+```
+
+Type-specific DTOs retain their relational fields. Consumers can reference the common ID/kind without losing type-safe parameter or series detail. No DTO field contains a table name or snapshot location.
 
 `SourceResolvedEntity` is a tagged union:
 
 ```text
-ParameterResolution(entity_type="parameter", parameter=...)
-FinancialSeriesValueResolution(entity_type="financial_series_value", series=..., value=...)
+ParameterResolution(entity=FinancialEntityRef(entity_kind="parameter", ...), parameter=...)
+FinancialSeriesValueResolution(
+    entity=FinancialEntityRef(entity_kind="financial_series", ...),
+    series=...,
+    value=...,
+)
 ```
 
 ### 15.3 Failure behavior
@@ -869,7 +965,7 @@ FinancialSeriesValueResolution(entity_type="financial_series_value", series=...,
 
 ### 15.4 Required upstream check
 
-**Proposed.** A future caller given both IDs must first call `load_model_version`, verify its `workbook_version_id` equals the supplied workbook ID, and then load the workbook. This prevents a caller from accidentally combining a canonical model with different bytes.
+**Proposed.** A future caller given both IDs must first call `load_model_version`, verify its `workbook_version_id` equals the supplied workbook ID, and then load the workbook. It must obtain parameters, series, and values only through canonical read methods. Reading `extraction_snapshot_json` directly or using it to fill a missing canonical field is a contract violation. This prevents both source mismatch and accidental dependence on transient LLM schema.
 
 ## 16. Idempotency and Retry Behaviour
 
@@ -953,7 +1049,8 @@ Evidence:
 Use portable SQLAlchemy types:
 
 - `Uuid(as_uuid=False)` for backend-generated IDs, native UUID on PostgreSQL and portable storage on SQLite;
-- `LargeBinary` for workbook bytes;
+- `LargeBinary` for the V1 database storage adapter, isolated behind `WorkbookStorage`;
+- `String` storage discriminator/reference columns so the catalog is not bound to BLOB access;
 - generic `JSON` for cross-dialect snapshots/scalars, with no JSON-specific indexes;
 - `DateTime(timezone=True)` for UTC timestamps;
 - `String` plus named `CheckConstraint` for statuses rather than PostgreSQL enum types.
@@ -964,13 +1061,15 @@ Run the same migration in SQLite migration tests and PostgreSQL integration test
 
 1. Add migration tooling/baseline and the additive five-table migration.
 2. Add focused ORM models in `apps/api/app/model_extraction_models.py` and ensure metadata imports them before startup/test schema creation.
-3. Add `WorkbookRepository` with SHA uniqueness, byte integrity, and reload tests.
-4. Add `ModelExtractionRepository` and internal DTO mapping for model, parameter, series, and point writes/reads.
-5. Add `ModelExtractionPersistenceService` and explicit T1/T2/T3 transaction tests.
-6. Add `ModelExtractionReadService` and source-cell lookup.
-7. Integrate the service at the active upload adapter, retaining current pipeline behavior.
-8. Add the two response IDs and update exact API contract tests.
-9. Run SQLite and PostgreSQL integration suites plus all existing workbook-agent/upload regressions.
+3. Define `WorkbookStorage` and `WorkbookStorageLocation` without provider or ORM types; add shared adapter contract tests.
+4. Add `DatabaseWorkbookStorage` plus `WorkbookVersionRepository` with SHA uniqueness, opaque storage location, byte integrity, and reload tests.
+5. Add the common `FinancialEntityRef`/discriminated DTO contract and `FinancialEntityIdFactory` before the type-specific repositories.
+6. Add `ModelExtractionRepository` and internal DTO mapping for model, parameter, series, and point writes/reads; keep snapshot reads private to audit/retry.
+7. Add `ModelExtractionPersistenceService` and explicit T1/T2/T3 transaction tests.
+8. Add canonical-only `ModelExtractionReadService`, `list_financial_entities`, and source-cell lookup.
+9. Integrate the service at the active upload adapter, retaining current pipeline behavior.
+10. Add the two response IDs and update exact API contract tests.
+11. Run SQLite and PostgreSQL integration suites plus all existing workbook-agent/upload regressions.
 
 ### 18.4 No legacy data migration
 
@@ -1004,6 +1103,8 @@ Test names follow the repository's current flat `tests/test_*.py` convention. Po
 - `test_migration_creates_model_extraction_tables_on_sqlite`
 - `test_migration_creates_model_extraction_tables_on_postgres`
 - `test_workbook_sha256_is_unique`
+- `test_workbook_storage_location_is_unique_per_adapter`
+- `test_database_storage_requires_content_bytes`
 - `test_model_version_requires_existing_workbook_version`
 - `test_model_parameter_requires_existing_model_version`
 - `test_financial_series_value_requires_existing_series`
@@ -1012,9 +1113,14 @@ Test names follow the repository's current flat `tests/test_*.py` convention. Po
 - `test_deleting_model_version_cascades_canonical_children_but_not_workbook`
 - `test_deleting_referenced_workbook_version_is_restricted`
 - `test_status_check_constraints_reject_unknown_values`
+- `test_parameter_entity_kind_is_checked`
+- `test_financial_series_entity_kind_is_checked`
 
-### 20.2 Workbook repository tests — `tests/test_workbook_version_repository.py`
+### 20.2 Workbook storage and repository tests — `tests/test_workbook_storage.py`, `tests/test_workbook_version_repository.py`
 
+- `test_workbook_storage_contract_is_provider_agnostic`
+- `test_database_adapter_round_trips_bytes_through_storage_port`
+- `test_storage_ref_is_opaque_to_repository_and_read_service`
 - `test_create_workbook_version_persists_exact_bytes_and_sha256`
 - `test_identical_bytes_reuse_workbook_version_id`
 - `test_identical_bytes_with_different_filename_preserve_first_filename`
@@ -1023,6 +1129,7 @@ Test names follow the repository's current flat `tests/test_*.py` convention. Po
 - `test_load_workbook_version_rejects_size_mismatch`
 - `test_load_workbook_version_rejects_sha256_mismatch`
 - `test_oversize_workbook_is_rejected_before_llm_and_database_write`
+- `test_storage_adapter_conflicting_content_at_same_key_raises_integrity_error`
 
 ### 20.3 Canonical persistence tests — `tests/test_model_extraction_persistence.py`
 
@@ -1039,6 +1146,7 @@ Test names follow the repository's current flat `tests/test_*.py` convention. Po
 - `test_partial_canonical_write_rolls_back_parameters_series_and_values`
 - `test_persistence_failure_marks_model_version_without_false_materialized_state`
 - `test_backend_generated_ids_ignore_llm_candidate_and_series_ids`
+- `test_parameter_and_series_use_shared_financial_entity_id_factory`
 - `test_persistence_retry_reuses_deterministic_child_ids_without_llm_rerun`
 
 ### 20.4 Lifecycle/idempotency tests — `tests/test_model_extraction_lifecycle.py`
@@ -1056,6 +1164,8 @@ Test names follow the repository's current flat `tests/test_*.py` convention. Po
 
 - `test_reload_model_after_new_session_returns_same_parameters`
 - `test_reload_model_after_new_session_returns_same_series_and_values`
+- `test_list_financial_entities_returns_discriminated_parameter_and_series_dtos`
+- `test_financial_entity_ids_remain_stable_across_type_specific_reload`
 - `test_list_financial_series_values_orders_by_series_and_period_index`
 - `test_reload_rejects_model_and_workbook_id_mismatch`
 - `test_nonmaterialized_model_is_not_reloadable_as_canonical`
@@ -1064,6 +1174,8 @@ Test names follow the repository's current flat `tests/test_*.py` convention. Po
 - `test_resolve_entity_by_source_cell_returns_none_for_unmapped_cell`
 - `test_resolve_entity_by_source_cell_rejects_invalid_a1_address`
 - `test_resolve_entity_by_source_cell_raises_on_cross_type_collision`
+- `test_model_read_dtos_do_not_expose_snapshot_telemetry_summary_or_validation_json`
+- `test_canonical_read_service_never_falls_back_to_snapshot_json`
 
 ### 20.6 API and regression tests
 
@@ -1093,15 +1205,19 @@ Implementation is not complete until:
 3. the current focused workbook-agent/upload suite still passes;
 4. a restart simulation closes all sessions, creates a new repository/service, reloads bytes and canonical rows, and verifies source/formula metadata;
 5. a forced mid-write exception proves all canonical children roll back;
-6. no test uses the HTTP response JSON as the canonical reload source.
+6. no test uses the HTTP response JSON as the canonical reload source;
+7. a storage contract suite passes through `DatabaseWorkbookStorage` without application services reading `content_bytes` directly;
+8. canonical read DTOs expose the shared `FinancialEntity` contract but no snapshot/audit fields;
+9. deleting or corrupting a canonical row causes an explicit read failure rather than reconstruction from snapshot JSON.
 
 ## 21. Deferred Items
 
 **Deferred.** The following are not required for the first persistence implementation:
 
-- object-store/file-system storage adapters and storage reference columns;
+- object-store/file-system storage adapter implementations; the port and storage reference columns are V1 requirements;
 - public reload/list HTTP endpoints;
 - model parent/entity separate from model version;
+- relational `financial_entities` supertype table; the compatible identity/read seam is V1, the table is deferred until justified by a cross-type consumer;
 - multiple extraction attempts beneath one model version;
 - authenticated ownership/tenant columns and retention/deletion APIs;
 - candidate/output/metadata relational tables beyond canonical parameters;
@@ -1119,9 +1235,12 @@ Implementation is not complete until:
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Database blobs increase backup/WAL size | Operational cost and slower backup | 25 MiB V1 cap, monitor total bytes, content dedupe, documented object-store migration path |
+| V1 BLOB details leak into orchestration | Azure Blob/S3 migration requires service rewrite | Require `WorkbookStorage` port, opaque location DTO, adapter contract tests, and no direct `content_bytes` access outside database adapter |
 | SQLite/PostgreSQL behavior diverges | Local tests pass while production fails | Portable types/checks, named constraints, run integration tests on both dialects |
 | Existing `create_all`/raw SQL drift continues | Production schema version unclear | Introduce Alembic baseline; do not treat `create_all` as production migration |
 | LLM schema evolves | Snapshot shape changes | Treat snapshot as versioned audit/retry artifact; canonical rows and repositories are consumer contract |
+| Downstream code treats snapshot as canonical fallback | Calculation Rule Extraction silently couples to transient LLM schema | Exclude snapshot fields/methods from `ModelExtractionReadService`, enforce canonical-only DTO tests, and fail on missing canonical rows |
+| Parameters and series evolve as unrelated models | Future formula-reference consumers need breaking table-specific contracts | Shared entity ID factory, checked `entity_kind`, `FinancialEntityRef`, and no-ID-change supertype migration path |
 | Candidate buckets duplicate/conflict | Duplicate or incorrect parameters | Unique source-cell constraint, deterministic canonicalization, conflict failure instead of guessing |
 | Cross-table source-cell collision | Ambiguous future formula reference | Two-query lookup detects and raises; add provenance table only if real collision semantics emerge |
 | Exact formula lost for parameters | Future rule extraction cannot audit | Re-read durable workbook source during canonicalization and store `exact_formula`/status |
@@ -1134,42 +1253,50 @@ Implementation is not complete until:
 
 ## 23. Open Decisions
 
-The design has explicit recommendations, but the following require human approval before implementation:
+**Approved on 2026-07-15.** Review approved the V1 direction—database workbook storage, Alembic, materialized-with-review behavior, the two committed response IDs, and retained audit/retry snapshots—subject to three binding conditions now incorporated throughout this specification:
 
-1. **Database binary storage and 25 MiB cap.** Recommendation: approve for V1 because it is the only currently wired durable medium and keeps source/canonical backup atomic. Revisit from measured workbook sizes and database growth, not speculation.
-2. **Alembic introduction.** Recommendation: approve an additive baseline and one new-schema migration; do not rely on startup `create_all` for production changes.
-3. **Materialized-with-review eligibility.** Recommendation: persist and reload internally with visible `review_required`; let the future Calculation Rule Extraction task require a stricter validation status if its design needs it.
-4. **Two response IDs.** Recommendation: intentionally extend the synchronous response with `workbook_version_id` and `model_version_id` only after commit; add no public reload endpoint in V1.
-5. **Detailed extraction snapshot retention.** Recommendation: retain `extraction_snapshot_json` and `validation_results_json` with the model version for audit and persistence-only retry. Define retention together with future model-version deletion policy; no deletion policy is introduced here.
+1. parameter and series persistence must preserve a common `FinancialEntity` evolution seam;
+2. workbook bytes must be accessed through `WorkbookStorage`, with database BLOB as an adapter rather than a hard-coded service dependency;
+3. snapshots are audit/retry-only and forbidden as downstream input, including for Calculation Rule Extraction.
+
+The remaining operational decisions are not architecture blockers for implementation planning:
+
+1. **Snapshot retention duration and deletion authorization.** No automatic deletion is introduced in V1; operations/security owners must define retention before a delete workflow is designed.
+2. **Object-store migration trigger.** Measure workbook size distribution, database growth, WAL, and backup duration before choosing a threshold or Azure Blob/S3 provider.
+3. **Future supertype trigger.** Add a relational `financial_entities` table only when a real cross-type reference/query requires it; the stable IDs and DTO contract are already fixed.
 
 None of these decisions requires designing Calculation Rule Extraction itself.
 
 ## 24. Implementation Readiness Checklist
 
-- [ ] Reviewers approve DB binary workbook storage and the initial file-size cap.
-- [ ] Reviewers approve new `model_versions` ownership rather than legacy `financial_models` reuse.
-- [ ] Reviewers approve one model version per extraction execution and no separate run table.
-- [ ] Reviewers approve five-table scope with no provenance/formula-rule tables.
-- [ ] Reviewers approve deterministic backend child IDs and LLM alias-only treatment.
-- [ ] Reviewers approve candidate eligibility and same-cell conflict behavior.
-- [ ] Reviewers approve accepted-series-only relational rows with rejected evidence in JSON.
-- [ ] Reviewers approve T1/T2/T3 short transaction boundaries and snapshot-before-canonical retry design.
-- [ ] Reviewers approve internal read-service interfaces and no public reload endpoint.
-- [ ] Reviewers approve Alembic as the forward migration authority.
+- [x] Reviewers approve DB binary workbook storage and the initial file-size cap, behind `WorkbookStorage`.
+- [x] Reviewers approve new `model_versions` ownership rather than legacy `financial_models` reuse.
+- [x] Reviewers approve one model version per extraction execution and no separate run table.
+- [x] Reviewers approve five-table scope with no provenance/formula-rule tables.
+- [x] Reviewers require and approve a common `FinancialEntity` identity/read seam while retaining focused V1 tables.
+- [x] Reviewers approve deterministic backend child IDs and LLM alias-only treatment.
+- [x] Reviewers approve candidate eligibility and same-cell conflict behavior.
+- [x] Reviewers approve accepted-series-only relational rows with rejected evidence in JSON.
+- [x] Reviewers approve T1/T2/T3 short transaction boundaries and snapshot-before-canonical retry design.
+- [x] Reviewers require canonical-only downstream reads and prohibit snapshot consumption by Calculation Rule Extraction.
+- [x] Reviewers approve internal read-service interfaces and no public reload endpoint.
+- [x] Reviewers approve Alembic as the forward migration authority.
 - [ ] SQLite and PostgreSQL migration/test environments are available to the implementer.
-- [ ] API owners approve the two additive response fields and commit-before-return rule.
+- [x] Design review approves the two additive response fields and commit-before-return rule.
 - [ ] No Calculation Rule Extraction, frontend, vector, legacy, async, or engine work is bundled into implementation.
 
 ### Recommended First Implementation Task
 
-**Proposed.** Implement only the complete approved schema foundation:
+**Proposed.** Implement the approved schema and abstraction foundation only:
 
 1. bootstrap Alembic against the existing schema without altering legacy tables;
-2. add ORM models and one additive migration for all five approved tables;
-3. add SQLite and PostgreSQL tests for SHA uniqueness, all foreign keys, source/period uniqueness, status constraints, LargeBinary round-trip, and cascade/restriction behavior;
-4. do not add repositories/services, integrate the upload endpoint, call the LLM, or change the response in this first task.
+2. add ORM models and one additive migration for all five approved tables, including storage locator fields and both checked `entity_kind` fields;
+3. define `WorkbookStorage`, `WorkbookStorageLocation`, `FinancialEntityRef`, and `FinancialEntityIdFactory` without provider or Calculation Rule concepts;
+4. implement only `DatabaseWorkbookStorage`, the minimal `WorkbookVersionRepository` catalog coordination it requires, and cross-dialect contract tests, proving that callers can put/load/verify immutable bytes without direct BLOB access;
+5. add SQLite and PostgreSQL tests for SHA/storage-location uniqueness, all foreign keys, source/period uniqueness, entity/status constraints, LargeBinary round-trip, and cascade/restriction behavior;
+6. do not add extraction repositories/services, integrate the upload endpoint, call the LLM, expose snapshot reads, or change the response in this first task.
 
-This is the smallest independently reviewable task: it proves the complete approved schema, migration safety, cross-dialect types, immutable workbook storage, and relational constraints before write orchestration begins.
+This is the smallest independently reviewable task that proves both the complete approved schema and the two critical evolution seams before write orchestration begins.
 
 ## 25. Repository Evidence Appendix
 
@@ -1216,16 +1343,19 @@ This is the smallest independently reviewable task: it proves the complete appro
 
 | Decision | Recommendation | Rationale | Confidence | Evidence |
 |---|---|---|---:|---|
-| Workbook storage medium | Database `LargeBinary` in `workbook_versions` for V1 | Only currently wired durable medium across SQLite/PostgreSQL; atomic backup and no new service | 0.88 | `apps/api/app/database.py:DATABASE_URL`; `docker-compose.yml:services.api.volumes`; `infra/deploy.sh:Deploying Backend API Container App`; `apps/api/requirements.txt` |
+| Workbook storage medium | `DatabaseWorkbookStorage` using `LargeBinary` for V1, behind `WorkbookStorage` | Database is the only currently wired durable medium across SQLite/PostgreSQL, while the port and opaque locator prevent hard-coding it | 0.95 | `apps/api/app/database.py:DATABASE_URL`; `docker-compose.yml:services.api.volumes`; `infra/deploy.sh:Deploying Backend API Container App`; `apps/api/requirements.txt` |
+| Workbook storage abstraction | Required `WorkbookStorage` put/load/verify port plus `storage_type`/opaque `storage_ref` | Azure Blob or S3 can replace the adapter without changing model/extraction/read-service contracts | 0.99 | **Proposed**, informed by existing but unwired Blob provisioning in `infra/deploy.sh:Azure Blob Storage (M10)` |
 | Workbook deduplication policy | Reuse workbook by UNIQUE SHA-256; verify size/hash; filename is metadata | Exact bytes define version; prevents duplicate blob cost without hiding executions | 0.97 | `experiments/workbook_agent_poc/workbook_tools.py:WorkbookToolset.__init__` |
 | Model identity entity | New `model_versions`; one row per extraction execution | Clean ownership and direct upstream ID | 0.96 | `apps/api/app/routers/models.py:upload_model`; `tests/test_experimental_workbook_upload.py:test_experimental_route_has_no_database_or_auth_dependency` |
 | Relationship to legacy `financial_models` | None in V1; no reuse, FK, or backfill | Legacy owns file path/`parsed_json`/analytics concerns not present in current extraction | 0.97 | `apps/api/app/models.py:FinancialModel`; `apps/api/app/routers/models.py:_legacy_upload_model_for_rollback` |
-| Canonical parameter storage | Relational `model_parameters` for backend-validated assumption/derived/selector families | Supports stable references and avoids trusting candidate buckets | 0.93 | `experiments/workbook_agent_poc/validator.py:validate_candidate`; `experiments/workbook_agent_poc/roles.py:family` |
-| Canonical series storage | Relational `financial_series` with normalized metadata/ranges/status | Backend materializer already establishes canonical series | 0.98 | `experiments/workbook_agent_poc/time_series.py:FinancialSeriesMaterializer.materialize` |
+| Canonical parameter storage | Relational `model_parameters` for backend-validated assumption/derived/selector families, participating in the shared `FinancialEntity` contract | Supports stable references and avoids trusting candidate buckets without isolating parameters from series evolution | 0.97 | `experiments/workbook_agent_poc/validator.py:validate_candidate`; `experiments/workbook_agent_poc/roles.py:family` |
+| Canonical series storage | Relational `financial_series` with normalized metadata/ranges/status, participating in the shared `FinancialEntity` contract | Backend materializer establishes canonical series while common identity/read semantics preserve future unification | 0.99 | `experiments/workbook_agent_poc/time_series.py:FinancialSeriesMaterializer.materialize` |
 | Individual value storage | One `financial_series_values` row per aligned point | Preserves order, period/value provenance, exact formula and cache status | 0.99 | `experiments/workbook_agent_poc/time_series.py:FinancialSeriesMaterializer.materialize`; `experiments/workbook_agent_poc/tests/test_financial_series.py:test_descriptor_only_materializes_complete_horizontal_series` |
-| Stable ID strategy | UUIDv4 for workbook/model; backend UUIDv5 for canonical children; LLM IDs aliases only | Distinct executions plus deterministic persistence retry | 0.91 | `apps/api/app/models.py:generate_uuid`; `experiments/workbook_agent_poc/extraction_contract.py:_CANDIDATE`; `experiments/workbook_agent_poc/extraction_contract.py:_FINANCIAL_SERIES` |
-| Cell provenance lookup | Indexed parameter/value source columns plus read-service union and ambiguity error | Smallest reliable solution; avoids premature polymorphic table/view | 0.87 | `experiments/workbook_agent_poc/workbook_tools.py:WorkbookToolset._cell_fact`; `experiments/workbook_agent_poc/tests/test_financial_series.py:test_descriptor_only_materializes_complete_horizontal_series` |
-| Transaction boundaries | T1 source/identity, LLM outside transaction, T2 snapshot, T3 atomic canonical rows | Preserves failure evidence and retry payload without long/distributed transaction | 0.94 | `apps/api/app/workbook_validation.py:run_workbook_validation`; `apps/api/app/database.py:get_db` |
-| Retry policy | Same workbook/new model for new extraction; same model/snapshot for persistence retry | Auditable attempts and no unnecessary LLM rerun | 0.95 | `experiments/workbook_agent_poc/agent_loop.py:run_loop`; `experiments/workbook_agent_poc/time_series.py:materialize_financial_series` |
+| FinancialEntity evolution seam | Shared entity ID factory, checked `entity_kind`, and discriminated `FinancialEntityRef`; no supertype table in V1 | Avoids independent consumer contracts and permits a later shared-PK supertype without changing IDs | 0.98 | **Proposed**, grounded in the two current canonical shapes from `experiments/workbook_agent_poc/validator.py:validate_candidate` and `experiments/workbook_agent_poc/time_series.py:FinancialSeriesMaterializer.materialize` |
+| Stable ID strategy | UUIDv4 for workbook/model; one backend UUIDv5 `FinancialEntityIdFactory` for parameter/series; deterministic UUIDv5 values; LLM IDs aliases only | Distinct executions, deterministic retry, cross-type namespace, and no-ID-change supertype migration | 0.97 | `apps/api/app/models.py:generate_uuid`; `experiments/workbook_agent_poc/extraction_contract.py:_CANDIDATE`; `experiments/workbook_agent_poc/extraction_contract.py:_FINANCIAL_SERIES` |
+| Cell provenance lookup | Indexed parameter/value source columns plus `FinancialEntityRef` union and ambiguity error | Smallest reliable solution; avoids premature polymorphic table/view while giving callers a common entity reference | 0.93 | `experiments/workbook_agent_poc/workbook_tools.py:WorkbookToolset._cell_fact`; `experiments/workbook_agent_poc/tests/test_financial_series.py:test_descriptor_only_materializes_complete_horizontal_series` |
+| Transaction boundaries | T1 storage port/catalog/identity, LLM outside transaction, T2 audit/retry snapshot, T3 atomic canonical rows | Preserves failure evidence and retry payload without long/distributed transaction | 0.96 | `apps/api/app/workbook_validation.py:run_workbook_validation`; `apps/api/app/database.py:get_db` |
+| Retry policy | Same workbook/new model for new extraction; same model/private snapshot for persistence retry | Auditable attempts and no unnecessary LLM rerun without exposing snapshots to downstream consumers | 0.98 | `experiments/workbook_agent_poc/agent_loop.py:run_loop`; `experiments/workbook_agent_poc/time_series.py:materialize_financial_series` |
+| Snapshot consumer contract | Audit and same-model persistence retry only; excluded from `ModelExtractionReadService` and all downstream DTOs | Prevents downstream coupling to transient LLM/API schema and makes relational rows the enforceable canonical source | 1.00 | **Approved/Proposed**, consistent with backend-owned canonical materialization in `experiments/workbook_agent_poc/time_series.py:materialize_financial_series` |
 | Minimal API changes | Retain response; add a nullable ID pair populated together only after materialized commit; internal reload service only | Preserves synchronous consumer behavior and avoids public API redesign | 0.96 | `apps/api/app/schemas.py:WorkbookValidationResponse`; `tests/test_experimental_workbook_upload.py:test_success_returns_complete_raw_validation_contract` |
-| Calculation Rule Extraction upstream contract | Require matching materialized `model_version_id` and `workbook_version_id`; reload through internal service | Guarantees exact bytes and canonical entities after restart without defining rules | 0.99 | `experiments/workbook_agent_poc/workbook_tools.py:WorkbookToolset.workbook_version`; `tests/test_workbook_validation.py:test_temporary_workbook_is_removed_after_success_and_failure` |
+| Calculation Rule Extraction upstream contract | Require matching materialized IDs; load exact bytes through `WorkbookStorage` and entities only through canonical relational read methods | Guarantees exact bytes and canonical entities after restart while explicitly forbidding snapshot dependence | 1.00 | `experiments/workbook_agent_poc/workbook_tools.py:WorkbookToolset.workbook_version`; `tests/test_workbook_validation.py:test_temporary_workbook_is_removed_after_success_and_failure` |

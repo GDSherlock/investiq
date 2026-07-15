@@ -158,6 +158,36 @@ class ModelExtractionRepository:
         self._session.flush()
         return model_version
 
+    def record_extraction_failure(
+        self,
+        model_version_id: str,
+        *,
+        submitted: bool,
+        stop_reason: str | None,
+        error_code: str,
+        error_message: str,
+        driver_meta: dict[str, Any] | None = None,
+        coverage: dict[str, Any] | None = None,
+        validation_summary: dict[str, Any] | None = None,
+        time_series_summary: dict[str, Any] | None = None,
+        validation_results: dict[str, Any] | list[Any] | None = None,
+    ) -> ModelVersion:
+        model_version = self._get_model_version(model_version_id)
+        model_version.submitted = submitted
+        model_version.stop_reason = stop_reason
+        model_version.driver_meta_json = json_safe(driver_meta)
+        model_version.coverage_json = json_safe(coverage)
+        model_version.validation_summary_json = json_safe(validation_summary)
+        model_version.time_series_summary_json = json_safe(time_series_summary)
+        model_version.validation_results_json = json_safe(validation_results)
+        model_version.status = "extraction_failed"
+        model_version.validation_status = "not_run"
+        model_version.error_code = error_code
+        model_version.error_message = error_message
+        model_version.completed_at = _utcnow()
+        self._session.flush()
+        return model_version
+
     def persist_canonical_model(
         self,
         model_version_id: str,

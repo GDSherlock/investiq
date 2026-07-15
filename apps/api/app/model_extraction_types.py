@@ -52,6 +52,14 @@ class AmbiguousSourceCellError(ModelExtractionPersistenceError):
     """More than one canonical entity maps to the same source cell."""
 
 
+class CanonicalSourceConflictError(ModelExtractionPersistenceError):
+    """Source-valid candidates disagree at one canonical workbook cell."""
+
+
+class PersistenceRetryNotAllowed(ModelExtractionPersistenceError):
+    """The model lifecycle does not permit persistence-only retry."""
+
+
 FinancialEntityKind = Literal["parameter", "financial_series"]
 
 

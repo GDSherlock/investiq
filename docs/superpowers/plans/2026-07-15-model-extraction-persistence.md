@@ -497,9 +497,9 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_model_extraction_lifecycle.py -q
   ```
 
-- [x] **Step 3: Implement preparation and T1**
+- [x] **Step 3: Implement bounded preparation and T1**
 
-  Validate OOXML with `WorkbookToolset(file_bytes=file_bytes)` before persistence. T1 stores/reuses workbook bytes, creates UUIDv4 model version with `extracting/not_run`, commits, and leaves no transaction open around the runner.
+  Enforce the configurable `MODEL_EXTRACTION_MAX_WORKBOOK_BYTES` limit (25 MiB by default), then validate OOXML with `WorkbookToolset(file_bytes=file_bytes)` before persistence. T1 stores/reuses workbook bytes, creates UUIDv4 model version with `extracting/not_run`, commits, and leaves no transaction open around the runner.
 
 - [x] **Step 4: Implement T2 audit/retry projection**
 
@@ -685,7 +685,7 @@
 ## Execution Evidence
 
 - Baseline before implementation: `188 passed` across `tests` and `experiments/workbook_agent_poc/tests`.
-- Final SQLite/default suite: `244 passed, 3 skipped`; the three skips are the explicitly gated PostgreSQL tests when `TEST_POSTGRES_URL` is absent.
+- Final SQLite/default suite: `246 passed, 3 skipped`; the three skips are the explicitly gated PostgreSQL tests when `TEST_POSTGRES_URL` is absent.
 - Isolated PostgreSQL 16 suite: `3 passed, 23 deselected` against `investiq_persistence_test`; Alembic upgrade, 2 MiB binary round-trip/dedupe, and T3 rollback all passed without dialect-specific production changes.
 - Boundary scans: no snapshot/validation telemetry reads in `ModelExtractionReadService`; no direct `WorkbookVersion.content_bytes` access outside `DatabaseWorkbookStorage`.
 - Scope audit: changed files are limited to backend persistence/API/migration code, tests, dependency/test configuration, and the approved design/implementation documents; no frontend or Calculation Rule Extraction files changed.

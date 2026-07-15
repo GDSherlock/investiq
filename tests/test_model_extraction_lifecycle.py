@@ -24,6 +24,7 @@ from apps.api.app.model_extraction_types import (
     CanonicalSourceConflictError,
     FinancialEntityIdFactory,
     ModelExtractionPersistenceError,
+    WorkbookTooLargeError,
 )
 from apps.api.app.workbook_storage import DatabaseWorkbookStorage
 from apps.api.app.workbook_validation import InvalidWorkbookError
@@ -129,6 +130,24 @@ def test_invalid_workbook_creates_no_rows(lifecycle_context) -> None:
 
     with pytest.raises(InvalidWorkbookError):
         service.process_upload(b"not-an-xlsx", "broken.xlsx")
+
+    assert _count(session, WorkbookVersion) == 0
+    assert _count(session, ModelVersion) == 0
+    assert runner.calls == 0
+
+
+def test_oversized_workbook_is_rejected_before_t1_and_runner(lifecycle_context) -> None:
+    _engine, _session_factory, session = lifecycle_context
+    runner = RecordingRunner()
+    content = persistence_workbook_bytes()
+    service = ModelExtractionPersistenceService(
+        session,
+        validation_runner=runner,
+        max_workbook_bytes=len(content) - 1,
+    )
+
+    with pytest.raises(WorkbookTooLargeError):
+        service.process_upload(content, "model.xlsx")
 
     assert _count(session, WorkbookVersion) == 0
     assert _count(session, ModelVersion) == 0

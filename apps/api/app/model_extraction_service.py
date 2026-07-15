@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from typing import Any, Callable
 from zipfile import BadZipFile
 
@@ -21,6 +22,7 @@ from .model_extraction_types import (
     ModelExtractionPersistenceError,
     ModelVersionNotFound,
     PersistenceRetryNotAllowed,
+    WorkbookTooLargeError,
     WorkbookVersionNotFound,
     json_safe,
 )
@@ -54,6 +56,7 @@ _CANONICAL_PARAMETER_ROLES = {
     "scenario_selector",
 }
 _SOURCE_VALID_STATUSES = {"validated", "validated_null"}
+_DEFAULT_MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
 
 
 class ModelExtractionPersistenceService:
@@ -67,6 +70,7 @@ class ModelExtractionPersistenceService:
         storage: WorkbookStorage | None = None,
         repository: ModelExtractionRepository | None = None,
         workbook_repository: WorkbookVersionRepository | None = None,
+        max_workbook_bytes: int | None = None,
     ):
         self._session = session
         self._validation_runner = validation_runner
@@ -76,9 +80,29 @@ class ModelExtractionPersistenceService:
             session,
             self._storage,
         )
+        configured_limit = (
+            max_workbook_bytes
+            if max_workbook_bytes is not None
+            else os.getenv(
+                "MODEL_EXTRACTION_MAX_WORKBOOK_BYTES",
+                str(_DEFAULT_MAX_WORKBOOK_BYTES),
+            )
+        )
+        try:
+            self._max_workbook_bytes = int(configured_limit)
+        except (TypeError, ValueError) as exc:
+            raise ModelExtractionPersistenceError(
+                "Model Extraction workbook size limit is invalid"
+            ) from exc
+        if self._max_workbook_bytes <= 0:
+            raise ModelExtractionPersistenceError(
+                "Model Extraction workbook size limit must be positive"
+            )
 
     def process_upload(self, file_bytes: bytes, filename: str) -> dict[str, Any]:
         payload = bytes(file_bytes)
+        if len(payload) > self._max_workbook_bytes:
+            raise WorkbookTooLargeError(len(payload), self._max_workbook_bytes)
         self._validate_workbook(payload)
 
         try:

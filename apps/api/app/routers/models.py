@@ -17,7 +17,7 @@ from ..models import FinancialModel, Investment, ModelAssumption, AuditLog, User
 from ..schemas import ModelUploadResponse, ModelParseResponse, WorkbookValidationResponse
 from ..auth import get_current_user
 from ..model_extraction_service import ModelExtractionPersistenceService
-from ..model_extraction_types import ModelExtractionPersistenceError
+from ..model_extraction_types import ModelExtractionPersistenceError, WorkbookTooLargeError
 from ..vector_service import vectorize_and_store
 from ..workbook_validation import (
     AzureConfigurationError,
@@ -100,6 +100,12 @@ async def upload_model(
             500,
             "WORKBOOK_VALIDATION_ERROR",
             "Local workbook-agent validation failed.",
+        )
+    except WorkbookTooLargeError:
+        raise _api_error(
+            413,
+            "WORKBOOK_TOO_LARGE",
+            "The uploaded workbook exceeds the configured size limit.",
         )
     except ModelExtractionPersistenceError:
         raise _api_error(

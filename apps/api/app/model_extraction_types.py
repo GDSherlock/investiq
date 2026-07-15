@@ -20,6 +20,15 @@ class WorkbookVersionNotFound(ModelExtractionPersistenceError):
     """The requested workbook version or storage location does not exist."""
 
 
+class WorkbookTooLargeError(ModelExtractionPersistenceError):
+    """The uploaded workbook exceeds the configured pre-extraction byte limit."""
+
+    def __init__(self, actual_bytes: int, max_bytes: int):
+        self.actual_bytes = actual_bytes
+        self.max_bytes = max_bytes
+        super().__init__("Workbook exceeds the configured upload size limit")
+
+
 class ModelVersionNotFound(ModelExtractionPersistenceError):
     """The requested model version does not exist."""
 

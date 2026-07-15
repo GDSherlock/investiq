@@ -173,6 +173,30 @@ def test_empty_xlsx_returns_structured_400_without_running_agent(monkeypatch, ap
     assert response.json()["detail"]["code"] == "EMPTY_FILE"
 
 
+def test_oversized_xlsx_returns_structured_413_without_running_agent(
+    monkeypatch,
+    api_context,
+):
+    app, _session_factory = api_context
+    content = persistence_workbook_bytes()
+    monkeypatch.setenv("MODEL_EXTRACTION_MAX_WORKBOOK_BYTES", str(len(content) - 1))
+    monkeypatch.setattr(
+        models,
+        "run_workbook_validation",
+        lambda *args, **kwargs: pytest.fail("agent must not run for an oversized upload"),
+        raising=False,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/v1/models/upload",
+        files={"file": ("oversized.xlsx", content)},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "WORKBOOK_TOO_LARGE"
+
+
 def test_success_returns_committed_workbook_and_model_version_ids(
     monkeypatch,
     api_context,

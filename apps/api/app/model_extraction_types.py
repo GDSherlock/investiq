@@ -28,6 +28,30 @@ class CanonicalPersistenceStateError(ModelExtractionPersistenceError):
     """Canonical rows cannot be written from the model version's current state."""
 
 
+class ModelVersionNotReady(ModelExtractionPersistenceError):
+    """The model version exists but is not canonically materialized."""
+
+    def __init__(self, status: str):
+        self.status = status
+        super().__init__(f"Model version is not ready: {status}")
+
+
+class ModelWorkbookMismatch(ModelExtractionPersistenceError):
+    """The supplied model and workbook version IDs do not belong together."""
+
+
+class FinancialSeriesNotFound(ModelExtractionPersistenceError):
+    """The requested financial series is not part of the model version."""
+
+
+class InvalidCellAddress(ModelExtractionPersistenceError):
+    """A source cell is not a valid bounded Excel A1 address."""
+
+
+class AmbiguousSourceCellError(ModelExtractionPersistenceError):
+    """More than one canonical entity maps to the same source cell."""
+
+
 FinancialEntityKind = Literal["parameter", "financial_series"]
 
 
@@ -97,6 +121,156 @@ class FinancialEntityIdFactory:
     @staticmethod
     def _component(value: object | None) -> str:
         return "" if value is None else str(value).strip()
+
+
+@dataclass(frozen=True)
+class WorkbookVersionData:
+    id: str
+    sha256: str
+    original_filename: str
+    file_size: int
+    created_at: datetime
+    content_bytes: bytes
+
+
+@dataclass(frozen=True)
+class ModelVersionData:
+    id: str
+    workbook_version_id: str
+    upload_filename: str
+    status: str
+    validation_status: str
+    submitted: bool
+    stop_reason: str | None
+    created_at: datetime
+    extracted_at: datetime | None
+    completed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class CanonicalParameter:
+    id: str
+    model_version_id: str
+    entity_kind: Literal["parameter"]
+    llm_candidate_alias: str | None
+    source_bucket: str
+    label: str
+    category: str | None
+    canonical_name: str | None
+    submitted_role: str
+    validated_role: str
+    raw_value_json: Any
+    validated_value_json: Any
+    unit: str | None
+    scenario: str | None
+    period_json: Any
+    source_sheet: str
+    source_cell: str
+    exact_formula: str | None
+    formula_status: str
+    source_validation_status: str
+    role_validation_status: str
+    validation_status: str
+    data_type: str | None
+    number_format: str | None
+    llm_confidence: float | None
+    validation_confidence: float | None
+    reasoning_summary: str | None
+    validation_warnings_json: list[Any] | None
+    created_at: datetime
+
+    @property
+    def entity_ref(self) -> FinancialEntityRef:
+        return FinancialEntityRef(
+            id=self.id,
+            model_version_id=self.model_version_id,
+            entity_kind=self.entity_kind,
+            label=self.label,
+        )
+
+
+@dataclass(frozen=True)
+class CanonicalFinancialSeries:
+    id: str
+    model_version_id: str
+    entity_kind: Literal["financial_series"]
+    llm_series_alias: str | None
+    label: str
+    category: str | None
+    semantic_role: str
+    unit: str | None
+    frequency: str | None
+    orientation: str
+    scenario: str | None
+    entity: str | None
+    currency: str | None
+    calculation_type: str
+    period_source_range: str
+    value_source_range: str
+    label_source_sheet: str | None
+    label_source_cell: str | None
+    materialization_status: str
+    validation_status: str
+    aliases_json: list[Any] | None
+    formula_pattern_json: dict[str, Any] | None
+    warnings_json: list[Any] | None
+    reasoning_summary: str | None
+    llm_confidence: float | None
+    created_at: datetime
+
+    @property
+    def entity_ref(self) -> FinancialEntityRef:
+        return FinancialEntityRef(
+            id=self.id,
+            model_version_id=self.model_version_id,
+            entity_kind=self.entity_kind,
+            label=self.label,
+        )
+
+
+@dataclass(frozen=True)
+class CanonicalFinancialSeriesValue:
+    id: str
+    financial_series_id: str
+    period_index: int
+    raw_period_label_json: Any
+    display_period_label: str | None
+    period_type: str | None
+    year: int | None
+    quarter: int | None
+    month: int | None
+    is_forecast: bool | None
+    value_json: Any
+    period_source_sheet: str
+    period_source_cell: str
+    value_source_sheet: str
+    value_source_cell: str
+    exact_formula: str | None
+    formula_status: str
+    cached_value_available: bool
+    cached_value_freshness: str | None
+    number_format: str | None
+    data_type: str | None
+    created_at: datetime
+
+
+FinancialEntity = CanonicalParameter | CanonicalFinancialSeries
+
+
+@dataclass(frozen=True)
+class ParameterResolution:
+    entity: FinancialEntityRef
+    parameter: CanonicalParameter
+
+
+@dataclass(frozen=True)
+class FinancialSeriesValueResolution:
+    entity: FinancialEntityRef
+    series: CanonicalFinancialSeries
+    value: CanonicalFinancialSeriesValue
+
+
+SourceResolvedEntity = ParameterResolution | FinancialSeriesValueResolution
 
 
 def new_uuid() -> str:

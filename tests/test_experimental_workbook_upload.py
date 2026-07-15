@@ -1,13 +1,23 @@
 """FastAPI contract tests for the experimental workbook-agent upload route."""
 
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 import pytest
 
+from apps.api.app.database import Base
+from apps.api.app.model_extraction_read_service import ModelExtractionReadService
+from apps.api.app.model_extraction_types import ModelExtractionPersistenceError
 from apps.api.app.routers import models
+from apps.api.app.workbook_storage import DatabaseWorkbookStorage
+from tests.model_extraction_test_support import (
+    create_sqlite_session_factory,
+    persistence_workbook_bytes,
+    sqlite_file_url,
+)
 
 
 REQUIRED_RESPONSE_FIELDS = {
@@ -26,13 +36,37 @@ REQUIRED_RESPONSE_FIELDS = {
     "errors",
     "trace",
     "trace_truncated",
+    "workbook_version_id",
+    "model_version_id",
 }
 
 
-def _app() -> FastAPI:
+def _app(session_factory) -> FastAPI:
     app = FastAPI()
     app.include_router(models.router, prefix="/api/v1")
+
+    def override_get_db():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[models.get_db] = override_get_db
     return app
+
+
+@pytest.fixture
+def api_context(tmp_path):
+    engine, session_factory = create_sqlite_session_factory(
+        sqlite_file_url(tmp_path / "api.db")
+    )
+    Base.metadata.create_all(engine)
+    app = _app(session_factory)
+    try:
+        yield app, session_factory
+    finally:
+        engine.dispose()
 
 
 def _result(filename: str = "benchmark.xlsx") -> dict:
@@ -90,8 +124,9 @@ def _upload_route(app: FastAPI) -> APIRoute:
     )
 
 
-def test_openapi_marks_upload_as_experimental_workbook_agent_validation():
-    operation = _app().openapi()["paths"]["/api/v1/models/upload"]["post"]
+def test_openapi_marks_upload_as_experimental_workbook_agent_validation(api_context):
+    app, _session_factory = api_context
+    operation = app.openapi()["paths"]["/api/v1/models/upload"]["post"]
 
     assert "experimental" in operation["summary"].lower()
     assert "workbook-agent" in operation["summary"].lower()
@@ -99,7 +134,12 @@ def test_openapi_marks_upload_as_experimental_workbook_agent_validation():
 
 
 @pytest.mark.parametrize("filename", ["legacy.xls", "data.csv", "book.xlsm", "notes.txt"])
-def test_unsupported_formats_return_structured_415_without_running_agent(monkeypatch, filename):
+def test_unsupported_formats_return_structured_415_without_running_agent(
+    monkeypatch,
+    filename,
+    api_context,
+):
+    app, _session_factory = api_context
     called = False
 
     def unexpected_agent_call(*args, **kwargs):
@@ -108,7 +148,7 @@ def test_unsupported_formats_return_structured_415_without_running_agent(monkeyp
         raise AssertionError("agent must not run for unsupported formats")
 
     monkeypatch.setattr(models, "run_workbook_validation", unexpected_agent_call, raising=False)
-    client = TestClient(_app(), raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False)
 
     response = client.post("/api/v1/models/upload", files={"file": (filename, b"content")})
 
@@ -117,14 +157,15 @@ def test_unsupported_formats_return_structured_415_without_running_agent(monkeyp
     assert called is False
 
 
-def test_empty_xlsx_returns_structured_400_without_running_agent(monkeypatch):
+def test_empty_xlsx_returns_structured_400_without_running_agent(monkeypatch, api_context):
+    app, _session_factory = api_context
     monkeypatch.setattr(
         models,
         "run_workbook_validation",
         lambda *args, **kwargs: pytest.fail("agent must not run for an empty upload"),
         raising=False,
     )
-    client = TestClient(_app(), raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False)
 
     response = client.post("/api/v1/models/upload", files={"file": ("empty.xlsx", b"")})
 
@@ -132,27 +173,61 @@ def test_empty_xlsx_returns_structured_400_without_running_agent(monkeypatch):
     assert response.json()["detail"]["code"] == "EMPTY_FILE"
 
 
-def test_success_returns_complete_raw_validation_contract(monkeypatch):
+def test_success_returns_committed_workbook_and_model_version_ids(
+    monkeypatch,
+    api_context,
+):
+    app, _session_factory = api_context
     monkeypatch.setattr(
         models,
         "run_workbook_validation",
         lambda file_bytes, filename: _result(filename),
         raising=False,
     )
-    client = TestClient(_app(), raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False)
 
     response = client.post(
         "/api/v1/models/upload",
-        files={"file": ("benchmark.xlsx", b"validity is adapter-owned")},
+        files={"file": ("benchmark.xlsx", persistence_workbook_bytes())},
     )
 
     assert response.status_code == 200
     assert REQUIRED_RESPONSE_FIELDS == set(response.json())
     assert response.json()["driver_meta"]["api"] == "responses"
+    assert UUID(response.json()["workbook_version_id"])
+    assert UUID(response.json()["model_version_id"])
 
 
-def test_corrupt_xlsx_returns_structured_422():
-    client = TestClient(_app(), raise_server_exceptions=False)
+def test_submitted_false_returns_null_version_ids(monkeypatch, api_context):
+    app, _session_factory = api_context
+    incomplete = _result()
+    incomplete.update(
+        submitted=False,
+        stop_reason="model_returned_no_tool_call",
+        errors=[{"code": "AGENT_INCOMPLETE", "message": "incomplete"}],
+    )
+    monkeypatch.setattr(
+        models,
+        "run_workbook_validation",
+        lambda file_bytes, filename: {**incomplete, "filename": filename},
+        raising=False,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/v1/models/upload",
+        files={"file": ("benchmark.xlsx", persistence_workbook_bytes())},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["submitted"] is False
+    assert response.json()["workbook_version_id"] is None
+    assert response.json()["model_version_id"] is None
+
+
+def test_corrupt_xlsx_returns_structured_422(api_context):
+    app, _session_factory = api_context
+    client = TestClient(app, raise_server_exceptions=False)
 
     response = client.post(
         "/api/v1/models/upload",
@@ -172,19 +247,24 @@ def test_corrupt_xlsx_returns_structured_422():
     ],
 )
 def test_adapter_errors_map_to_sanitized_http_errors(
-    monkeypatch, exception_name, status_code, error_code
+    monkeypatch,
+    exception_name,
+    status_code,
+    error_code,
+    api_context,
 ):
+    app, _session_factory = api_context
     exception_type = getattr(models, exception_name)
 
     def fail(*args, **kwargs):
         raise exception_type("secret-value-must-not-escape")
 
     monkeypatch.setattr(models, "run_workbook_validation", fail, raising=False)
-    client = TestClient(_app(), raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False)
 
     response = client.post(
         "/api/v1/models/upload",
-        files={"file": ("benchmark.xlsx", b"validity is adapter-owned")},
+        files={"file": ("benchmark.xlsx", persistence_workbook_bytes())},
     )
 
     assert response.status_code == status_code
@@ -192,19 +272,99 @@ def test_adapter_errors_map_to_sanitized_http_errors(
     assert "secret-value" not in response.text
 
 
-def test_experimental_route_has_no_database_or_auth_dependency():
-    route = _upload_route(_app())
+def test_upload_route_has_database_but_not_auth_dependency(api_context):
+    app, _session_factory = api_context
+    route = _upload_route(app)
     dependency_names = {
         dependency.call.__name__
         for dependency in route.dependant.dependencies
         if dependency.call is not None
     }
 
-    assert "get_db" not in dependency_names
+    assert "get_db" in dependency_names
     assert "get_current_user" not in dependency_names
+
+
+def test_persistence_failure_is_sanitized_and_not_returned_as_success(
+    monkeypatch,
+    api_context,
+):
+    app, _session_factory = api_context
+
+    class FailingPersistenceService:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def process_upload(self, file_bytes, filename):
+            raise ModelExtractionPersistenceError("secret database details")
+
+    monkeypatch.setattr(
+        models,
+        "ModelExtractionPersistenceService",
+        FailingPersistenceService,
+        raising=False,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/v1/models/upload",
+        files={"file": ("benchmark.xlsx", persistence_workbook_bytes())},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "MODEL_EXTRACTION_PERSISTENCE_ERROR"
+    assert "secret database" not in response.text
+
+
+def test_successful_upload_is_reloadable_after_request_session_closes(
+    monkeypatch,
+    api_context,
+):
+    app, session_factory = api_context
+    monkeypatch.setattr(
+        models,
+        "run_workbook_validation",
+        lambda file_bytes, filename: _result(filename),
+        raising=False,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    content = persistence_workbook_bytes()
+
+    response = client.post(
+        "/api/v1/models/upload",
+        files={"file": ("benchmark.xlsx", content)},
+    )
+
+    assert response.status_code == 200
+    restarted_session = session_factory()
+    try:
+        read_service = ModelExtractionReadService(
+            restarted_session,
+            DatabaseWorkbookStorage(restarted_session),
+        )
+        model_version = read_service.load_model_version(
+            response.json()["model_version_id"],
+            expected_workbook_version_id=response.json()["workbook_version_id"],
+        )
+        workbook_version = read_service.load_workbook_version(
+            response.json()["workbook_version_id"]
+        )
+        assert model_version.status == "materialized"
+        assert workbook_version.content_bytes == content
+    finally:
+        restarted_session.close()
 
 
 def test_dockerfile_packages_workbook_agent_source():
     dockerfile = Path("apps/api/Dockerfile").read_text(encoding="utf-8")
 
     assert "COPY experiments/workbook_agent_poc/ /app/experiments/workbook_agent_poc/" in dockerfile
+
+
+def test_dockerfile_runs_alembic_before_uvicorn():
+    dockerfile = Path("apps/api/Dockerfile").read_text(encoding="utf-8")
+
+    assert "alembic -c apps/api/alembic.ini upgrade head" in dockerfile
+    assert dockerfile.index("alembic -c apps/api/alembic.ini upgrade head") < dockerfile.index(
+        "uvicorn apps.api.app.main:app"
+    )

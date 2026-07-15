@@ -16,6 +16,8 @@ from ..database import get_db
 from ..models import FinancialModel, Investment, ModelAssumption, AuditLog, User
 from ..schemas import ModelUploadResponse, ModelParseResponse, WorkbookValidationResponse
 from ..auth import get_current_user
+from ..model_extraction_service import ModelExtractionPersistenceService
+from ..model_extraction_types import ModelExtractionPersistenceError
 from ..vector_service import vectorize_and_store
 from ..workbook_validation import (
     AzureConfigurationError,
@@ -52,8 +54,11 @@ def _api_error(status_code: int, code: str, message: str) -> HTTPException:
         "validation endpoint for benchmark testing. Supports .xlsx only."
     ),
 )
-async def upload_model(file: UploadFile = File(...)):
-    """Run the experimental workbook-agent validation flow without persistence."""
+async def upload_model(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Run and durably persist the synchronous workbook-agent validation flow."""
     filename = file.filename or ""
     if not filename.lower().endswith(".xlsx"):
         raise _api_error(
@@ -67,7 +72,11 @@ async def upload_model(file: UploadFile = File(...)):
         raise _api_error(400, "EMPTY_FILE", "Uploaded workbook is empty.")
 
     try:
-        return run_workbook_validation(file_bytes, filename)
+        service = ModelExtractionPersistenceService(
+            session=db,
+            validation_runner=run_workbook_validation,
+        )
+        return service.process_upload(file_bytes, filename)
     except InvalidWorkbookError:
         raise _api_error(
             422,
@@ -91,6 +100,12 @@ async def upload_model(file: UploadFile = File(...)):
             500,
             "WORKBOOK_VALIDATION_ERROR",
             "Local workbook-agent validation failed.",
+        )
+    except ModelExtractionPersistenceError:
+        raise _api_error(
+            500,
+            "MODEL_EXTRACTION_PERSISTENCE_ERROR",
+            "Model Extraction persistence failed.",
         )
 
 

@@ -22,6 +22,8 @@ class ModelUploadResponse(BaseModel):
 class WorkbookValidationResponse(BaseModel):
     """Raw response for the experimental workbook-agent validation endpoint."""
 
+    workbook_version_id: str | None
+    model_version_id: str | None
     endpoint_mode: str
     filename: str
     runtime_seconds: float

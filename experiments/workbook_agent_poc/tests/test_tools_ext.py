@@ -52,6 +52,19 @@ def test_formula_with_cache_reports_cached_value():
     assert fact["formula_status"] == "formula_with_cached_value"
 
 
+def test_validation_reuses_facts_from_full_context_observation(monkeypatch):
+    t = tools("no_assumptions_sheet")
+    t.read_range("Funding", "C3:C3")
+
+    def fail_if_workbook_cell_is_read(*args, **kwargs):
+        raise AssertionError("observed workbook cell was read again")
+
+    monkeypatch.setattr(t._wb_values["Funding"], "cell", fail_if_workbook_cell_is_read)
+    monkeypatch.setattr(t._wb_formulas["Funding"], "cell", fail_if_workbook_cell_is_read)
+
+    assert t.get_cell("Funding", "C3")["raw_value"] == 400
+
+
 # ---- metadata / named ranges / data validation ----
 def test_workbook_metadata_named_ranges_and_external():
     t = tools("hidden_named_injection")

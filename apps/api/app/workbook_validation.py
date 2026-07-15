@@ -27,6 +27,7 @@ from agent_loop import AzureDriver, run_loop  # noqa: E402
 from coverage_gate import HardCaps  # noqa: E402
 from validator import validate_extraction  # noqa: E402
 from workbook_tools import WorkbookToolset  # noqa: E402
+from time_series import materialize_financial_series  # noqa: E402
 
 
 class InvalidWorkbookError(Exception):
@@ -49,6 +50,7 @@ def _validation_summary(results: list[dict[str, Any]]) -> dict[str, int]:
     summary = {
         "candidate_count": len(results),
         "validated": 0,
+        "validated_with_warning": 0,
         "validated_null": 0,
         "reclassified": 0,
         "review_required": 0,
@@ -68,7 +70,10 @@ def _validation_warnings(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
             warnings.append({
                 "code": "CANDIDATE_VALIDATION_WARNING",
                 "message": str(message),
-                "context": {"candidate_id": result.get("candidate_id")},
+                "context": {
+                    "candidate_id": result.get("candidate_id"),
+                    "series_id": result.get("series_id"),
+                },
             })
     return warnings
 
@@ -112,7 +117,12 @@ def run_workbook_validation(
 
         try:
             run = run_loop(driver, tools, caps=HardCaps())
-            validation_results = validate_extraction(tools, run["final_extraction"])
+            series_outcome = materialize_financial_series(tools, run["final_extraction"])
+            validation_results = validate_extraction(
+                tools,
+                run["final_extraction"],
+                financial_series_outcome=series_outcome,
+            )
         except OpenAIError as exc:
             raise AzureResponsesError("Azure Responses API execution failed.") from exc
         except Exception as exc:
@@ -136,6 +146,7 @@ def run_workbook_validation(
             "coverage": run["coverage"],
             "final_extraction": run["final_extraction"],
             "validation_summary": _validation_summary(validation_results),
+            "time_series_summary": series_outcome["summary"],
             "validation_results": validation_results,
             "warnings": _validation_warnings(validation_results),
             "errors": errors,

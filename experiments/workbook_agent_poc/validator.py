@@ -22,6 +22,10 @@ from typing import Any
 from workbook_tools import WorkbookToolset, ToolError
 from dependency import build_dependency_graph
 from roles import structural_classification, reconcile, family
+from time_series import (
+    is_compatible_financial_series_object,
+    materialize_financial_series,
+)
 
 _UNAVAILABLE = {"formula_no_cache", "formula_external", "formula_error"}
 
@@ -180,8 +184,15 @@ def _result(cid, submitted_role, *, source, overall, rejected=None, review=False
     }
 
 
-def validate_extraction(tools: WorkbookToolset, extraction: dict[str, Any]) -> list[dict[str, Any]]:
+def validate_extraction(
+    tools: WorkbookToolset,
+    extraction: dict[str, Any],
+    *,
+    financial_series_outcome: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Validate every candidate across all buckets. Builds the dependency graph once."""
+    if financial_series_outcome is None:
+        financial_series_outcome = materialize_financial_series(tools, extraction)
     graph = build_dependency_graph(tools.iter_formulas(), tools.defined_names())
     buckets = ("all_assumption_candidates", "parameter_candidates", "derived_value_candidates",
                "output_candidates", "financial_series_candidates", "unclassified_inputs",
@@ -189,9 +200,15 @@ def validate_extraction(tools: WorkbookToolset, extraction: dict[str, Any]) -> l
     results = []
     for b in buckets:
         for cand in extraction.get(b, []) or []:
+            if b == "financial_series_candidates" and is_compatible_financial_series_object(cand):
+                continue
             cand = dict(cand)
             cand.setdefault("_bucket", b)
             r = validate_candidate(tools, graph, cand)
             r["_bucket"] = b
             results.append(r)
+    for result in financial_series_outcome["validation_results"]:
+        result = dict(result)
+        result["_bucket"] = "financial_series"
+        results.append(result)
     return results

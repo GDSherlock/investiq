@@ -62,6 +62,10 @@ class WorkbookToolset:
         self._workbook_version = hashlib.sha256(source_bytes).hexdigest()
         self._range_requests: dict[str, dict[str, Any]] = {}
         self._continuations: dict[str, tuple[str, int]] = {}
+        # The exploration loop and deterministic validator share this toolset. Cache every
+        # observed fact so validation reuses the full-context read instead of reopening or
+        # reconstructing workbook ranges.
+        self._fact_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
     @property
     def workbook_version(self) -> str:
@@ -84,6 +88,10 @@ class WorkbookToolset:
             row, col = coordinate_to_tuple(coord)
         except Exception:
             raise ToolError("bad_cell_reference", f"{coord!r} is not a valid A1 reference")
+        normalized_coord = f"{_col_letter(col)}{row}"
+        cache_key = (sheet_name, normalized_coord)
+        if cache_key in self._fact_cache:
+            return dict(self._fact_cache[cache_key])
 
         cell_v = ws_v.cell(row=row, column=col)
         cell_f = ws_f.cell(row=row, column=col)
@@ -123,10 +131,10 @@ class WorkbookToolset:
         if raw_value is not None:
             warnings.append("displayed_value_unavailable_via_openpyxl")
 
-        return {
+        fact = {
             "sheet_name": sheet_name,
-            "cell": coord.upper(),
-            "source_reference": f"{sheet_name}!{coord.upper()}",
+            "cell": normalized_coord,
+            "source_reference": f"{sheet_name}!{normalized_coord}",
             "raw_value": raw_value,
             "displayed_value": displayed_value,
             "formula": raw_formula,
@@ -139,6 +147,8 @@ class WorkbookToolset:
             "number_format": cell_v.number_format,
             "parse_warnings": warnings,
         }
+        self._fact_cache[cache_key] = fact
+        return dict(fact)
 
     # ---- tools (these map 1:1 to LLM function schemas) -----------------
 
@@ -522,7 +532,7 @@ class WorkbookToolset:
         NOTE: the coverage GATE lives in the agent loop, not here — this only acks receipt."""
         n = sum(len(result.get(k, [])) for k in (
             "all_assumption_candidates", "parameter_candidates", "derived_value_candidates",
-            "output_candidates", "financial_series_candidates"))
+            "output_candidates", "financial_series_candidates", "financial_series"))
         return {"received": True, "candidate_count": n}
 
     # ---- introspection helpers used by the dependency graph + role classifier ----
@@ -536,6 +546,33 @@ class WorkbookToolset:
                     out.add(ws.title)
                     break
         return out
+
+    def sheet_dimensions(self, sheet_name: str) -> tuple[int, int]:
+        """Return (max_row, max_column) for deterministic range-bound checks."""
+        ws_v, _ = self._require_sheet(sheet_name)
+        return ws_v.max_row, ws_v.max_column
+
+    def recalculation_signal(self) -> dict[str, Any]:
+        """Expose workbook recalc flags without claiming cached-value freshness."""
+        calc = getattr(self._wb_formulas, "calculation", None)
+        if calc is None:
+            return {"recalculation_warning": False, "cached_value_freshness": "unknown"}
+        warning = any(
+            getattr(calc, attribute, None) is True
+            for attribute in ("fullCalcOnLoad", "forceFullCalc", "calcOnSave")
+        )
+        return {
+            "recalculation_warning": warning,
+            "cached_value_freshness": "unknown",
+            "calc_mode": getattr(calc, "calcMode", None),
+            "full_calc_on_load": getattr(calc, "fullCalcOnLoad", None),
+            "force_full_calc": getattr(calc, "forceFullCalc", None),
+        }
+
+    def merged_cell_ranges(self, sheet_name: str) -> list[str]:
+        """Return merged ranges from the already-loaded workbook without a model-visible read."""
+        _, ws_f = self._require_sheet(sheet_name)
+        return [str(cell_range) for cell_range in ws_f.merged_cells.ranges]
 
     def non_empty_cell_references(self, sheet_name: str) -> set[str]:
         """Actual non-empty cells, including formulas whose cached value is absent."""

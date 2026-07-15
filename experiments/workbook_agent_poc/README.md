@@ -19,8 +19,9 @@ Validate the core principle of the proposed architecture, end to end and locally
 
 | File | Role |
 |------|------|
-| `workbook_tools.py` | 5 read-only tools + full per-cell evidence envelope. Loads the workbook twice (values + formulas), exactly like the production `ExcelParser`. Never coerces `None` → `0`. |
-| `validator.py` | Deterministic validator. Re-reads the workbook and checks each candidate; trusts the workbook, not the model. |
+| `workbook_tools.py` | Read-only tools + full per-cell evidence envelope. Loads the workbook twice (values + formulas), exactly like the production `ExcelParser`, and caches observed facts for validation reuse. Never coerces `None` → `0`. |
+| `validator.py` | Deterministic validator for legacy point candidates plus backend-materialized financial series; trusts workbook evidence, not the model. |
+| `time_series.py` | `FinancialSeriesMaterializer`: descriptor/range validation, canonical period/value points, formula/static/blank telemetry, period normalization, representative-cell rejection, deduplication, and consumer point conversion. |
 | `agent_loop.py` | Backend-owned function-calling loop. `MockModel`-agnostic; ships an `AzureDriver` using the Azure OpenAI v1 `OpenAI` + Responses API function-calling pattern. |
 | `run_poc.py` | Entry point. Runs the loop over `Financial_Model_Data.xlsx`, validates candidates, and asserts 10 invariants. |
 
@@ -42,8 +43,46 @@ open `http://localhost:8000/docs` and use `POST /api/v1/models/upload`.
 - Upload `.xlsx` workbooks only. Legacy `.xls` is explicitly rejected with HTTP 415.
 - The request waits synchronously for Azure Responses API exploration and deterministic validation.
 - The response includes extraction, coverage, validation summary/results, warnings, errors,
-  every trace event, trace truncation metadata, and token/deployment metadata.
+  a dedicated `time_series_summary`, every trace event, trace truncation metadata, and
+  token/deployment metadata.
 - The current Next.js upload UI is not compatible with this raw experimental response.
+
+## Canonical financial-series compatibility
+
+The LLM identifies semantics plus complete workbook ranges. It does not repeat period arrays,
+value arrays, formula counts, or per-point source cells:
+
+```json
+{
+  "series_id": "revenue_total",
+  "label": "TOTAL REVENUE",
+  "semantic_role": "financial_series",
+  "category": "revenue",
+  "unit": "USD M",
+  "frequency": "annual",
+  "period_range": "Revenue!C3:V3",
+  "value_range": "Revenue!C14:V14",
+  "label_reference": "Revenue!B14"
+}
+```
+
+The backend materializer reads the already-loaded cached-value and formula workbook views, verifies
+one-dimensional aligned ranges, and writes consumer-ready objects to
+`final_extraction.financial_series`. Each canonical period/value point contains its index and source
+cell; calculation type and formula telemetry are derived from workbook cells. Future database, API,
+chart, cash-flow, scenario, and monitoring consumers should use only this canonical bucket.
+
+The raw `financial_series_candidates` bucket remains unchanged for debugging and old single-cell
+consumers. Legacy complete objects with `period_axis.source_range` and `value_axis.source_range` are
+temporarily accepted, but their LLM-authored arrays and formula metadata are only disagreement
+telemetry and never override workbook-derived canonical data. New submitted descriptors are retained
+under `financial_series_descriptors` before canonical write-back.
+
+Formula presence is independent of `semantic_role=financial_series`. OpenPyXL exposes cached formula
+values but cannot prove freshness or reliably render every Excel display string, so formula cache
+freshness is reported as `unknown` and workbook recalculation flags become warnings. Scenario tables
+remain in `scenario_structures`; one-way and two-way matrices remain in
+`sensitivity_structures` and are never materialized as ordinary chronological series.
 
 ## Status
 

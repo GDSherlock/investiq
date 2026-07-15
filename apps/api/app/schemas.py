@@ -31,6 +31,7 @@ class WorkbookValidationResponse(BaseModel):
     coverage: dict[str, Any]
     final_extraction: dict[str, Any]
     validation_summary: dict[str, int]
+    time_series_summary: dict[str, int]
     validation_results: list[dict[str, Any]]
     warnings: list[dict[str, Any]]
     errors: list[dict[str, Any]]

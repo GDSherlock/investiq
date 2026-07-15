@@ -1,5 +1,6 @@
 """Contract tests for the experimental workbook-agent API adapter."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,39 @@ import apps.api.app.workbook_validation as workbook_validation
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "experiments/workbook_agent_poc/fixtures/no_assumptions_sheet.xlsx"
 FINANCIAL_MODEL = ROOT / "Financial_Model_Data.xlsx"
+
+
+def series_descriptor(series_id, label, sheet, row, category, *, unit=None):
+    return {
+        "series_id": series_id,
+        "label": label,
+        "semantic_role": "financial_series",
+        "category": category,
+        "unit": unit or ("x" if label == "DSCR" else "USD M"),
+        "frequency": "annual",
+        "period_range": f"{sheet}!C3:V3",
+        "value_range": f"{sheet}!C{row}:V{row}",
+        "label_reference": f"{sheet}!B{row}",
+        "reasoning_summary": f"Complete evidenced annual {label} series.",
+        "llm_confidence": 0.99,
+    }
+
+
+def legacy_complete_series(descriptor):
+    legacy = dict(descriptor)
+    period_range = legacy.pop("period_range")
+    value_range = legacy.pop("value_range")
+    legacy["period_axis"] = {
+        "source_range": period_range,
+        "periods": ["WRONG"] * 20,
+    }
+    legacy["value_axis"] = {
+        "source_range": value_range,
+        "values": [999] * 20,
+    }
+    legacy["calculation_type"] = "formula"
+    legacy["formula_pattern"] = {"formula_cell_count": 999}
+    return legacy
 
 
 class PlannedWorkbookDriver:
@@ -120,6 +154,22 @@ class FinancialModelCoverageDriver:
                 }],
                 "all_assumption_candidates": [],
                 "output_candidates": [],
+                "financial_series": [
+                    series_descriptor("revenue_total", "TOTAL REVENUE", "Revenue", 14, "revenue"),
+                    series_descriptor("ebitda", "EBITDA", "PnL", 7, "profit_and_loss"),
+                    series_descriptor("net_income", "NET INCOME", "PnL", 14, "profit_and_loss"),
+                    series_descriptor(
+                        "unlevered_fcf", "UNLEVERED FREE CASH FLOW", "CashFlows", 9, "cash_flow"
+                    ),
+                    series_descriptor("pv_of_fcf", "PV of FCF", "CashFlows", 18, "cash_flow"),
+                    series_descriptor(
+                        "total_debt_service", "Total debt service", "Debt_Schedule", 12, "debt"
+                    ),
+                    series_descriptor("dscr", "DSCR", "Debt_Schedule", 15, "debt"),
+                    series_descriptor(
+                        "cumulative_capex", "Cumulative capex", "Capex", 20, "capex"
+                    ),
+                ],
             }},
         })
         self.index = 0
@@ -131,6 +181,32 @@ class FinancialModelCoverageDriver:
 
     def observe(self, name, args, result):
         pass
+
+
+class LegacyFinancialModelCoverageDriver(FinancialModelCoverageDriver):
+    """Latest successful response shape: complete series in the legacy candidate bucket."""
+
+    _deployment = "deterministic-legacy-financial-model-driver"
+
+    def __init__(self):
+        super().__init__()
+        result = self.calls[-1]["arguments"]["result"]
+        descriptors = [
+            *result.pop("financial_series"),
+            series_descriptor(
+                "utilisation", "Throughput utilisation", "Revenue", 5, "operations", unit="%"
+            ),
+            series_descriptor(
+                "throughput", "Throughput volume (MMBtu M)", "Revenue", 6, "operations",
+                unit="MMBtu M",
+            ),
+            series_descriptor(
+                "maintenance_capex", "Maintenance capex", "Capex", 17, "capex"
+            ),
+        ]
+        result["financial_series_candidates"] = [
+            legacy_complete_series(descriptor) for descriptor in descriptors
+        ]
 
 
 def test_adapter_runs_real_tools_gate_and_validator():
@@ -154,6 +230,20 @@ def test_adapter_runs_real_tools_gate_and_validator():
     assert result["final_extraction"]["all_assumption_candidates"]
     assert result["validation_summary"]["candidate_count"] == 1
     assert result["validation_summary"]["validated"] == 1
+    assert result["time_series_summary"] == {
+        "submitted_descriptors": 0,
+        "legacy_series_detected": 0,
+        "submitted_series": 0,
+        "materialized_series": 0,
+        "validated_series": 0,
+        "validated_with_warning": 0,
+        "rejected_series": 0,
+        "representative_cell_only": 0,
+        "period_value_mismatches": 0,
+        "duplicate_series": 0,
+        "backend_range_reads": 0,
+        "reclassified_series": 0,
+    }
     assert len(result["validation_results"]) == 1
     assert isinstance(result["warnings"], list)
     assert result["errors"] == []
@@ -193,14 +283,89 @@ def test_financial_model_data_completes_geometric_coverage_without_rejection():
     )
     assert coverage["coverage_rejections"] == 0
     assert coverage["submit_attempts"] == 1
+    assert coverage["logical_model_tool_calls"] == 25
+    assert result["driver_meta"]["prompt_tokens"] == 0
+    assert result["driver_meta"]["completion_tokens"] == 0
     assert result["submitted"] is True
     assert result["stop_reason"] == "submitted"
     assert result["final_extraction"]["metadata"]
+    assert len(result["final_extraction"]["financial_series"]) == 8
+    assert result["time_series_summary"] == {
+        "submitted_descriptors": 8,
+        "legacy_series_detected": 0,
+        "submitted_series": 8,
+        "materialized_series": 8,
+        "validated_series": 8,
+        "validated_with_warning": 4,
+        "rejected_series": 0,
+        "representative_cell_only": 0,
+        "period_value_mismatches": 0,
+        "duplicate_series": 0,
+        "backend_range_reads": 13,
+        "reclassified_series": 0,
+    }
+    canonical_results = [
+        item for item in result["validation_results"]
+        if item.get("result_type") == "financial_series"
+    ]
+    assert {item["label"] for item in canonical_results} >= {
+        "TOTAL REVENUE", "EBITDA", "NET INCOME", "UNLEVERED FREE CASH FLOW",
+        "Total debt service", "DSCR", "Cumulative capex",
+    }
+    assert all(item["number_of_periods"] == 20 for item in canonical_results)
+    assert all(len(item["validated_periods"]) == len(item["validated_values"]) for item in canonical_results)
+    assert all(item["source_ranges"]["period_axis"] for item in canonical_results)
+    assert all(item["source_ranges"]["value_axis"] for item in canonical_results)
+    formula_results = {
+        item["label"]: item for item in canonical_results
+        if item["label"] in {"TOTAL REVENUE", "PV of FCF", "Total debt service", "Cumulative capex"}
+    }
+    assert all(item["semantic_role"] == "financial_series" for item in formula_results.values())
+    assert all(item["calculation_type"] == "formula" for item in formula_results.values())
+    assert result["final_extraction"]["financial_series_descriptors"]
+    assert all(
+        "periods" not in descriptor and "values" not in descriptor
+        for descriptor in result["final_extraction"]["financial_series_descriptors"]
+    )
     assert result["errors"] == []
     assert all(
         "range_too_large" not in event["result_preview"]
         for event in result["trace"]
     )
+
+
+def test_legacy_complete_series_are_materialized_and_summary_is_nonzero():
+    result = run_workbook_validation(
+        FINANCIAL_MODEL.read_bytes(),
+        FINANCIAL_MODEL.name,
+        driver_factory=LegacyFinancialModelCoverageDriver,
+    )
+
+    summary = result["time_series_summary"]
+    assert summary["submitted_descriptors"] == 0
+    assert summary["legacy_series_detected"] == 11
+    assert summary["materialized_series"] == 11
+    assert summary["validated_series"] == 11
+    assert summary["rejected_series"] == 0
+    assert result["validation_summary"]["rejected"] == 0
+    assert result["validation_summary"]["validated_with_warning"] == 11
+    assert len(result["final_extraction"]["financial_series"]) == 11
+    assert len(result["final_extraction"]["financial_series_candidates"]) == 11
+    assert all(
+        "LEGACY_VALUE_ARRAY_DISAGREEMENT" in series["warnings"]
+        for series in result["final_extraction"]["financial_series"]
+    )
+
+
+def test_descriptor_submission_payload_is_smaller_than_legacy_full_arrays():
+    driver = FinancialModelCoverageDriver()
+    descriptors = driver.calls[-1]["arguments"]["result"]["financial_series"]
+    legacy = [legacy_complete_series(descriptor) for descriptor in descriptors]
+
+    compact_bytes = len(json.dumps(descriptors, separators=(",", ":")).encode())
+    legacy_bytes = len(json.dumps(legacy, separators=(",", ":")).encode())
+
+    assert compact_bytes < legacy_bytes
 
 
 def test_invalid_xlsx_raises_typed_error():

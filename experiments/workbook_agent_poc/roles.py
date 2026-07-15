@@ -91,12 +91,17 @@ def reconcile(submitted_role: str, sc: dict[str, Any]) -> tuple[str, str, list[s
     cat = sc["category"]
 
     if cat == "formula":
-        if sf in ("derived", "output"):
-            # structure guarantees non-assumption; derived-vs-output is a semantic sub-choice -> keep LLM's
+        if sf in ("derived", "output", "series"):
+            # Formula presence is a calculation property, not a competing semantic role.
+            # Structure guarantees non-assumption; preserve the LLM's semantic sub-choice.
             return submitted_role, "validated", ev
         return sc["role"], "reclassified", ev + [f"submitted role '{submitted_role}' incompatible with a formula cell"]
 
     if cat == "external":
+        if sf == "series":
+            return submitted_role, "validated", ev + [
+                "external formula availability is validated independently from series semantics"
+            ]
         if sf == "external":
             return "formula_external", "validated", ev
         return "formula_external", "reclassified", ev + [f"external reference cannot be '{submitted_role}'"]

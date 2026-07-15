@@ -58,6 +58,16 @@ def test_formula_submitted_as_assumption_is_reclassified_out_of_assumption():
     assert family(role) != "assumption"
 
 
+def test_formula_financial_series_keeps_semantic_role():
+    c = Ctx("no_assumptions_sheet")
+
+    role, status, _ = c.reconcile("Summary", "C6", "financial_series")
+
+    assert status == "validated"
+    assert role == "financial_series"
+    assert family(role) == "series"
+
+
 def test_numeric_feeding_formulas_is_forced_input():
     c = Ctx("no_assumptions_sheet")
     role, status, _ = c.reconcile("Funding", "C3", "output")           # base capex feeds C5

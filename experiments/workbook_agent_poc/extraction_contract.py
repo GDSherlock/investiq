@@ -20,6 +20,43 @@ _SOURCE_REF = {
     "required": ["sheet_name", "cell"],
 }
 
+_FINANCIAL_SERIES = {
+    "type": "object",
+    "properties": {
+        "series_id": {"type": "string"},
+        "label": {"type": "string"},
+        "semantic_role": {"type": "string", "const": "financial_series"},
+        "category": {"type": ["string", "null"]},
+        "unit": {"type": ["string", "null"]},
+        "frequency": {"type": ["string", "null"]},
+        "scenario": {"type": ["string", "null"]},
+        "entity": {"type": ["string", "null"]},
+        "currency": {"type": ["string", "null"]},
+        "sheet_name": {
+            "type": ["string", "null"],
+            "description": "Required only when period_range or value_range omits a sheet name.",
+        },
+        "period_range": {
+            "type": "string",
+            "description": "Complete contiguous workbook range, preferably Revenue!C3:V3.",
+        },
+        "value_range": {
+            "type": "string",
+            "description": "Complete contiguous range aligned one-for-one with period_range.",
+        },
+        "label_reference": {
+            "type": ["string", "null"],
+            "description": "Optional workbook-qualified label cell, e.g. Revenue!B14.",
+        },
+        "reasoning_summary": {"type": ["string", "null"]},
+        "llm_confidence": {"type": ["number", "null"]},
+    },
+    "required": [
+        "series_id", "label", "semantic_role", "category", "unit", "frequency",
+        "period_range", "value_range",
+    ],
+}
+
 _CANDIDATE = {
     "type": "object",
     "properties": {
@@ -53,6 +90,7 @@ SUBMIT_RESULT_SCHEMA = {
         "derived_value_candidates": _LIST(),
         "output_candidates": _LIST(),
         "financial_series_candidates": _LIST(),
+        "financial_series": {"type": "array", "items": _FINANCIAL_SERIES},
         "scenario_structures": {"type": "array", "items": {"type": "object"}},
         "sensitivity_structures": {"type": "array", "items": {"type": "object"}},
         "unclassified_inputs": _LIST(),
@@ -113,6 +151,23 @@ SYSTEM_PROMPT = (
     "- hardcoded_input / scenario_input / parameter = editable inputs (no formula).\n"
     "- formula_derived_value = a cell that CONTAINS a formula (an intermediate); it is NOT an assumption.\n"
     "- formula_output / hardcoded_display_output = results; separate them from assumptions.\n"
+    "- For every canonical financial_series, identify the complete contiguous period range and the "
+    "complete contiguous value range. Never use a single representative cell or one selected year "
+    "when a complete row or column exists. Range references must include the sheet name unless the "
+    "descriptor supplies sheet_name explicitly, and both ranges must cover the same number of cells.\n"
+    "- Do not submit periods[] or values[]. Do not repeat formula counts or per-point source cells. "
+    "The backend will materialize period labels, values, source cells, calculation type, and formula "
+    "telemetry deterministically from period_range and value_range.\n"
+    "- Do not infer missing values, interpolate, shorten, or shift an axis. Duplicate displayed period "
+    "labels are allowed when their cell references differ.\n"
+    "- A formula-based row remains semantic_role=financial_series. Formula/hardcoded/mixed/blank is "
+    "an independent calculation_type, not a competing semantic role.\n"
+    "- Recognize horizontal rows and vertical columns with annual, quarterly, monthly, actual/forecast, "
+    "construction, or operating period labels without assuming sheet names, start columns, or year counts.\n"
+    "- Keep Base/Stress/Upside and other scenario tables in scenario_structures. Keep one-way/two-way "
+    "sensitivity matrices in sensitivity_structures; never flatten either into an ordinary time series.\n"
+    "- Where evidenced, attempt complete revenue, utilisation, throughput, tariff, capex, P&L, cash-flow, "
+    "debt balance/service, DSCR, covenant, and returns series; never create a listed series without ranges.\n"
     "- metadata/label/header = names, dates, titles; never an assumption.\n"
     "- Put each candidate in the correct bucket. Do not dump everything as an assumption.\n\n"
     "INTEGRITY RULES:\n"

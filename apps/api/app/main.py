@@ -40,14 +40,20 @@ class UUIDJSONResponse(JSONResponse):
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from .database import engine, Base
+from . import model_extraction_models  # noqa: F401
 from .routers import models, scenarios, debt_analysis, reports, alerts, audit, market_data, assistant, monitor
 from .routers import auth as auth_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create tables
-    Base.metadata.create_all(bind=engine)
+    # SQLite remains self-bootstrapping for local development and tests.
+    # Deployed PostgreSQL schemas are advanced explicitly through Alembic.
+    auto_create_schema = engine.url.get_backend_name() == "sqlite" or os.getenv(
+        "AUTO_CREATE_SCHEMA", "false"
+    ).lower() == "true"
+    if auto_create_schema:
+        Base.metadata.create_all(bind=engine)
     yield
     # Shutdown
 

@@ -77,7 +77,7 @@
 - Produces: Alembic head `20260715_0002` that creates only the five persistence tables.
 - Produces: SQLite connections with `PRAGMA foreign_keys=ON`.
 
-- [ ] **Step 1: Add RED schema tests**
+- [x] **Step 1: Add RED schema tests**
 
   Add tests that import the five new ORM classes, call `Base.metadata.create_all()` on isolated SQLite, and assert:
 
@@ -105,7 +105,7 @@
   test_alembic_upgrades_empty_sqlite_database_to_persistence_head
   ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run:
 
@@ -115,7 +115,7 @@
 
   Expected: collection fails because `model_extraction_models` and the Alembic configuration do not exist.
 
-- [ ] **Step 3: Add the migration dependency and portable ORM models**
+- [x] **Step 3: Add the migration dependency and portable ORM models**
 
   Pin `alembic==1.13.1` in `apps/api/requirements.txt`. Define the exact field matrix from design Section 10 with:
 
@@ -148,7 +148,7 @@
 
   Use `ON DELETE RESTRICT` from model version to workbook, `ON DELETE CASCADE` for canonical children, and `passive_deletes=True` relationships.
 
-- [ ] **Step 4: Add SQLite FK enforcement and metadata import**
+- [x] **Step 4: Add SQLite FK enforcement and metadata import**
 
   Register a SQLite connection listener in `database.py`:
 
@@ -163,11 +163,11 @@
 
   Import `model_extraction_models` in `main.py` before metadata creation. Keep `Base.metadata.create_all()` only when `USE_SQLITE=true` or `AUTO_CREATE_SCHEMA=true`; production PostgreSQL relies on Alembic.
 
-- [ ] **Step 5: Add Alembic baseline and additive revision**
+- [x] **Step 5: Add Alembic baseline and additive revision**
 
   Configure `env.py` with `target_metadata = Base.metadata`, `compare_type=True`, `render_as_batch` only for SQLite, and the runtime `DATABASE_URL`. Revision `20260715_0001` has empty `upgrade()`/`downgrade()`. Revision `20260715_0002` creates the five tables in FK order and drops them in reverse order.
 
-- [ ] **Step 6: Install the pinned dependency and verify GREEN**
+- [x] **Step 6: Install the pinned dependency and verify GREEN**
 
   Run:
 
@@ -178,7 +178,7 @@
 
   Expected: every schema/migration test passes on SQLite.
 
-- [ ] **Step 7: Commit Task 1**
+- [x] **Step 7: Commit Task 1**
 
   ```bash
   git add apps/api/requirements.txt apps/api/app/database.py apps/api/app/main.py apps/api/app/model_extraction_models.py apps/api/alembic.ini apps/api/alembic tests/model_extraction_test_support.py tests/test_model_extraction_persistence_schema.py
@@ -224,7 +224,7 @@
 - Produces: `WorkbookVersionRepository(session, storage).get_or_create(content_bytes, original_filename) -> WorkbookVersion`.
 - Produces: `WorkbookIntegrityError`, `WorkbookVersionNotFound`.
 
-- [ ] **Step 1: Add RED storage contract tests**
+- [x] **Step 1: Add RED storage contract tests**
 
   Add tests named:
 
@@ -241,7 +241,7 @@
 
   Use a real SQLite session and `WorkbookToolset` fixture bytes; do not mock the adapter.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run:
 
@@ -251,7 +251,7 @@
 
   Expected: import fails because the storage port and repository are absent.
 
-- [ ] **Step 3: Implement stable storage types and JSON-safe utility**
+- [x] **Step 3: Implement stable storage types and JSON-safe utility**
 
   In `model_extraction_types.py`, implement:
 
@@ -273,15 +273,15 @@
 
   Define typed errors without embedding workbook data in their messages.
 
-- [ ] **Step 4: Implement `DatabaseWorkbookStorage`**
+- [x] **Step 4: Implement `DatabaseWorkbookStorage`**
 
   `location_for()` returns `WorkbookStorageLocation("database", storage_key)`. The adapter resolves a pending or persisted `WorkbookVersion` by `(storage_type, storage_ref)`, is the only module that touches `content_bytes`, compares conflicting existing bytes, and verifies both size and SHA-256 on every load/reuse.
 
-- [ ] **Step 5: Implement workbook catalog dedupe**
+- [x] **Step 5: Implement workbook catalog dedupe**
 
   `WorkbookVersionRepository.get_or_create()` computes SHA-256 and `workbooks/sha256/<digest>.xlsx`, reuses an existing SHA row after adapter verification, or inserts a UUIDv4 catalog row and asks the adapter to supply bytes before flush. Catch a named SHA uniqueness race inside `session.begin_nested()`, reload the winner, and verify it.
 
-- [ ] **Step 6: Verify GREEN and regressions**
+- [x] **Step 6: Verify GREEN and regressions**
 
   Run:
 
@@ -289,7 +289,7 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_workbook_storage.py tests/test_model_extraction_persistence_schema.py -q
   ```
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
   ```bash
   git add apps/api/app/model_extraction_types.py apps/api/app/workbook_storage.py apps/api/app/model_extraction_repository.py tests/model_extraction_test_support.py tests/test_workbook_storage.py
@@ -311,7 +311,7 @@
 - Produces: `ModelExtractionRepository.create_model_version()`, `save_extraction_snapshot()`, `persist_canonical_model()`, `mark_status()`, and private `load_snapshot_for_retry()`.
 - Consumes canonical row dictionaries whose keys match the five ORM tables exactly.
 
-- [ ] **Step 1: Add RED ID and atomic-write tests**
+- [x] **Step 1: Add RED ID and atomic-write tests**
 
   Add tests named:
 
@@ -326,7 +326,7 @@
 
   Force a failure after parameters but before values and assert all three canonical tables remain empty.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run:
 
@@ -334,7 +334,7 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_model_extraction_persistence.py -q
   ```
 
-- [ ] **Step 3: Implement shared FinancialEntity identity**
+- [x] **Step 3: Implement shared FinancialEntity identity**
 
   Implement UUIDv5 keys exactly as:
 
@@ -346,11 +346,11 @@
 
   Define immutable `FinancialEntityRef(id, model_version_id, entity_kind, label)` and use checked kinds `parameter` and `financial_series`.
 
-- [ ] **Step 4: Implement lifecycle and canonical repository writes**
+- [x] **Step 4: Implement lifecycle and canonical repository writes**
 
   Repository methods accept a caller-owned session and call `flush()`, never `commit()`. `persist_canonical_model()` requires an `extracted` or `persistence_failed` model version with no canonical child rows, inserts deterministic IDs, validates expected counts, and sets `materialized` only after every row flushes. A failed flush is rolled back atomically, so persistence retry starts from the same empty canonical state and regenerates the same deterministic child IDs. Materialized rows are immutable and are never deleted or replaced. Snapshot access remains a private repository method with a leading underscore and is never included in DTO conversion.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
   Run:
 
@@ -358,7 +358,7 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_model_extraction_persistence.py tests/test_workbook_storage.py -q
   ```
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
   ```bash
   git add apps/api/app/model_extraction_types.py apps/api/app/model_extraction_repository.py tests/test_model_extraction_persistence.py
@@ -390,7 +390,7 @@
 
 - Produces: `ModelVersionNotFound`, `ModelVersionNotReady`, `ModelWorkbookMismatch`, `FinancialSeriesNotFound`, `InvalidCellAddress`, `AmbiguousSourceCellError`.
 
-- [ ] **Step 1: Add RED reload tests**
+- [x] **Step 1: Add RED reload tests**
 
   Add tests named:
 
@@ -408,7 +408,7 @@
   test_missing_canonical_row_never_falls_back_to_snapshot
   ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run:
 
@@ -416,15 +416,15 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_model_extraction_reload.py -q
   ```
 
-- [ ] **Step 3: Implement immutable DTOs and materialized-only reads**
+- [x] **Step 3: Implement immutable DTOs and materialized-only reads**
 
   Define frozen dataclasses for workbook/model/parameter/series/value and source resolutions. `ModelVersionData` includes only IDs, lifecycle/validation status, upload filename, submitted/stop metadata, and timestamps. It has no JSON evidence fields. All canonical reads first require `model_versions.status == "materialized"` unless an explicit internal diagnostic call sets `require_materialized=False`.
 
-- [ ] **Step 4: Implement strict source-cell resolution**
+- [x] **Step 4: Implement strict source-cell resolution**
 
   Validate uppercase A1 syntax, query parameter by exact `(model_version_id, sheet, cell)`, query value joined through series/model, return `None` for no mapping, and raise on cross-type ambiguity. A series-value resolution includes its parent `FinancialEntityRef(entity_kind="financial_series")` and point ID/index.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
   Run:
 
@@ -432,7 +432,7 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_model_extraction_reload.py tests/test_model_extraction_persistence.py -q
   ```
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
   ```bash
   git add apps/api/app/model_extraction_types.py apps/api/app/model_extraction_read_service.py tests/test_model_extraction_reload.py
@@ -467,7 +467,7 @@
 - Produces: `ModelExtractionPersistenceError`, `CanonicalSourceConflictError`, `PersistenceRetryNotAllowed`.
 - Consumes: unchanged `run_workbook_validation(file_bytes, filename) -> dict` output.
 
-- [ ] **Step 1: Add RED lifecycle tests**
+- [x] **Step 1: Add RED lifecycle tests**
 
   Add tests named:
 
@@ -489,7 +489,7 @@
 
   Use deterministic result payloads and a real `WorkbookToolset` fixture. Instrument the runner with a second session to prove T1 is committed before it executes.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run:
 
@@ -497,27 +497,27 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_model_extraction_lifecycle.py -q
   ```
 
-- [ ] **Step 3: Implement preparation and T1**
+- [x] **Step 3: Implement preparation and T1**
 
   Validate OOXML with `WorkbookToolset(file_bytes=file_bytes)` before persistence. T1 stores/reuses workbook bytes, creates UUIDv4 model version with `extracting/not_run`, commits, and leaves no transaction open around the runner.
 
-- [ ] **Step 4: Implement T2 audit/retry projection**
+- [x] **Step 4: Implement T2 audit/retry projection**
 
   On `submitted=false`, mark `extraction_failed` and return both IDs as `None`. On success, deep-convert the extraction result through `json_safe()`, recursively omit every `dependency_evidence` key, persist snapshot/telemetry/validation evidence, calculate aggregate validation status, set `extracted`, and commit. The private retry loader is the only canonicalization path that reads the snapshot.
 
-- [ ] **Step 5: Implement deterministic parameter canonicalization**
+- [x] **Step 5: Implement deterministic parameter canonicalization**
 
   Match validation results to source candidates by `(_bucket, candidate_id)`, accept only source-valid assumption/derived/selector families, group by exact sheet/A1 cell, prefer `parameter_candidates`, then `derived_value_candidates`, `unclassified_inputs`, `review_candidates`, `all_assumption_candidates`, and finally eligible reclassified `output_candidates`. Re-read each source fact from the durable workbook for exact formula/status/value. Raise `CanonicalSourceConflictError` when surviving validated roles or values disagree.
 
-- [ ] **Step 6: Implement deterministic series/value canonicalization and T3**
+- [x] **Step 6: Implement deterministic series/value canonicalization and T3**
 
   Consume only backend materialized `final_extraction.financial_series`. Generate series ID from normalized source/context, zip aligned period/value point dictionaries, parse qualified cell references, persist exact formula/cache/format/type fields, and require equal lengths. T3 writes parameters, series, and values atomically, verifies counts, sets `materialized`, and commits. A failure rolls T3 back and marks `persistence_failed` in a new short transaction.
 
-- [ ] **Step 7: Implement persistence-only retry**
+- [x] **Step 7: Implement persistence-only retry**
 
   Permit only `extracted` or `persistence_failed` rows with a private snapshot. Reload verified bytes, reconstruct the same deterministic rows, skip the LLM runner, and return existing IDs as a no-op for `materialized`.
 
-- [ ] **Step 8: Verify GREEN and focused regressions**
+- [x] **Step 8: Verify GREEN and focused regressions**
 
   Run:
 
@@ -525,7 +525,7 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_model_extraction_lifecycle.py tests/test_model_extraction_persistence.py tests/test_model_extraction_reload.py tests/test_workbook_validation.py experiments/workbook_agent_poc/tests/test_financial_series.py experiments/workbook_agent_poc/tests/test_validator.py -q
   ```
 
-- [ ] **Step 9: Commit Task 5**
+- [x] **Step 9: Commit Task 5**
 
   ```bash
   git add apps/api/app/model_extraction_service.py tests/model_extraction_test_support.py tests/test_model_extraction_lifecycle.py
@@ -550,7 +550,7 @@
 - Produces: sanitized `MODEL_EXTRACTION_PERSISTENCE_ERROR` response for persistence failures.
 - Produces: container startup command `alembic -c apps/api/alembic.ini upgrade head` before Uvicorn.
 
-- [ ] **Step 1: Add RED API contract tests**
+- [x] **Step 1: Add RED API contract tests**
 
   Update `REQUIRED_RESPONSE_FIELDS` with both IDs and add tests named:
 
@@ -565,7 +565,7 @@
 
   Override `get_db` with an isolated SQLite session factory. Pass a deterministic validation runner through a monkeypatched router symbol; do not make Azure calls.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
   Run:
 
@@ -573,7 +573,7 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_experimental_workbook_upload.py -q
   ```
 
-- [ ] **Step 3: Integrate the persistence service**
+- [x] **Step 3: Integrate the persistence service**
 
   Change the active route signature to:
 
@@ -591,7 +591,7 @@
 
   Preserve 400/415/422/500/502/503 mappings and add one sanitized persistence error mapping. Do not add auth, a public reload endpoint, or legacy side effects.
 
-- [ ] **Step 4: Add response IDs and container migration command**
+- [x] **Step 4: Add response IDs and container migration command**
 
   Add nullable Pydantic string fields. Update Docker CMD to run the pinned Alembic head before Uvicorn:
 
@@ -599,7 +599,7 @@
   CMD ["sh", "-c", "alembic -c apps/api/alembic.ini upgrade head && uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000"]
   ```
 
-- [ ] **Step 5: Verify GREEN and current adapter behavior**
+- [x] **Step 5: Verify GREEN and current adapter behavior**
 
   Run:
 
@@ -607,7 +607,7 @@
   '/Users/kingjason/PythonProject/KPMG Project/new-infra-proj/.venv_mac/bin/python3' -m pytest tests/test_experimental_workbook_upload.py tests/test_workbook_validation.py -q
   ```
 
-- [ ] **Step 6: Commit Task 6**
+- [x] **Step 6: Commit Task 6**
 
   ```bash
   git add apps/api/app/routers/models.py apps/api/app/schemas.py apps/api/Dockerfile tests/test_experimental_workbook_upload.py tests/test_workbook_validation.py
@@ -628,7 +628,7 @@
 - Consumes: `TEST_POSTGRES_URL` or the repository PostgreSQL Docker service.
 - Produces: execution evidence for SQLite, PostgreSQL, restart reload, rollback, API regression, and unchanged workbook-agent behavior.
 
-- [ ] **Step 1: Add PostgreSQL migration/transaction acceptance coverage**
+- [x] **Step 1: Add PostgreSQL migration/transaction acceptance coverage**
 
   Add `@pytest.mark.postgres` tests that use an isolated PostgreSQL test database and run Alembic to head before executing:
 
@@ -640,7 +640,7 @@
 
   Skip only when no explicit test database URL is available; local completion requires providing one and observing PASS.
 
-- [ ] **Step 2: Run the PostgreSQL acceptance suite and classify any dialect gaps**
+- [x] **Step 2: Run the PostgreSQL acceptance suite and classify any dialect gaps**
 
   Run with the isolated URL:
 
@@ -650,11 +650,11 @@
 
   Expected: tests either pass unchanged or expose a concrete dialect-specific DDL, transaction, or JSON serialization defect. Distinguish a test-environment failure from a product defect before changing production code. If the new tests pass immediately, record them as acceptance coverage and do not make an artificial production change.
 
-- [ ] **Step 3: Apply minimal cross-dialect fixes and verify GREEN**
+- [x] **Step 3: Apply minimal cross-dialect fixes and verify GREEN**
 
   Keep generic `Uuid(as_uuid=False)`, `JSON`, `LargeBinary`, named `CheckConstraint`, and `DateTime(timezone=True)`. Do not introduce PostgreSQL-only JSONB indexes or enums.
 
-- [ ] **Step 4: Run full verification**
+- [x] **Step 4: Run full verification**
 
   Run:
 
@@ -672,13 +672,23 @@
   no frontend, Calculation Rule Extraction, vector, legacy parser, or generated-result files changed
   ```
 
-- [ ] **Step 5: Mark this plan's completed checkboxes and commit verification-only changes**
+- [x] **Step 5: Mark this plan's completed checkboxes and commit verification-only changes**
 
   ```bash
   git add tests/test_model_extraction_persistence_schema.py tests/test_model_extraction_lifecycle.py docs/superpowers/plans/2026-07-15-model-extraction-persistence.md
   git diff --cached --check
   git commit -m "test: verify model extraction persistence"
   ```
+
+---
+
+## Execution Evidence
+
+- Baseline before implementation: `188 passed` across `tests` and `experiments/workbook_agent_poc/tests`.
+- Final SQLite/default suite: `244 passed, 3 skipped`; the three skips are the explicitly gated PostgreSQL tests when `TEST_POSTGRES_URL` is absent.
+- Isolated PostgreSQL 16 suite: `3 passed, 23 deselected` against `investiq_persistence_test`; Alembic upgrade, 2 MiB binary round-trip/dedupe, and T3 rollback all passed without dialect-specific production changes.
+- Boundary scans: no snapshot/validation telemetry reads in `ModelExtractionReadService`; no direct `WorkbookVersion.content_bytes` access outside `DatabaseWorkbookStorage`.
+- Scope audit: changed files are limited to backend persistence/API/migration code, tests, dependency/test configuration, and the approved design/implementation documents; no frontend or Calculation Rule Extraction files changed.
 
 ---
 

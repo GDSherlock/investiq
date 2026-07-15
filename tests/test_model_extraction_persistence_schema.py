@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import pytest
-from sqlalchemy import delete, inspect, select
+from sqlalchemy import create_engine, delete, inspect, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
@@ -258,4 +261,101 @@ def test_alembic_upgrades_empty_sqlite_database_to_persistence_head(tmp_path: Pa
             "financial_series_values",
         } <= set(inspect(engine).get_table_names())
     finally:
+        engine.dispose()
+
+
+def _isolated_postgres_url() -> str:
+    database_url = os.getenv("TEST_POSTGRES_URL")
+    if not database_url:
+        pytest.skip("TEST_POSTGRES_URL is required for PostgreSQL acceptance tests")
+    database_name = make_url(database_url).database or ""
+    if "test" not in database_name.lower():
+        pytest.fail("TEST_POSTGRES_URL must identify an isolated test database")
+    return database_url
+
+
+def _reset_postgres_persistence_schema(database_url: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            for table_name in (
+                "financial_series_values",
+                "financial_series",
+                "model_parameters",
+                "model_versions",
+                "workbook_versions",
+                "alembic_version",
+            ):
+                connection.exec_driver_sql(
+                    f'DROP TABLE IF EXISTS "{table_name}" CASCADE'
+                )
+    finally:
+        engine.dispose()
+
+
+def _upgrade_postgres_to_head(database_url: str) -> None:
+    from alembic import command
+    from alembic.config import Config
+
+    config_path = Path(__file__).parents[1] / "apps" / "api" / "alembic.ini"
+    config = Config(str(config_path))
+    config.set_main_option("sqlalchemy.url", database_url)
+    command.upgrade(config, "head")
+
+
+@pytest.mark.postgres
+def test_alembic_upgrades_postgres_database_to_persistence_head() -> None:
+    database_url = _isolated_postgres_url()
+    _reset_postgres_persistence_schema(database_url)
+
+    _upgrade_postgres_to_head(database_url)
+
+    engine = create_engine(database_url)
+    try:
+        assert {
+            "workbook_versions",
+            "model_versions",
+            "model_parameters",
+            "financial_series",
+            "financial_series_values",
+        } <= set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.postgres
+def test_postgres_large_binary_round_trip_and_sha_dedupe() -> None:
+    from apps.api.app.model_extraction_repository import WorkbookVersionRepository
+    from apps.api.app.workbook_storage import (
+        DatabaseWorkbookStorage,
+        WorkbookStorageLocation,
+    )
+
+    database_url = _isolated_postgres_url()
+    _reset_postgres_persistence_schema(database_url)
+    _upgrade_postgres_to_head(database_url)
+    engine = create_engine(database_url)
+    session_factory = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    session = session_factory()
+    try:
+        storage = DatabaseWorkbookStorage(session)
+        repository = WorkbookVersionRepository(session, storage)
+        content = b"large-workbook-payload" + (b"\x00\xff" * 1_048_576)
+
+        first = repository.get_or_create(content, "large-model.xlsx")
+        session.commit()
+        second = repository.get_or_create(content, "renamed-model.xlsx")
+        session.commit()
+
+        assert second.id == first.id
+        assert second.original_filename == "large-model.xlsx"
+        assert storage.load(
+            WorkbookStorageLocation(first.storage_type, first.storage_ref)
+        ) == content
+    finally:
+        session.close()
         engine.dispose()

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import os
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.engine import make_url
+from sqlalchemy.orm import sessionmaker
 
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
@@ -357,3 +360,62 @@ def test_already_materialized_retry_is_idempotent(lifecycle_context) -> None:
     )
     assert runner.calls == 1
     assert _count(session, ModelParameter) == 2
+
+
+@pytest.mark.postgres
+def test_postgres_t3_failure_rolls_back_every_canonical_child() -> None:
+    from alembic import command
+    from alembic.config import Config
+
+    database_url = os.getenv("TEST_POSTGRES_URL")
+    if not database_url:
+        pytest.skip("TEST_POSTGRES_URL is required for PostgreSQL acceptance tests")
+    database_name = make_url(database_url).database or ""
+    if "test" not in database_name.lower():
+        pytest.fail("TEST_POSTGRES_URL must identify an isolated test database")
+
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            for table_name in (
+                "financial_series_values",
+                "financial_series",
+                "model_parameters",
+                "model_versions",
+                "workbook_versions",
+                "alembic_version",
+            ):
+                connection.exec_driver_sql(
+                    f'DROP TABLE IF EXISTS "{table_name}" CASCADE'
+                )
+        config_path = Path(__file__).parents[1] / "apps" / "api" / "alembic.ini"
+        config = Config(str(config_path))
+        config.set_main_option("sqlalchemy.url", database_url)
+        command.upgrade(config, "head")
+
+        session_factory = sessionmaker(
+            bind=engine,
+            autoflush=False,
+            expire_on_commit=False,
+        )
+        session = session_factory()
+        try:
+            runner = RecordingRunner()
+            repository = FailOnceAfterCanonicalRepository(session)
+            service = ModelExtractionPersistenceService(
+                session,
+                validation_runner=runner,
+                repository=repository,
+            )
+
+            with pytest.raises(ModelExtractionPersistenceError):
+                service.process_upload(persistence_workbook_bytes(), "model.xlsx")
+
+            assert _count(session, ModelParameter) == 0
+            assert _count(session, FinancialSeries) == 0
+            assert _count(session, FinancialSeriesValue) == 0
+            assert session.scalar(select(ModelVersion.status)) == "persistence_failed"
+        finally:
+            session.close()
+    finally:
+        engine.dispose()

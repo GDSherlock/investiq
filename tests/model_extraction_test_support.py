@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
+from openpyxl import Workbook
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -17,6 +19,18 @@ def new_id() -> str:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def sample_workbook_bytes(value: float = 1.0) -> bytes:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Assumptions"
+    worksheet["A1"] = "Input"
+    worksheet["B1"] = value
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    return buffer.getvalue()
 
 
 def create_sqlite_session_factory(

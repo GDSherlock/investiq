@@ -34,6 +34,7 @@ from .workbook_storage import (
 from .workbook_validation import (
     InvalidWorkbookError,
     WorkbookToolset,
+    role_family,
     run_workbook_validation,
 )
 
@@ -361,12 +362,15 @@ def _canonicalize_parameters(
     id_factory = FinancialEntityIdFactory(model_version_id)
     rows: list[dict[str, Any]] = []
     for (sheet_name, submitted_cell), candidates in sorted(grouped.items()):
-        roles = {str(item[3].get("validated_role")) for item in candidates}
+        role_families = {
+            role_family(_optional_text(item[3].get("validated_role")))
+            for item in candidates
+        }
         values = {
             json.dumps(json_safe(item[3].get("validated_value")), sort_keys=True)
             for item in candidates
         }
-        if len(roles) > 1 or len(values) > 1:
+        if len(role_families) > 1 or len(values) > 1:
             raise CanonicalSourceConflictError(
                 f"Canonical candidates disagree at {sheet_name}!{submitted_cell}"
             )

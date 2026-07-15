@@ -302,6 +302,56 @@ def test_formula_derived_parameter_reloads_exact_formula_and_null_cache(
     assert derived.formula_status == "formula_no_cache"
 
 
+def test_same_source_assumption_family_candidates_use_bucket_priority(
+    lifecycle_context,
+) -> None:
+    _engine, _session_factory, session = lifecycle_context
+    result = deterministic_extraction_result()
+    parameter = result["final_extraction"]["parameter_candidates"][0]
+    parameter["submitted_role"] = "parameter"
+    validation = result["validation_results"][0]
+    validation["submitted_role"] = "parameter"
+    validation["validated_role"] = "parameter"
+    validation["role_validation_status"] = "validated_deferred"
+
+    assumption = deepcopy(parameter)
+    assumption["candidate_id"] = "tax-rate-assumption"
+    assumption["original_label"] = "Tax rate assumption"
+    assumption["submitted_role"] = "hardcoded_input"
+    result["final_extraction"]["all_assumption_candidates"] = [assumption]
+    result["validation_results"].append(
+        {
+            **deepcopy(validation),
+            "candidate_id": assumption["candidate_id"],
+            "_bucket": "all_assumption_candidates",
+            "submitted_role": "hardcoded_input",
+            "validated_role": "hardcoded_input",
+        }
+    )
+
+    service = ModelExtractionPersistenceService(
+        session,
+        validation_runner=RecordingRunner(result),
+    )
+
+    response = service.process_upload(persistence_workbook_bytes(), "model.xlsx")
+
+    parameters = session.scalars(
+        select(ModelParameter).where(
+            ModelParameter.model_version_id == response["model_version_id"]
+        )
+    ).all()
+    assert len(parameters) == 2
+    tax_rate = next(
+        item
+        for item in parameters
+        if item.source_sheet == "Assumptions" and item.source_cell == "B4"
+    )
+    assert tax_rate.source_bucket == "parameter_candidates"
+    assert tax_rate.llm_candidate_alias == "tax-rate"
+    assert tax_rate.validated_role == "parameter"
+
+
 def test_t3_failure_rolls_back_children_and_marks_persistence_failed(
     lifecycle_context,
 ) -> None:

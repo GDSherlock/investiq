@@ -25,6 +25,7 @@ if str(_POC_DIR) not in sys.path:
 
 from agent_loop import AzureDriver, run_loop  # noqa: E402
 from coverage_gate import HardCaps  # noqa: E402
+from roles import family as role_family  # noqa: E402
 from validator import validate_extraction  # noqa: E402
 from workbook_tools import WorkbookToolset  # noqa: E402
 from time_series import materialize_financial_series  # noqa: E402

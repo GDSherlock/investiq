@@ -139,6 +139,50 @@ class CalculationRequest(_CalculationDTO):
         return self
 
 
+class CalculationErrorDetail(_CalculationDTO):
+    code: str
+    message: str
+    retryable: bool
+    resource_id: UUIDString | None = None
+
+
+class CalculationReadinessVersions(_CalculationDTO):
+    phase1_ir: str
+    phase2_ir: str
+    compiler: str
+    engine: str
+    registry: str
+    semantics: str
+
+
+class CalculationReadinessSummary(_CalculationDTO):
+    formula_cells_total: int = 0
+    formula_cells_supported: int = 0
+    graph_nodes: int = 0
+    graph_edges: int = 0
+
+
+class CalculationReadinessResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    workbook_version_id: UUIDString
+    model_status: str
+    validation_status: str
+    status: Literal[
+        "model_not_ready",
+        "not_prepared",
+        "preparing",
+        "ready",
+        "ready_with_warning",
+        "failed",
+    ]
+    calculation_rule_extraction_id: UUIDString | None = None
+    graph_version_id: UUIDString | None = None
+    versions: CalculationReadinessVersions
+    summary: CalculationReadinessSummary
+    warnings: list[str] = Field(default_factory=list)
+    error: CalculationErrorDetail | None = None
+
+
 # --- Model schemas ---
 class ModelUploadResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

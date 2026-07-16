@@ -7,8 +7,18 @@ from pathlib import Path
 import uuid
 
 import pytest
+from sqlalchemy import func, select
 
-from apps.api.app.calculation_rules.models import CalculationRuleExtraction
+from apps.api.app.calculation_rules.models import (
+    CalculationRuleExtraction,
+    ExecutableFormulaRule,
+    WorkbookFormulaCellRecord,
+)
+from apps.api.app.calculation_rules.phase2_models import (
+    CalculationGraphVersionRecord,
+    CalculationRunRecord,
+    CalculationRunValueRecord,
+)
 from apps.api.app.calculation_rules.phase2_repository import Phase2CalculationRepository
 from apps.api.app.calculation_rules.phase2_service import InternalCalculationEngineService
 from apps.api.app.calculation_rules.phase2_types import Phase2CalculationConfiguration
@@ -226,3 +236,125 @@ def test_fresh_session_reloads_persisted_graph_metadata(integration_context) -> 
     assert graph.compiler_version == "formula-compiler-v2"
     assert graph.function_registry_version == "calc-functions-v2"
     assert graph.semantics_profile == "excel-compatible-v2"
+
+
+def _calculation_artifact_counts(session) -> tuple[int, ...]:
+    return tuple(
+        session.scalar(select(func.count()).select_from(table))
+        for table in (
+            CalculationRuleExtraction,
+            WorkbookFormulaCellRecord,
+            ExecutableFormulaRule,
+            CalculationGraphVersionRecord,
+            CalculationRunRecord,
+            CalculationRunValueRecord,
+        )
+    )
+
+
+def _add_phase1_state(context, status: str) -> str:
+    configuration = CalculationRuleExtractionConfiguration()
+    extraction_id = FormulaIdFactory.extraction_id(
+        context["model"].id,
+        context["workbook"].id,
+        configuration,
+    )
+    context["session"].add(
+        CalculationRuleExtraction(
+            id=extraction_id,
+            workbook_version_id=context["workbook"].id,
+            model_version_id=context["model"].id,
+            inventory_version=configuration.inventory_version,
+            compiler_version=configuration.compiler_version,
+            ir_version=configuration.ir_version,
+            engine_version=configuration.engine_version,
+            function_registry_version=configuration.function_registry_version,
+            semantics_profile=configuration.semantics_profile,
+            configuration_hash=configuration.configuration_hash,
+            status=status,
+            summary_json={
+                "formula_cells_total": 10,
+                "formula_cells_executable": 8,
+            },
+            warnings_json=(
+                ["unsupported_formula_cells"]
+                if status == "completed_with_warning"
+                else []
+            ),
+            error_code="CALCULATION_RULE_EXTRACTION_FAILED"
+            if status == "failed"
+            else None,
+            error_message="Calculation rule extraction failed"
+            if status == "failed"
+            else None,
+        )
+    )
+    context["session"].commit()
+    return extraction_id
+
+
+@pytest.mark.parametrize(
+    ("phase1_status", "with_graph", "expected_status"),
+    [
+        ("non_materialized", False, "model_not_ready"),
+        (None, False, "not_prepared"),
+        ("running", False, "preparing"),
+        ("failed", False, "failed"),
+        ("completed", False, "not_prepared"),
+        ("completed", True, "ready"),
+        ("completed_with_warning", True, "ready_with_warning"),
+    ],
+)
+def test_readiness_maps_persisted_state_without_creating_artifacts(
+    integration_context,
+    phase1_status: str | None,
+    with_graph: bool,
+    expected_status: str,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    model = context["model"]
+    extraction_id = None
+    if phase1_status == "non_materialized":
+        model.status = "extracted"
+        context["session"].commit()
+    elif phase1_status is not None:
+        extraction_id = _add_phase1_state(context, phase1_status)
+    if with_graph:
+        InternalCalculationEngineService(
+            context["session"],
+            context["read_service"],
+        ).compile_workbook(context["workbook"].id)
+
+    before = _calculation_artifact_counts(context["session"])
+    readiness = CalculationIntegrationService(
+        context["session"],
+        context["read_service"],
+    ).get_readiness(model.id)
+    after = _calculation_artifact_counts(context["session"])
+
+    assert readiness.model_version_id == model.id
+    assert readiness.workbook_version_id == context["workbook"].id
+    assert readiness.model_status == model.status
+    assert readiness.status == expected_status
+    assert readiness.calculation_rule_extraction_id == extraction_id
+    assert readiness.graph_version_id is not None if with_graph else (
+        readiness.graph_version_id is None
+    )
+    assert readiness.versions.phase1_ir == "calc-ir-v1"
+    assert readiness.versions.phase2_ir == "calc-ir-v2"
+    assert readiness.versions.compiler == "formula-compiler-v2"
+    assert readiness.versions.engine == "calc-engine-v2"
+    assert readiness.versions.registry == "calc-functions-v2"
+    assert readiness.versions.semantics == "excel-compatible-v2"
+    if with_graph:
+        assert readiness.summary.graph_nodes == 10
+    if phase1_status == "failed":
+        assert readiness.error is not None
+        assert readiness.error.code == "CALCULATION_PREPARATION_FAILED"
+    else:
+        assert readiness.error is None
+    assert after == before

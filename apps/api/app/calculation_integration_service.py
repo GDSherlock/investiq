@@ -2,18 +2,26 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
+from pydantic import TypeAdapter
 from sqlalchemy.orm import Session
 
 from .calculation_rules.phase2_repository import Phase2CalculationRepository
 from .calculation_rules.phase2_service import InternalCalculationEngineService
-from .calculation_rules.phase2_types import Phase2CalculationConfiguration
+from .calculation_rules.phase2_types import (
+    CalculationOverride,
+    Phase2CalculationConfiguration,
+)
 from .calculation_rules.repository import CalculationRuleRepository
 from .calculation_rules.service import CalculationRuleExtractionService
 from .calculation_rules.types import CalculationRuleExtractionConfiguration
 from .model_extraction_read_service import ModelExtractionReadService
 from .model_extraction_types import (
+    FinancialSeriesValueNotFound,
     ModelVersionNotFound,
     ModelVersionNotReady,
+    ParameterNotFound,
     WorkbookIntegrityError,
 )
 from .schemas import (
@@ -24,11 +32,20 @@ from .schemas import (
     CalculationInputItem,
     CalculationInputsResponse,
     CalculationNumberValue,
+    CalculationOutputValue,
+    CalculationRequest,
     CalculationReadinessResponse,
     CalculationReadinessSummary,
     CalculationReadinessVersions,
+    CalculationRunResponse,
+    CalculationRunSummary,
+    CalculationRunValueResponse,
+    CalculationRunVersions,
     CalculationTextValue,
 )
+
+
+_OUTPUT_VALUE_ADAPTER = TypeAdapter(CalculationOutputValue)
 
 
 class CalculationIntegrationError(RuntimeError):
@@ -262,6 +279,236 @@ class CalculationIntegrationService:
             next_cursor=(page[-1].target_id if has_more and page else None),
         )
 
+    def calculate(
+        self,
+        model_version_id: str,
+        request: CalculationRequest,
+    ) -> CalculationRunResponse:
+        readiness = self.get_readiness(model_version_id)
+        if readiness.status == "model_not_ready":
+            raise CalculationIntegrationError(
+                "MODEL_NOT_MATERIALIZED",
+                "Model version is not canonically materialized.",
+                status_code=409,
+                resource_id=model_version_id,
+            )
+        if readiness.status not in {"ready", "ready_with_warning"}:
+            raise CalculationIntegrationError(
+                "CALCULATION_NOT_PREPARED",
+                "Calculation preparation is not complete.",
+                status_code=409,
+                resource_id=model_version_id,
+            )
+        if request.graph_version_id != readiness.graph_version_id:
+            raise CalculationIntegrationError(
+                "GRAPH_VERSION_MISMATCH",
+                "Requested graph version is not current for the model.",
+                status_code=409,
+                resource_id=request.graph_version_id,
+            )
+        identities = [override.target.identity for override in request.overrides]
+        if len(identities) != len(set(identities)):
+            raise CalculationIntegrationError(
+                "DUPLICATE_OVERRIDE_TARGET",
+                "More than one override targets the same canonical input.",
+                status_code=422,
+                resource_id=model_version_id,
+            )
+
+        try:
+            overrides = tuple(
+                self._internal_override(model_version_id, override)
+                for override in request.overrides
+            )
+        except (ParameterNotFound, FinancialSeriesValueNotFound) as exc:
+            raise CalculationIntegrationError(
+                "INVALID_OVERRIDE_TARGET",
+                "Override target was not found in the model version.",
+                status_code=422,
+                resource_id=model_version_id,
+            ) from exc
+
+        except CalculationIntegrationError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise CalculationIntegrationError(
+                "INVALID_OVERRIDE_VALUE",
+                "Override value is not valid for deterministic calculation.",
+                status_code=422,
+                resource_id=model_version_id,
+            ) from exc
+
+        try:
+            result = self._phase2_service.calculate_model(
+                model_version_id=model_version_id,
+                graph_version_id=request.graph_version_id,
+                overrides=overrides,
+                idempotency_key=request.idempotency_key,
+            )
+            graph = self._phase2_repository.load_graph_metadata(
+                result.graph_version_id
+            )
+            if graph is None:
+                raise ValueError("Persisted graph metadata was not found")
+            return self._run_response(result, graph)
+        except CalculationIntegrationError:
+            raise
+        except Exception as exc:
+            raise CalculationIntegrationError(
+                "CALCULATION_FAILED",
+                "Deterministic calculation failed.",
+                status_code=500,
+                resource_id=model_version_id,
+            ) from exc
+
+    def get_run(self, calculation_run_id: str) -> CalculationRunResponse:
+        try:
+            bundle = self._phase2_repository.load_run_bundle(calculation_run_id)
+            if bundle is None:
+                raise CalculationIntegrationError(
+                    "CALCULATION_RUN_NOT_FOUND",
+                    "Calculation run was not found.",
+                    status_code=404,
+                    resource_id=calculation_run_id,
+                )
+            return self._persisted_run_response(bundle.run, bundle.graph)
+        except CalculationIntegrationError:
+            raise
+        except Exception as exc:
+            raise CalculationIntegrationError(
+                "CALCULATION_RUN_RELOAD_FAILED",
+                "Persisted calculation run could not be reloaded.",
+                status_code=500,
+                resource_id=calculation_run_id,
+            ) from exc
+
+    def _internal_override(self, model_version_id: str, override) -> CalculationOverride:
+        target = override.target
+        if target.kind == "parameter":
+            target_id = target.parameter_id
+        else:
+            target_id = target.financial_series_value_id
+        candidate = self._read_service.get_calculation_input(
+            model_version_id,
+            target.kind,
+            target_id,
+        )
+        if not candidate.editable:
+            if candidate.non_editable_reason == "formula_backed":
+                raise CalculationIntegrationError(
+                    "FORMULA_OVERRIDE_FORBIDDEN",
+                    "Formula-backed canonical inputs cannot be overridden.",
+                    status_code=422,
+                    resource_id=target_id,
+                )
+            raise CalculationIntegrationError(
+                "INVALID_OVERRIDE_TARGET",
+                "Canonical input is not editable.",
+                status_code=422,
+                resource_id=target_id,
+            )
+        value_type = override.value.value_type
+        value = override.value.value
+        if value_type == "number":
+            value = _normalized_decimal_string(value)
+        if target.kind == "parameter":
+            return CalculationOverride(
+                target_kind="parameter",
+                target_id=target_id,
+                sheet_name=None,
+                cell_address=None,
+                value_type=value_type,
+                value=value,
+            )
+        return CalculationOverride(
+            target_kind="cell",
+            target_id=None,
+            sheet_name=candidate.source_sheet,
+            cell_address=candidate.source_cell,
+            value_type=value_type,
+            value=value,
+        )
+
+    @staticmethod
+    def _run_response(result, graph) -> CalculationRunResponse:
+        values = []
+        for cell in result.cells:
+            value = (
+                _OUTPUT_VALUE_ADAPTER.validate_python(cell.value.to_json())
+                if cell.value is not None
+                else None
+            )
+            values.append(
+                CalculationRunValueResponse(
+                    formula_cell_id=cell.formula_cell_id,
+                    sheet_name=cell.sheet_name,
+                    cell_address=cell.cell_address,
+                    status=cell.status,
+                    value=value,
+                    engine_error_code=cell.engine_error_code,
+                    reused_from_run_id=cell.reused_from_run_id,
+                    validation_status=cell.validation_status,
+                    warnings=list(cell.warnings),
+                )
+            )
+        return CalculationRunResponse(
+            calculation_run_id=result.calculation_run_id,
+            model_version_id=result.model_version_id,
+            graph_version_id=result.graph_version_id,
+            base_run_id=result.base_run_id,
+            status=result.status,
+            versions=CalculationRunVersions(
+                phase2_ir=graph.ir_version,
+                compiler=graph.compiler_version,
+                engine=result.engine_version,
+                registry=result.function_registry_version,
+                semantics=result.semantics_profile,
+            ),
+            summary=CalculationRunSummary.model_validate(dict(result.summary)),
+            warnings=list(result.warnings),
+            values=values,
+        )
+
+    @staticmethod
+    def _persisted_run_response(run, graph) -> CalculationRunResponse:
+        values = []
+        for persisted in run.values:
+            value = (
+                _OUTPUT_VALUE_ADAPTER.validate_python(persisted.value.to_json())
+                if persisted.value is not None
+                else None
+            )
+            values.append(
+                CalculationRunValueResponse(
+                    formula_cell_id=persisted.formula_cell_id,
+                    sheet_name=persisted.sheet_name,
+                    cell_address=persisted.cell_address,
+                    status=persisted.execution_status,
+                    value=value,
+                    engine_error_code=persisted.engine_error_code,
+                    reused_from_run_id=persisted.reused_from_run_id,
+                    validation_status=persisted.validation_status,
+                    warnings=list(persisted.warnings),
+                )
+            )
+        return CalculationRunResponse(
+            calculation_run_id=run.calculation_run_id,
+            model_version_id=run.model_version_id,
+            graph_version_id=run.graph_version_id,
+            base_run_id=run.base_run_id,
+            status=run.status,
+            versions=CalculationRunVersions(
+                phase2_ir=graph.ir_version,
+                compiler=graph.compiler_version,
+                engine=run.engine_version,
+                registry=run.function_registry_version,
+                semantics=run.semantics_profile,
+            ),
+            summary=CalculationRunSummary.model_validate(dict(run.summary)),
+            warnings=list(run.warnings),
+            values=values,
+        )
+
     @staticmethod
     def _input_item(candidate) -> CalculationInputItem:
         value_type = candidate.value_type
@@ -350,3 +597,11 @@ class CalculationIntegrationService:
             warnings=list(phase1.warnings if phase1 is not None else ()),
             error=error,
         )
+
+
+def _normalized_decimal_string(value: str) -> str:
+    decimal_value = Decimal(value)
+    normalized = format(decimal_value, "f")
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+    return "0" if normalized in {"", "-0"} else normalized

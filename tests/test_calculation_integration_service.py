@@ -46,6 +46,7 @@ from tests.model_extraction_test_support import (
     create_sqlite_session_factory,
     sqlite_file_url,
 )
+from apps.api.app.workbook_storage import DatabaseWorkbookStorage
 
 
 @pytest.fixture
@@ -733,3 +734,426 @@ def test_list_inputs_rejects_unknown_target_kind(integration_context) -> None:
 
     assert captured.value.code == "INVALID_INPUT_KIND"
     assert captured.value.status_code == 422
+
+
+def _calculation_request(
+    graph_version_id: str,
+    *overrides: dict[str, object],
+):
+    from apps.api.app.schemas import CalculationRequest
+
+    return CalculationRequest.model_validate(
+        {
+            "graph_version_id": graph_version_id,
+            "overrides": list(overrides),
+            "idempotency_key": None,
+        }
+    )
+
+
+def _run_row_counts(session) -> tuple[int, int]:
+    return (
+        session.scalar(select(func.count()).select_from(CalculationRunRecord)),
+        session.scalar(select(func.count()).select_from(CalculationRunValueRecord)),
+    )
+
+
+def test_baseline_calculation_replay_is_idempotent_and_canonical_is_immutable(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    request = _calculation_request(prepared.graph_version_id)
+    canonical_before = _canonical_fingerprint(
+        context["session"], context["model"].id
+    )
+
+    first = facade.calculate(context["model"].id, request)
+    counts_before_replay = _run_row_counts(context["session"])
+    second = facade.calculate(context["model"].id, request)
+    counts_after_replay = _run_row_counts(context["session"])
+
+    assert first.calculation_run_id == second.calculation_run_id
+    assert first.graph_version_id == prepared.graph_version_id
+    assert first.base_run_id is None
+    assert first.status == "completed_with_warning"
+    assert first.summary.calculated_formula_cells == 7
+    assert first.summary.reused_formula_cells == 0
+    assert first.summary.dirty_formula_cells == 7
+    assert counts_before_replay == counts_after_replay == (1, 10)
+    values = {f"{item.sheet_name}!{item.cell_address}": item for item in first.values}
+    assert values["Calc!B2"].value.value_type == "number"
+    assert values["Calc!B2"].value.value == "10"
+    assert _canonical_fingerprint(
+        context["session"], context["model"].id
+    ) == canonical_before
+
+
+def test_parameter_override_creates_distinct_immutable_incremental_run(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    canonical_before = _canonical_fingerprint(
+        context["session"], context["model"].id
+    )
+    request = _calculation_request(
+        prepared.graph_version_id,
+        {
+            "target": {
+                "kind": "parameter",
+                "parameter_id": context["parameter"].id,
+            },
+            "value": {"value_type": "number", "value": "10"},
+        },
+    )
+
+    changed = facade.calculate(context["model"].id, request)
+    replayed = facade.calculate(context["model"].id, request)
+
+    assert changed.calculation_run_id != baseline.calculation_run_id
+    assert replayed.calculation_run_id == changed.calculation_run_id
+    assert changed.base_run_id == baseline.calculation_run_id
+    assert changed.summary.calculated_formula_cells == 5
+    assert changed.summary.reused_formula_cells == 2
+    assert changed.summary.dirty_formula_cells == 5
+    values = {f"{item.sheet_name}!{item.cell_address}": item for item in changed.values}
+    assert values["Calc!B2"].value.value == "26"
+    assert _run_row_counts(context["session"]) == (2, 20)
+    assert _canonical_fingerprint(
+        context["session"], context["model"].id
+    ) == canonical_before
+
+
+def test_financial_series_value_override_resolves_trusted_canonical_cell(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    value = context["series_value"]
+    value.value_json = 3
+    value.value_source_sheet = "Inputs"
+    value.value_source_cell = "A2"
+    value.exact_formula = None
+    value.formula_status = "static_value"
+    value.cached_value_available = True
+    value.cached_value_freshness = "unknown"
+    value.data_type = "n"
+    context["session"].commit()
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    canonical_before = _canonical_fingerprint(
+        context["session"], context["model"].id
+    )
+
+    result = facade.calculate(
+        context["model"].id,
+        _calculation_request(
+            prepared.graph_version_id,
+            {
+                "target": {
+                    "kind": "financial_series_value",
+                    "financial_series_value_id": value.id,
+                },
+                "value": {"value_type": "number", "value": "7"},
+            },
+        ),
+    )
+
+    values = {f"{item.sheet_name}!{item.cell_address}": item for item in result.values}
+    assert values["Calc!B2"].value.value == "18"
+    persisted = context["session"].get(CalculationRunRecord, result.calculation_run_id)
+    assert persisted.overrides_json[0]["target_kind"] == "cell"
+    assert persisted.overrides_json[0]["sheet_name"] == "Inputs"
+    assert persisted.overrides_json[0]["cell_address"] == "A2"
+    assert _canonical_fingerprint(
+        context["session"], context["model"].id
+    ) == canonical_before
+
+
+def test_calculation_rejects_wrong_model_and_formula_backed_targets(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    other_parameter_id = FinancialEntityIdFactory(
+        context["other_model"].id
+    ).parameter_id("Inputs", "A2")
+    context["session"].add(
+        ModelParameter(
+            id=other_parameter_id,
+            model_version_id=context["other_model"].id,
+            entity_kind="parameter",
+            source_bucket="parameter_candidates",
+            label="Other model input",
+            submitted_role="hardcoded_input",
+            validated_role="hardcoded_input",
+            raw_value_json=3,
+            validated_value_json=3,
+            source_sheet="Inputs",
+            source_cell="A2",
+            formula_status="static_value",
+            source_validation_status="validated",
+            role_validation_status="validated",
+            validation_status="validated",
+            data_type="n",
+            number_format="General",
+        )
+    )
+    context["session"].commit()
+
+    with pytest.raises(CalculationIntegrationError) as wrong_model:
+        facade.calculate(
+            context["model"].id,
+            _calculation_request(
+                prepared.graph_version_id,
+                {
+                    "target": {
+                        "kind": "parameter",
+                        "parameter_id": other_parameter_id,
+                    },
+                    "value": {"value_type": "number", "value": "4"},
+                },
+            ),
+        )
+    with pytest.raises(CalculationIntegrationError) as formula_backed:
+        facade.calculate(
+            context["model"].id,
+            _calculation_request(
+                prepared.graph_version_id,
+                {
+                    "target": {
+                        "kind": "financial_series_value",
+                        "financial_series_value_id": context["series_value"].id,
+                    },
+                    "value": {"value_type": "number", "value": "4"},
+                },
+            ),
+        )
+
+    assert wrong_model.value.code == "INVALID_OVERRIDE_TARGET"
+    assert formula_backed.value.code == "FORMULA_OVERRIDE_FORBIDDEN"
+    assert _run_row_counts(context["session"]) == (0, 0)
+
+
+def test_calculation_rejects_duplicate_target_and_graph_mismatch(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+    from apps.api.app.schemas import CalculationOverrideRequest, CalculationRequest
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    override = CalculationOverrideRequest.model_validate(
+        {
+            "target": {
+                "kind": "parameter",
+                "parameter_id": context["parameter"].id,
+            },
+            "value": {"value_type": "number", "value": "5"},
+        }
+    )
+    duplicate_request = CalculationRequest.model_construct(
+        graph_version_id=prepared.graph_version_id,
+        overrides=[override, override],
+        idempotency_key=None,
+    )
+
+    with pytest.raises(CalculationIntegrationError) as duplicate:
+        facade.calculate(context["model"].id, duplicate_request)
+    with pytest.raises(CalculationIntegrationError) as mismatch:
+        facade.calculate(
+            context["model"].id,
+            _calculation_request(str(uuid.uuid4())),
+        )
+
+    assert duplicate.value.code == "DUPLICATE_OVERRIDE_TARGET"
+    assert mismatch.value.code == "GRAPH_VERSION_MISMATCH"
+    assert _run_row_counts(context["session"]) == (0, 0)
+
+
+class _CalculationMustNotRun:
+    def calculate_model(self, *_args, **_kwargs):
+        raise AssertionError("GET run must not execute calculation")
+
+    def compile_workbook(self, *_args, **_kwargs):
+        raise AssertionError("GET run must not compile calculation")
+
+
+def test_fresh_session_reloads_completed_baseline_and_override_without_rerun(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    override = facade.calculate(
+        context["model"].id,
+        _calculation_request(
+            prepared.graph_version_id,
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter"].id,
+                },
+                "value": {"value_type": "number", "value": "10"},
+            },
+        ),
+    )
+    expected = {
+        baseline.calculation_run_id: baseline.model_dump(mode="json"),
+        override.calculation_run_id: override.model_dump(mode="json"),
+    }
+    context["session"].close()
+
+    restarted = context["session_factory"]()
+    try:
+        before = _calculation_artifact_counts(restarted)
+        reloaded_facade = CalculationIntegrationService(
+            restarted,
+            ModelExtractionReadService(
+                restarted,
+                DatabaseWorkbookStorage(restarted),
+            ),
+            phase2_service=_CalculationMustNotRun(),
+        )
+        reloaded = {
+            run_id: reloaded_facade.get_run(run_id).model_dump(mode="json")
+            for run_id in expected
+        }
+        after = _calculation_artifact_counts(restarted)
+    finally:
+        restarted.close()
+
+    assert reloaded == expected
+    assert after == before
+    assert reloaded[baseline.calculation_run_id]["versions"] == {
+        "phase2_ir": "calc-ir-v2",
+        "compiler": "formula-compiler-v2",
+        "engine": "calc-engine-v2",
+        "registry": "calc-functions-v2",
+        "semantics": "excel-compatible-v2",
+    }
+
+
+def test_persisted_running_and_failed_runs_reload_without_values(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    run_id = str(uuid.uuid4())
+    repository = Phase2CalculationRepository(context["session"])
+    repository.start_run(
+        run_id,
+        context["model"].id,
+        prepared.graph_version_id,
+        Phase2CalculationConfiguration(),
+        normalized_override_hash="a" * 64,
+        run_policy_hash="b" * 64,
+        overrides=(),
+        run_policy={"iteration_enabled": False},
+    )
+    context["session"].commit()
+    counts_before = _run_row_counts(context["session"])
+
+    running = facade.get_run(run_id)
+    repository.mark_failed(run_id, "CALCULATION_ENGINE_V2_FAILED", "sanitized")
+    context["session"].commit()
+    failed = facade.get_run(run_id)
+
+    assert running.status == "running"
+    assert running.values == []
+    assert running.summary.calculated_formula_cells == 0
+    assert failed.status == "failed"
+    assert failed.values == []
+    assert failed.graph_version_id == prepared.graph_version_id
+    assert failed.versions.compiler == "formula-compiler-v2"
+    assert _run_row_counts(context["session"]) == counts_before
+
+
+def test_get_run_has_stable_not_found_and_reload_failure_errors(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+
+    with pytest.raises(CalculationIntegrationError) as not_found:
+        facade.get_run(str(uuid.uuid4()))
+
+    assert not_found.value.code == "CALCULATION_RUN_NOT_FOUND"
+    assert not_found.value.status_code == 404
+
+    class _BrokenRunRepository:
+        def load_run(self, _run_id):
+            raise RuntimeError("database details must be sanitized")
+
+    facade._phase2_repository = _BrokenRunRepository()
+    with pytest.raises(CalculationIntegrationError) as reload_failed:
+        facade.get_run(str(uuid.uuid4()))
+
+    assert reload_failed.value.code == "CALCULATION_RUN_RELOAD_FAILED"
+    assert reload_failed.value.status_code == 500

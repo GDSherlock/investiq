@@ -203,6 +203,82 @@ class CalculationInputsResponse(_CalculationDTO):
     next_cursor: UUIDString | None = None
 
 
+class CalculationDateSerialValue(_CalculationDTO):
+    value_type: Literal["date_serial"]
+    value: StrictStr
+    iso_evidence: str | None = None
+
+
+class CalculationErrorValue(_CalculationDTO):
+    value_type: Literal["error"]
+    error_code: str
+
+
+CalculationOutputValue = Annotated[
+    CalculationNumberValue
+    | CalculationBooleanValue
+    | CalculationTextValue
+    | CalculationBlankValue
+    | CalculationDateSerialValue
+    | CalculationErrorValue,
+    Field(discriminator="value_type"),
+]
+
+
+class CalculationRunSummary(_CalculationDTO):
+    formula_cells_total: int = 0
+    formula_cells_supported: int = 0
+    unsupported_formula_cells: int = 0
+    calculated_formula_cells: int = 0
+    reused_formula_cells: int = 0
+    dirty_formula_cells: int = 0
+    cycle_formula_cells: int = 0
+    blocked_formula_cells: int = 0
+    execution_error_cells: int = 0
+    grouped_calculation_rules: int = 0
+    graph_nodes: int = 0
+    graph_edges: int = 0
+
+
+class CalculationRunVersions(_CalculationDTO):
+    phase2_ir: str
+    compiler: str
+    engine: str
+    registry: str
+    semantics: str
+
+
+class CalculationRunValueResponse(_CalculationDTO):
+    formula_cell_id: UUIDString
+    sheet_name: str
+    cell_address: str
+    status: str
+    value: CalculationOutputValue | None
+    engine_error_code: str | None = None
+    reused_from_run_id: UUIDString | None = None
+    validation_status: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalculationRunResponse(_CalculationDTO):
+    calculation_run_id: UUIDString
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    base_run_id: UUIDString | None = None
+    status: Literal[
+        "pending",
+        "running",
+        "completed",
+        "completed_with_warning",
+        "failed",
+        "cancelled",
+    ]
+    versions: CalculationRunVersions
+    summary: CalculationRunSummary
+    warnings: list[str] = Field(default_factory=list)
+    values: list[CalculationRunValueResponse] = Field(default_factory=list)
+
+
 # --- Model schemas ---
 class ModelUploadResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

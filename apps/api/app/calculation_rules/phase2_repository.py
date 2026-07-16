@@ -97,6 +97,12 @@ class PersistedCalculationGraphMetadata:
     edge_count: int
 
 
+@dataclass(frozen=True)
+class PersistedCalculationRunBundle:
+    run: PersistedCalculationRun
+    graph: PersistedCalculationGraphMetadata
+
+
 class Phase2CalculationRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -260,6 +266,18 @@ class Phase2CalculationRepository:
     ) -> bool:
         current = self.find_matching_graph(workbook_version_id, configuration)
         return current is not None and current.graph_version_id == graph_version_id
+
+    def load_run_bundle(
+        self,
+        run_id: str,
+    ) -> PersistedCalculationRunBundle | None:
+        if self._session.get(CalculationRunRecord, run_id) is None:
+            return None
+        run = self.load_run(run_id)
+        graph = self.load_graph_metadata(run.graph_version_id)
+        if graph is None:
+            raise ValueError("Calculation run graph metadata was not found")
+        return PersistedCalculationRunBundle(run=run, graph=graph)
 
     def start_run(
         self,

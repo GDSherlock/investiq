@@ -13,15 +13,24 @@ import uuid
 from .types import normalize_a1
 
 
+PHASE2_INVENTORY_VERSION = "formula-inventory-v1"
+PHASE2_IR_VERSION = "calc-ir-v2"
+PHASE2_COMPILER_VERSION = "formula-compiler-v2"
+PHASE2_ENGINE_VERSION = "calc-engine-v2"
+PHASE2_FUNCTION_REGISTRY_VERSION = "calc-functions-v2"
+PHASE2_SEMANTICS_PROFILE = "excel-compatible-v2"
+PHASE2_GROUPING_PROFILE = "relative-ast-v1"
+
+
 @dataclass(frozen=True)
 class Phase2CalculationConfiguration:
-    inventory_version: str = "formula-inventory-v1"
-    ir_version: str = "calc-ir-v2"
-    compiler_version: str = "formula-compiler-v2"
-    engine_version: str = "calc-engine-v2"
-    function_registry_version: str = "calc-functions-v2"
-    semantics_profile: str = "excel-compatible-v2"
-    grouping_profile: str = "relative-ast-v1"
+    inventory_version: str = PHASE2_INVENTORY_VERSION
+    ir_version: str = PHASE2_IR_VERSION
+    compiler_version: str = PHASE2_COMPILER_VERSION
+    engine_version: str = PHASE2_ENGINE_VERSION
+    function_registry_version: str = PHASE2_FUNCTION_REGISTRY_VERSION
+    semantics_profile: str = PHASE2_SEMANTICS_PROFILE
+    grouping_profile: str = PHASE2_GROUPING_PROFILE
     max_formula_length: int = 8_192
     max_tokens: int = 2_048
     max_nodes: int = 2_048
@@ -36,13 +45,13 @@ class Phase2CalculationConfiguration:
 
     def __post_init__(self) -> None:
         expected = {
-            "inventory_version": "formula-inventory-v1",
-            "ir_version": "calc-ir-v2",
-            "compiler_version": "formula-compiler-v2",
-            "engine_version": "calc-engine-v2",
-            "function_registry_version": "calc-functions-v2",
-            "semantics_profile": "excel-compatible-v2",
-            "grouping_profile": "relative-ast-v1",
+            "inventory_version": PHASE2_INVENTORY_VERSION,
+            "ir_version": PHASE2_IR_VERSION,
+            "compiler_version": PHASE2_COMPILER_VERSION,
+            "engine_version": PHASE2_ENGINE_VERSION,
+            "function_registry_version": PHASE2_FUNCTION_REGISTRY_VERSION,
+            "semantics_profile": PHASE2_SEMANTICS_PROFILE,
+            "grouping_profile": PHASE2_GROUPING_PROFILE,
         }
         for field_name, expected_value in expected.items():
             if getattr(self, field_name) != expected_value:
@@ -101,7 +110,7 @@ class CalculationOverride:
 
     @classmethod
     def parameter(cls, parameter_id: str, value: Any) -> "CalculationOverride":
-        value_type, normalized = _override_value(value)
+        value_type, normalized = _normalize_override_value(value)
         return cls("parameter", str(uuid.UUID(parameter_id)), None, None, value_type, normalized)
 
     @classmethod
@@ -111,7 +120,7 @@ class CalculationOverride:
         cell_address: str,
         value: Any,
     ) -> "CalculationOverride":
-        value_type, normalized = _override_value(value)
+        value_type, normalized = _normalize_override_value(value)
         return cls("cell", None, sheet_name, cell_address, value_type, normalized)
 
     def to_payload(self) -> dict[str, Any]:
@@ -207,7 +216,7 @@ def canonical_hash(payload: object) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _override_value(value: Any) -> tuple[str, Any]:
+def _normalize_override_value(value: Any) -> tuple[str, Any]:
     if value is None:
         return "blank", None
     if isinstance(value, bool):

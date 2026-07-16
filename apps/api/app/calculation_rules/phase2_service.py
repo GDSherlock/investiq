@@ -30,6 +30,7 @@ from .phase2_registry import PHASE2_FUNCTION_REGISTRY
 from .phase2_repository import (
     CalculationRunValueData,
     PersistedCalculationRun,
+    PersistedCalculationRunValue,
     Phase2CalculationRepository,
 )
 from .phase2_types import (
@@ -371,7 +372,7 @@ class InternalCalculationEngineService:
     def _prior_values_by_ref(
         workbook_version_id: str,
         prior: PersistedCalculationRun | None,
-    ) -> dict[WorkbookCellRef, Any]:
+    ) -> dict[WorkbookCellRef, PersistedCalculationRunValue]:
         if prior is None:
             return {}
         return {

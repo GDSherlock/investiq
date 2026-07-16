@@ -16,7 +16,7 @@ from openpyxl.utils.datetime import (
 )
 
 from .compiler import CalculationExpressionValidator
-from .function_registry import FUNCTION_REGISTRY
+from .function_registry import FUNCTION_REGISTRY, FunctionDefinition
 from .graph import CalculationGraphPlan
 from .types import (
     CalculationRuleExtractionConfiguration,
@@ -139,7 +139,7 @@ class SafeCalculationEvaluator:
     def __init__(
         self,
         *,
-        function_registry: Mapping[str, Any] | None = None,
+        function_registry: Mapping[str, FunctionDefinition] | None = None,
     ):
         self._function_registry = function_registry or FUNCTION_REGISTRY
         self._validator = CalculationExpressionValidator(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 import hashlib
 import json
@@ -165,9 +166,9 @@ class DirtyPropagator:
 
         dirty: set[WorkbookCellRef] = set()
         visited = set(changed)
-        queue = list(changed)
+        queue = deque(changed)
         while queue:
-            precedent = queue.pop(0)
+            precedent = queue.popleft()
             if precedent in ready:
                 dirty.add(precedent)
             for dependent in graph.base_plan.dependents_by_cell.get(precedent, ()):

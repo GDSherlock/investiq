@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from sqlalchemy import (
     Boolean,
     CHAR,
@@ -22,11 +20,10 @@ from sqlalchemy import (
 )
 
 from ..database import Base
-from . import models as _phase1_models  # noqa: F401
+from . import models as _phase1_models
 
 
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+utcnow = _phase1_models.utcnow
 
 
 class WorkbookNamedExpressionRecord(Base):

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .evaluator import ScalarValue
-from .models import WorkbookFormulaCellRecord
+from .models import WorkbookFormulaCellRecord, utcnow
 from .phase2_graph import CalculationGraphVersion
 from .phase2_grouping import GroupedCalculationRule
 from .phase2_models import (
@@ -22,6 +21,7 @@ from .phase2_models import (
     GroupedCalculationRuleRecord,
 )
 from .phase2_types import Phase2CalculationConfiguration
+from .types import WorkbookCellRef
 
 
 @dataclass(frozen=True)
@@ -229,7 +229,7 @@ class Phase2CalculationRepository:
                 existing.error_message = None
                 existing.summary_json = None
                 existing.warnings_json = None
-                existing.started_at = _utcnow()
+                existing.started_at = utcnow()
                 existing.completed_at = None
             self._session.flush()
             return existing
@@ -247,7 +247,7 @@ class Phase2CalculationRepository:
             overrides_json=[dict(item) for item in overrides],
             run_policy_json=dict(run_policy),
             status="running",
-            started_at=_utcnow(),
+            started_at=utcnow(),
         )
         self._session.add(row)
         self._session.flush()
@@ -311,7 +311,7 @@ class Phase2CalculationRepository:
         row.warnings_json = list(warnings)
         row.error_code = None
         row.error_message = None
-        row.completed_at = _utcnow()
+        row.completed_at = utcnow()
         self._session.flush()
 
     def mark_failed(
@@ -326,7 +326,7 @@ class Phase2CalculationRepository:
         row.status = "failed"
         row.error_code = error_code[:100]
         row.error_message = error_message[:1000]
-        row.completed_at = _utcnow()
+        row.completed_at = utcnow()
         self._session.flush()
 
     def load_completed_run(self, run_id: str) -> PersistedCalculationRun | None:
@@ -423,13 +423,9 @@ class Phase2CalculationRepository:
         )
 
 
-def _cell_payload(reference) -> dict[str, object]:
+def _cell_payload(reference: WorkbookCellRef) -> dict[str, object]:
     return {
         "sheet_name": reference.sheet_name,
         "sheet_position": reference.sheet_position,
         "cell_address": reference.cell_address,
     }
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)

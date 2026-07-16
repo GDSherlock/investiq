@@ -10,7 +10,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from openpyxl.utils.cell import coordinate_to_tuple
 
-from .function_registry import FUNCTION_REGISTRY
+from .function_registry import FUNCTION_REGISTRY, FunctionDefinition
 from .types import (
     CalculationRuleExtractionConfiguration,
     FormulaCompilation,
@@ -179,7 +179,7 @@ class FormulaCompiler:
         self,
         configuration: CalculationRuleExtractionConfiguration | None = None,
         *,
-        function_registry: Mapping[str, Any] | None = None,
+        function_registry: Mapping[str, FunctionDefinition] | None = None,
     ):
         self._configuration = configuration or CalculationRuleExtractionConfiguration()
         self._function_registry = function_registry or FUNCTION_REGISTRY
@@ -606,7 +606,7 @@ class _FormulaParser:
         references: Sequence[FormulaReference],
         formula_cell: WorkbookFormulaCell,
         configuration: CalculationRuleExtractionConfiguration,
-        function_registry: Mapping[str, Any],
+        function_registry: Mapping[str, FunctionDefinition],
     ):
         self._tokens = tokens
         self._index = 0
@@ -881,7 +881,7 @@ class CalculationExpressionValidator:
     def __init__(
         self,
         *,
-        function_registry: Mapping[str, Any] | None = None,
+        function_registry: Mapping[str, FunctionDefinition] | None = None,
     ) -> None:
         self._function_registry = function_registry or FUNCTION_REGISTRY
 

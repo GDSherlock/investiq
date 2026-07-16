@@ -6,9 +6,12 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .function_registry import FUNCTION_REGISTRY, FunctionDefinition
+from .phase2_types import (
+    PHASE2_FUNCTION_REGISTRY_VERSION,
+    PHASE2_SEMANTICS_PROFILE,
+)
 
 
-PHASE2_FUNCTION_REGISTRY_VERSION = "calc-functions-v2"
 _KINDS = (
     "number",
     "boolean",
@@ -33,7 +36,7 @@ def _phase2_definition(
         lazy=False,
         volatile=False,
         implementation_version=f"{name.lower()}-v2",
-        conformance_version="excel-compatible-v2",
+        conformance_version=PHASE2_SEMANTICS_PROFILE,
     )
 
 

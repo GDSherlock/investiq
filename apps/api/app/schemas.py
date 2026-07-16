@@ -183,6 +183,26 @@ class CalculationReadinessResponse(_CalculationDTO):
     error: CalculationErrorDetail | None = None
 
 
+class CalculationInputItem(_CalculationDTO):
+    target_kind: Literal["parameter", "financial_series_value"]
+    target_id: UUIDString
+    label: str
+    category: str | None = None
+    unit: str | None = None
+    scenario: str | None = None
+    period: str | None = None
+    current_value: CalculationInputValue
+    editable: bool
+    non_editable_reason: str | None = None
+
+
+class CalculationInputsResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    inputs: list[CalculationInputItem]
+    next_cursor: UUIDString | None = None
+
+
 # --- Model schemas ---
 class ModelUploadResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

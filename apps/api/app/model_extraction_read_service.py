@@ -272,6 +272,30 @@ class ModelExtractionReadService:
             )
         raise ValueError("Calculation input kind is not registered")
 
+    def list_calculation_inputs(
+        self,
+        model_version_id: str,
+        target_kind: str,
+    ) -> list[CanonicalCalculationInput]:
+        if target_kind == "parameter":
+            target_ids = [
+                parameter.id for parameter in self.list_parameters(model_version_id)
+            ]
+        elif target_kind == "financial_series_value":
+            target_ids = [
+                value.id
+                for value in self.list_financial_series_values(model_version_id)
+            ]
+        else:
+            raise ValueError("Calculation input kind is not registered")
+        return sorted(
+            (
+                self.get_calculation_input(model_version_id, target_kind, target_id)
+                for target_id in target_ids
+            ),
+            key=lambda item: item.target_id,
+        )
+
     def _source_owner_count(
         self,
         model_version_id: str,

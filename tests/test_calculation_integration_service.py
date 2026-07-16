@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import uuid
 
@@ -28,9 +29,18 @@ from apps.api.app.calculation_rules.types import (
     FormulaIdFactory,
 )
 from apps.api.app.database import Base
-from apps.api.app.model_extraction_models import ModelVersion
+from apps.api.app.model_extraction_models import (
+    FinancialSeries,
+    FinancialSeriesValue,
+    ModelParameter,
+    ModelVersion,
+)
 from apps.api.app.model_extraction_read_service import ModelExtractionReadService
-from apps.api.app.model_extraction_types import ModelExtractionPersistenceError, new_uuid
+from apps.api.app.model_extraction_types import (
+    FinancialEntityIdFactory,
+    ModelExtractionPersistenceError,
+    new_uuid,
+)
 from tests.calculation_rule_test_support import create_materialized_rule_model
 from tests.model_extraction_test_support import (
     create_sqlite_session_factory,
@@ -358,3 +368,368 @@ def test_readiness_maps_persisted_state_without_creating_artifacts(
     else:
         assert readiness.error is None
     assert after == before
+
+
+def _canonical_fingerprint(session, model_version_id: str) -> dict[str, object]:
+    model = session.get(ModelVersion, model_version_id)
+    parameters = session.scalars(
+        select(ModelParameter)
+        .where(ModelParameter.model_version_id == model_version_id)
+        .order_by(ModelParameter.id)
+    ).all()
+    series = session.scalars(
+        select(FinancialSeries)
+        .where(FinancialSeries.model_version_id == model_version_id)
+        .order_by(FinancialSeries.id)
+    ).all()
+    series_ids = [item.id for item in series]
+    values = session.scalars(
+        select(FinancialSeriesValue)
+        .where(FinancialSeriesValue.financial_series_id.in_(series_ids))
+        .order_by(FinancialSeriesValue.id)
+    ).all()
+    return {
+        "model": (
+            model.id,
+            model.workbook_version_id,
+            model.status,
+            model.validation_status,
+        ),
+        "parameters": tuple(
+            (
+                item.id,
+                item.source_sheet,
+                item.source_cell,
+                json.dumps(item.validated_value_json, sort_keys=True),
+            )
+            for item in parameters
+        ),
+        "series": tuple(
+            (item.id, item.label, item.value_source_range) for item in series
+        ),
+        "values": tuple(
+            (
+                item.id,
+                item.financial_series_id,
+                item.value_source_sheet,
+                item.value_source_cell,
+                json.dumps(item.value_json, sort_keys=True),
+            )
+            for item in values
+        ),
+    }
+
+
+class _ExplodingInventory:
+    def scan(self, _content_bytes, _workbook_version_id):
+        raise RuntimeError("internal workbook details must not cross the facade")
+
+
+def test_preparation_is_successful_and_replay_is_idempotent(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"],
+        context["read_service"],
+    )
+    canonical_before = _canonical_fingerprint(
+        context["session"], context["model"].id
+    )
+
+    first = facade.prepare(context["model"].id)
+    counts_before_replay = _calculation_artifact_counts(context["session"])
+    second = facade.prepare(context["model"].id)
+    counts_after_replay = _calculation_artifact_counts(context["session"])
+
+    assert first.status == second.status == "ready_with_warning"
+    assert (
+        first.calculation_rule_extraction_id
+        == second.calculation_rule_extraction_id
+    )
+    assert first.graph_version_id == second.graph_version_id
+    assert counts_before_replay == counts_after_replay
+    assert context["session"].scalar(
+        select(func.count()).select_from(CalculationRuleExtraction)
+    ) == 1
+    assert context["session"].scalar(
+        select(func.count()).select_from(CalculationGraphVersionRecord)
+    ) == 1
+    assert _canonical_fingerprint(
+        context["session"], context["model"].id
+    ) == canonical_before
+
+def test_preparation_rejects_non_materialized_model_without_artifacts(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    context["model"].status = "extracted"
+    context["session"].commit()
+    before = _calculation_artifact_counts(context["session"])
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        CalculationIntegrationService(
+            context["session"],
+            context["read_service"],
+        ).prepare(context["model"].id)
+
+    assert captured.value.code == "MODEL_NOT_MATERIALIZED"
+    assert captured.value.status_code == 409
+    assert _calculation_artifact_counts(context["session"]) == before
+    assert context["session"].get(ModelVersion, context["model"].id).status == "extracted"
+
+
+def test_phase1_preparation_failure_preserves_canonical_state_and_retry_converges(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+    from apps.api.app.calculation_rules.service import CalculationRuleExtractionService
+
+    context = integration_context
+    canonical_before = _canonical_fingerprint(
+        context["session"], context["model"].id
+    )
+    failing_phase1 = CalculationRuleExtractionService(
+        context["session"],
+        context["read_service"],
+        inventory=_ExplodingInventory(),
+    )
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        CalculationIntegrationService(
+            context["session"],
+            context["read_service"],
+            phase1_service=failing_phase1,
+        ).prepare(context["model"].id)
+
+    failed = context["session"].scalar(select(CalculationRuleExtraction))
+    assert captured.value.code == "CALCULATION_PREPARATION_FAILED"
+    assert failed.status == "failed"
+    assert failed.error_message == "Calculation rule extraction failed"
+    assert context["session"].scalar(
+        select(func.count()).select_from(CalculationGraphVersionRecord)
+    ) == 0
+    assert _canonical_fingerprint(
+        context["session"], context["model"].id
+    ) == canonical_before
+
+    retried = CalculationIntegrationService(
+        context["session"],
+        context["read_service"],
+    ).prepare(context["model"].id)
+
+    assert retried.status == "ready_with_warning"
+    assert retried.calculation_rule_extraction_id == failed.id
+    assert _canonical_fingerprint(
+        context["session"], context["model"].id
+    ) == canonical_before
+
+
+def test_phase2_preparation_failure_preserves_phase1_and_retry_converges(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    canonical_before = _canonical_fingerprint(
+        context["session"], context["model"].id
+    )
+    failing_phase2 = InternalCalculationEngineService(
+        context["session"],
+        context["read_service"],
+        inventory=_ExplodingInventory(),
+    )
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        CalculationIntegrationService(
+            context["session"],
+            context["read_service"],
+            phase2_service=failing_phase2,
+        ).prepare(context["model"].id)
+
+    phase1 = context["session"].scalar(select(CalculationRuleExtraction))
+    assert captured.value.code == "CALCULATION_PREPARATION_FAILED"
+    assert phase1.status == "completed_with_warning"
+    assert context["session"].scalar(
+        select(func.count()).select_from(CalculationGraphVersionRecord)
+    ) == 0
+    assert _canonical_fingerprint(
+        context["session"], context["model"].id
+    ) == canonical_before
+
+    retried = CalculationIntegrationService(
+        context["session"],
+        context["read_service"],
+    ).prepare(context["model"].id)
+
+    assert retried.status == "ready_with_warning"
+    assert retried.calculation_rule_extraction_id == phase1.id
+    assert retried.graph_version_id is not None
+    assert _canonical_fingerprint(
+        context["session"], context["model"].id
+    ) == canonical_before
+
+
+def test_list_inputs_defaults_to_editable_parameters_and_includes_graph(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+
+    response = facade.list_inputs(context["model"].id)
+
+    assert response.model_version_id == context["model"].id
+    assert response.graph_version_id == prepared.graph_version_id
+    assert len(response.inputs) == 1
+    item = response.inputs[0]
+    assert item.target_kind == "parameter"
+    assert item.target_id == context["parameter"].id
+    assert item.current_value.value_type == "number"
+    assert item.current_value.value == "2"
+    assert item.editable is True
+    assert item.non_editable_reason is None
+    assert "source_sheet" not in item.model_dump()
+    assert "source_cell" not in item.model_dump()
+
+
+def test_list_inputs_filters_formula_backed_financial_series_values(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    facade.prepare(context["model"].id)
+
+    editable = facade.list_inputs(
+        context["model"].id,
+        target_kind="financial_series_value",
+    )
+    all_values = facade.list_inputs(
+        context["model"].id,
+        target_kind="financial_series_value",
+        editable_only=False,
+    )
+
+    assert editable.inputs == []
+    assert len(all_values.inputs) == 1
+    assert all_values.inputs[0].target_id == context["series_value"].id
+    assert all_values.inputs[0].editable is False
+    assert all_values.inputs[0].non_editable_reason == "formula_backed"
+    assert all_values.inputs[0].period == "2026"
+
+
+def test_list_inputs_has_stable_uuid_cursor_pagination(integration_context) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    id_factory = FinancialEntityIdFactory(context["model"].id)
+    context["session"].add_all(
+        [
+            ModelParameter(
+                id=id_factory.parameter_id("Inputs", address),
+                model_version_id=context["model"].id,
+                entity_kind="parameter",
+                source_bucket="parameter_candidates",
+                label=label,
+                submitted_role="hardcoded_input",
+                validated_role="hardcoded_input",
+                raw_value_json=value,
+                validated_value_json=value,
+                source_sheet="Inputs",
+                source_cell=address,
+                formula_status="static_value",
+                source_validation_status="validated",
+                role_validation_status="validated",
+                validation_status="validated",
+                data_type="n",
+                number_format="General",
+            )
+            for address, label, value in (
+                ("A2", "Price", 3),
+                ("A3", "Tax", 4),
+            )
+        ]
+    )
+    context["session"].commit()
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    facade.prepare(context["model"].id)
+
+    first = facade.list_inputs(context["model"].id, limit=1)
+    second = facade.list_inputs(
+        context["model"].id,
+        limit=10,
+        cursor=first.next_cursor,
+    )
+    ids = [first.inputs[0].target_id, *(item.target_id for item in second.inputs)]
+
+    assert ids == sorted(ids)
+    assert len(ids) == 3
+    assert first.next_cursor == first.inputs[0].target_id
+    assert second.next_cursor is None
+
+
+def test_list_inputs_rejects_unprepared_model(integration_context) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        CalculationIntegrationService(
+            context["session"], context["read_service"]
+        ).list_inputs(context["model"].id)
+
+    assert captured.value.code == "CALCULATION_NOT_PREPARED"
+    assert captured.value.status_code == 409
+
+
+def test_list_inputs_rejects_unknown_target_kind(integration_context) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    facade.prepare(context["model"].id)
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        facade.list_inputs(context["model"].id, target_kind="cell")
+
+    assert captured.value.code == "INVALID_INPUT_KIND"
+    assert captured.value.status_code == 422

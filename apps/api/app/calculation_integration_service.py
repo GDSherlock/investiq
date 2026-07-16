@@ -11,12 +11,23 @@ from .calculation_rules.repository import CalculationRuleRepository
 from .calculation_rules.service import CalculationRuleExtractionService
 from .calculation_rules.types import CalculationRuleExtractionConfiguration
 from .model_extraction_read_service import ModelExtractionReadService
-from .model_extraction_types import ModelVersionNotFound
+from .model_extraction_types import (
+    ModelVersionNotFound,
+    ModelVersionNotReady,
+    WorkbookIntegrityError,
+)
 from .schemas import (
+    CalculationBlankValue,
+    CalculationBooleanValue,
+    CalculationDateValue,
     CalculationErrorDetail,
+    CalculationInputItem,
+    CalculationInputsResponse,
+    CalculationNumberValue,
     CalculationReadinessResponse,
     CalculationReadinessSummary,
     CalculationReadinessVersions,
+    CalculationTextValue,
 )
 
 
@@ -73,6 +84,51 @@ class CalculationIntegrationService:
             session,
             read_service,
         )
+
+    def prepare(self, model_version_id: str) -> CalculationReadinessResponse:
+        try:
+            model = self._read_service.load_model_version(
+                model_version_id,
+                require_materialized=True,
+            )
+            self._phase1_service.extract_and_execute(
+                model_version_id=model.id,
+                workbook_version_id=model.workbook_version_id,
+            )
+            self._phase2_service.compile_workbook(
+                workbook_version_id=model.workbook_version_id,
+            )
+            return self.get_readiness(model.id)
+        except ModelVersionNotFound as exc:
+            raise CalculationIntegrationError(
+                "MODEL_VERSION_NOT_FOUND",
+                "Model version was not found.",
+                status_code=404,
+                resource_id=model_version_id,
+            ) from exc
+        except ModelVersionNotReady as exc:
+            raise CalculationIntegrationError(
+                "MODEL_NOT_MATERIALIZED",
+                "Model version is not canonically materialized.",
+                status_code=409,
+                resource_id=model_version_id,
+            ) from exc
+        except WorkbookIntegrityError as exc:
+            raise CalculationIntegrationError(
+                "WORKBOOK_INTEGRITY_ERROR",
+                "Stored workbook integrity verification failed.",
+                status_code=500,
+                resource_id=model_version_id,
+            ) from exc
+        except CalculationIntegrationError:
+            raise
+        except Exception as exc:
+            raise CalculationIntegrationError(
+                "CALCULATION_PREPARATION_FAILED",
+                "Calculation preparation failed.",
+                status_code=500,
+                resource_id=model_version_id,
+            ) from exc
 
     def get_readiness(self, model_version_id: str) -> CalculationReadinessResponse:
         try:
@@ -148,6 +204,108 @@ class CalculationIntegrationService:
                 status_code=500,
                 resource_id=model_version_id,
             ) from exc
+
+    def list_inputs(
+        self,
+        model_version_id: str,
+        *,
+        target_kind: str = "parameter",
+        editable_only: bool = True,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> CalculationInputsResponse:
+        if target_kind not in {"parameter", "financial_series_value"}:
+            raise CalculationIntegrationError(
+                "INVALID_INPUT_KIND",
+                "Calculation input kind is not supported.",
+                status_code=422,
+                resource_id=model_version_id,
+            )
+        if limit < 1 or limit > 500:
+            raise CalculationIntegrationError(
+                "INVALID_INPUT_KIND",
+                "Calculation input limit must be between 1 and 500.",
+                status_code=422,
+                resource_id=model_version_id,
+            )
+        readiness = self.get_readiness(model_version_id)
+        if readiness.status == "model_not_ready":
+            raise CalculationIntegrationError(
+                "MODEL_NOT_MATERIALIZED",
+                "Model version is not canonically materialized.",
+                status_code=409,
+                resource_id=model_version_id,
+            )
+        if readiness.status not in {"ready", "ready_with_warning"}:
+            raise CalculationIntegrationError(
+                "CALCULATION_NOT_PREPARED",
+                "Calculation preparation is not complete.",
+                status_code=409,
+                resource_id=model_version_id,
+            )
+        candidates = self._read_service.list_calculation_inputs(
+            model_version_id,
+            target_kind,
+        )
+        candidates = [
+            candidate
+            for candidate in candidates
+            if (not editable_only or candidate.editable)
+            and (cursor is None or candidate.target_id > cursor)
+        ]
+        has_more = len(candidates) > limit
+        page = candidates[:limit]
+        return CalculationInputsResponse(
+            model_version_id=model_version_id,
+            graph_version_id=readiness.graph_version_id,
+            inputs=[self._input_item(candidate) for candidate in page],
+            next_cursor=(page[-1].target_id if has_more and page else None),
+        )
+
+    @staticmethod
+    def _input_item(candidate) -> CalculationInputItem:
+        value_type = candidate.value_type
+        if value_type == "number":
+            current_value = CalculationNumberValue(
+                value_type="number",
+                value=str(candidate.current_value),
+            )
+        elif value_type == "boolean":
+            current_value = CalculationBooleanValue(
+                value_type="boolean",
+                value=candidate.current_value,
+            )
+        elif value_type == "text":
+            current_value = CalculationTextValue(
+                value_type="text",
+                value=candidate.current_value,
+            )
+        elif value_type == "blank":
+            current_value = CalculationBlankValue(value_type="blank", value=None)
+        elif value_type == "date":
+            current_value = CalculationDateValue(
+                value_type="date",
+                value=candidate.current_value,
+            )
+        else:
+            raise CalculationIntegrationError(
+                "INVALID_OVERRIDE_VALUE",
+                "Canonical input has an unsupported value type.",
+                status_code=422,
+                resource_id=candidate.target_id,
+            )
+        return CalculationInputItem(
+            target_kind=candidate.target_kind,
+            target_id=candidate.target_id,
+            label=candidate.label,
+            category=candidate.category,
+            unit=candidate.unit,
+            scenario=candidate.scenario,
+            period=candidate.period,
+            current_value=current_value,
+            editable=candidate.editable,
+            non_editable_reason=candidate.non_editable_reason,
+        )
 
     def _readiness_response(
         self,

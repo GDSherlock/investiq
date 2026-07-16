@@ -139,6 +139,10 @@ class CalculationRequest(_CalculationDTO):
         return self
 
 
+class CalculationPrepareRequest(_CalculationDTO):
+    pass
+
+
 class CalculationErrorDetail(_CalculationDTO):
     code: str
     message: str

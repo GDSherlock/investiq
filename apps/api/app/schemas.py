@@ -1,12 +1,142 @@
 """Pydantic schemas for API request/response validation."""
 
-from datetime import datetime
-from typing import Any, Optional, Annotated
-from pydantic import BaseModel, Field, ConfigDict, BeforeValidator
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+import math
+from typing import Annotated, Any, Literal, Optional
+import uuid
+
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 
 # Coerce UUID objects to strings
 StrFromUUID = Annotated[str, BeforeValidator(lambda v: str(v) if v is not None else v)]
+
+
+def _validated_uuid_string(value: str) -> str:
+    return str(uuid.UUID(value))
+
+
+UUIDString = Annotated[
+    str,
+    BeforeValidator(lambda value: str(value) if isinstance(value, uuid.UUID) else value),
+    AfterValidator(_validated_uuid_string),
+]
+
+
+class _CalculationDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+
+class CalculationNumberValue(_CalculationDTO):
+    value_type: Literal["number"]
+    value: StrictStr
+
+    @field_validator("value")
+    @classmethod
+    def validate_finite_decimal(cls, value: str) -> str:
+        try:
+            decimal_value = Decimal(value)
+        except InvalidOperation as exc:
+            raise ValueError("Number value must be a decimal string") from exc
+        if not decimal_value.is_finite():
+            raise ValueError("Number value must be finite")
+        try:
+            finite_float = math.isfinite(float(decimal_value))
+        except (OverflowError, ValueError):
+            finite_float = False
+        if not finite_float:
+            raise ValueError("Number value is outside the calculation engine range")
+        return value
+
+
+class CalculationBooleanValue(_CalculationDTO):
+    value_type: Literal["boolean"]
+    value: StrictBool
+
+
+class CalculationTextValue(_CalculationDTO):
+    value_type: Literal["text"]
+    value: StrictStr
+
+    @field_validator("value")
+    @classmethod
+    def reject_formula_text(cls, value: str) -> str:
+        if value.startswith("="):
+            raise ValueError("Formula-like text is not allowed")
+        return value
+
+
+class CalculationBlankValue(_CalculationDTO):
+    value_type: Literal["blank"]
+    value: None
+
+
+class CalculationDateValue(_CalculationDTO):
+    value_type: Literal["date"]
+    value: date
+
+
+CalculationInputValue = Annotated[
+    CalculationNumberValue
+    | CalculationBooleanValue
+    | CalculationTextValue
+    | CalculationBlankValue
+    | CalculationDateValue,
+    Field(discriminator="value_type"),
+]
+
+
+class ParameterOverrideTarget(_CalculationDTO):
+    kind: Literal["parameter"]
+    parameter_id: UUIDString
+
+    @property
+    def identity(self) -> tuple[str, str]:
+        return self.kind, self.parameter_id
+
+
+class FinancialSeriesValueOverrideTarget(_CalculationDTO):
+    kind: Literal["financial_series_value"]
+    financial_series_value_id: UUIDString
+
+    @property
+    def identity(self) -> tuple[str, str]:
+        return self.kind, self.financial_series_value_id
+
+
+CalculationOverrideTarget = Annotated[
+    ParameterOverrideTarget | FinancialSeriesValueOverrideTarget,
+    Field(discriminator="kind"),
+]
+
+
+class CalculationOverrideRequest(_CalculationDTO):
+    target: CalculationOverrideTarget
+    value: CalculationInputValue
+
+
+class CalculationRequest(_CalculationDTO):
+    graph_version_id: UUIDString
+    overrides: list[CalculationOverrideRequest] = Field(default_factory=list)
+    idempotency_key: str | None = None
+
+    @model_validator(mode="after")
+    def reject_duplicate_targets(self) -> "CalculationRequest":
+        identities = [override.target.identity for override in self.overrides]
+        if len(identities) != len(set(identities)):
+            raise ValueError("Duplicate override target")
+        return self
 
 
 # --- Model schemas ---

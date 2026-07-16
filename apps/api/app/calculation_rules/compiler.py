@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import re
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from openpyxl.utils.cell import coordinate_to_tuple
 
@@ -178,10 +178,15 @@ class FormulaCompiler:
     def __init__(
         self,
         configuration: CalculationRuleExtractionConfiguration | None = None,
+        *,
+        function_registry: Mapping[str, Any] | None = None,
     ):
         self._configuration = configuration or CalculationRuleExtractionConfiguration()
+        self._function_registry = function_registry or FUNCTION_REGISTRY
         self._lexer = _FormulaLexer()
-        self._validator = CalculationExpressionValidator()
+        self._validator = CalculationExpressionValidator(
+            function_registry=self._function_registry
+        )
 
     def compile(
         self,
@@ -298,7 +303,13 @@ class FormulaCompiler:
                 reasons,
             )
 
-        parser = _FormulaParser(tokens, references, formula_cell, self._configuration)
+        parser = _FormulaParser(
+            tokens,
+            references,
+            formula_cell,
+            self._configuration,
+            self._function_registry,
+        )
         try:
             root = parser.parse()
         except _UnsupportedFormula as exc:
@@ -350,6 +361,17 @@ class FormulaCompiler:
             "normalized_signature": normalized_signature,
             "root": root,
         }
+        if self._configuration.ir_version == "calc-ir-v2":
+            limits = _expression_limits(root)
+            expression.update(
+                {
+                    "required_registry_version": (
+                        self._configuration.function_registry_version
+                    ),
+                    "capabilities": _expression_capabilities(root),
+                    "limits": limits,
+                }
+            )
         try:
             self._validator.validate(
                 expression,
@@ -584,12 +606,14 @@ class _FormulaParser:
         references: Sequence[FormulaReference],
         formula_cell: WorkbookFormulaCell,
         configuration: CalculationRuleExtractionConfiguration,
+        function_registry: Mapping[str, Any],
     ):
         self._tokens = tokens
         self._index = 0
         self._references = {reference.source_span: reference for reference in references}
         self._formula_cell = formula_cell
         self._configuration = configuration
+        self._function_registry = function_registry
         self._node_count = 0
 
     def parse(self) -> dict[str, Any]:
@@ -771,7 +795,7 @@ class _FormulaParser:
         closing = self._expect("RPAREN")
         if len(arguments) > self._configuration.max_arguments:
             raise _UnsupportedFormula("argument_limit")
-        definition = FUNCTION_REGISTRY.get(function_name)
+        definition = self._function_registry.get(function_name)
         if definition is None:
             raise _UnsupportedFormula(f"unsupported_function:{function_name}")
         if not definition.minimum_arguments <= len(arguments) <= definition.maximum_arguments:
@@ -854,6 +878,13 @@ class CalculationExpressionValidator:
         ),
     }
 
+    def __init__(
+        self,
+        *,
+        function_registry: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._function_registry = function_registry or FUNCTION_REGISTRY
+
     def validate(
         self,
         expression: dict[str, Any] | None,
@@ -886,6 +917,10 @@ class CalculationExpressionValidator:
             "normalized_signature",
             "root",
         }
+        if configuration.ir_version == "calc-ir-v2":
+            expected_envelope.update(
+                {"required_registry_version", "capabilities", "limits"}
+            )
         if set(expression) != expected_envelope:
             raise ValueError("Calculation expression envelope fields are invalid")
         if expression["formula_cell_id"] != formula_cell.id:
@@ -898,6 +933,18 @@ class CalculationExpressionValidator:
             raise ValueError("Calculation expression compiler version is not registered")
         if expression["semantics_profile"] != configuration.semantics_profile:
             raise ValueError("Calculation expression semantics profile is not registered")
+        if configuration.ir_version == "calc-ir-v2":
+            if (
+                expression["required_registry_version"]
+                != configuration.function_registry_version
+            ):
+                raise ValueError("Calculation function registry version is not registered")
+            if expression["capabilities"] != _expression_capabilities(
+                expression["root"]
+            ):
+                raise ValueError("Calculation expression capabilities do not match")
+            if expression["limits"] != _expression_limits(expression["root"]):
+                raise ValueError("Calculation expression limits do not match")
         expected_id = FormulaIdFactory.expression_id(
             formula_cell.id,
             configuration.ir_version,
@@ -1131,7 +1178,7 @@ class CalculationExpressionValidator:
             )
         elif node_type == "function_call":
             function_name = node["function_name"]
-            definition = FUNCTION_REGISTRY.get(function_name)
+            definition = self._function_registry.get(function_name)
             if definition is None:
                 raise ValueError("Unknown calculation function")
             arguments = node["arguments"]
@@ -1314,6 +1361,48 @@ def _mask_text_literals(formula: str) -> str:
             characters[index] = " "
             index += 1
     return "".join(characters)
+
+
+def _expression_limits(root: dict[str, Any]) -> dict[str, int]:
+    node_count = 0
+    max_depth = 0
+    stack: list[tuple[dict[str, Any], int]] = [(root, 1)]
+    while stack:
+        node, depth = stack.pop()
+        node_count += 1
+        max_depth = max(max_depth, depth)
+        for value in node.values():
+            if isinstance(value, dict) and "node_type" in value:
+                stack.append((value, depth + 1))
+            elif isinstance(value, list):
+                stack.extend(
+                    (item, depth + 1)
+                    for item in value
+                    if isinstance(item, dict) and "node_type" in item
+                )
+    return {"node_count": node_count, "max_depth": max_depth}
+
+
+def _expression_capabilities(root: dict[str, Any]) -> list[str]:
+    capabilities: set[str] = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if (
+            node.get("node_type") == "function_call"
+            and node.get("function_name") == "COUNTIF"
+        ):
+            capabilities.add("conditional-aggregation")
+        for value in node.values():
+            if isinstance(value, dict) and "node_type" in value:
+                stack.append(value)
+            elif isinstance(value, list):
+                stack.extend(
+                    item
+                    for item in value
+                    if isinstance(item, dict) and "node_type" in item
+                )
+    return sorted(capabilities)
 
 
 def _canonical_decimal(value: Decimal) -> str:

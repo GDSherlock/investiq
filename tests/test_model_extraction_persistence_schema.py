@@ -279,6 +279,14 @@ def _reset_postgres_persistence_schema(database_url: str) -> None:
     try:
         with engine.begin() as connection:
             for table_name in (
+                "calculation_run_values",
+                "calculation_runs",
+                "calculation_rule_dependencies",
+                "calculation_rule_members",
+                "grouped_calculation_rules",
+                "calculation_graph_components",
+                "calculation_graph_versions",
+                "workbook_named_expressions",
                 "formula_execution_results",
                 "formula_canonical_mappings",
                 "formula_references",
@@ -324,6 +332,14 @@ def test_alembic_upgrades_postgres_database_to_persistence_head() -> None:
             "model_parameters",
             "financial_series",
             "financial_series_values",
+            "workbook_named_expressions",
+            "calculation_graph_versions",
+            "calculation_graph_components",
+            "grouped_calculation_rules",
+            "calculation_rule_members",
+            "calculation_rule_dependencies",
+            "calculation_runs",
+            "calculation_run_values",
         } <= set(inspect(engine).get_table_names())
     finally:
         engine.dispose()

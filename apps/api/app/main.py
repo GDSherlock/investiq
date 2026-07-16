@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 from .database import engine, Base
 from . import model_extraction_models  # noqa: F401
 from .calculation_rules import models as calculation_rule_models  # noqa: F401
+from .calculation_rules import phase2_models as calculation_engine_models  # noqa: F401
 from .routers import models, scenarios, debt_analysis, reports, alerts, audit, market_data, assistant, monitor
 from .routers import auth as auth_router
 

@@ -447,6 +447,14 @@ def test_postgres_t3_failure_rolls_back_every_canonical_child() -> None:
     try:
         with engine.begin() as connection:
             for table_name in (
+                "calculation_run_values",
+                "calculation_runs",
+                "calculation_rule_dependencies",
+                "calculation_rule_members",
+                "grouped_calculation_rules",
+                "calculation_graph_components",
+                "calculation_graph_versions",
+                "workbook_named_expressions",
                 "formula_execution_results",
                 "formula_canonical_mappings",
                 "formula_references",

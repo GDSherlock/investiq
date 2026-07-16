@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import math
@@ -16,7 +16,7 @@ from openpyxl.utils.datetime import (
 )
 
 from .compiler import CalculationExpressionValidator
-from .function_registry import FUNCTION_REGISTRY
+from .function_registry import FUNCTION_REGISTRY, FunctionDefinition
 from .graph import CalculationGraphPlan
 from .types import (
     CalculationRuleExtractionConfiguration,
@@ -127,6 +127,7 @@ class CalculationExecutionContext:
     compilation: FormulaCompilation
     calculated_values: Mapping[WorkbookCellRef, ScalarValue]
     configuration: CalculationRuleExtractionConfiguration
+    input_values: Mapping[WorkbookCellRef, ScalarValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -135,8 +136,15 @@ class _RangeValue:
 
 
 class SafeCalculationEvaluator:
-    def __init__(self):
-        self._validator = CalculationExpressionValidator()
+    def __init__(
+        self,
+        *,
+        function_registry: Mapping[str, FunctionDefinition] | None = None,
+    ):
+        self._function_registry = function_registry or FUNCTION_REGISTRY
+        self._validator = CalculationExpressionValidator(
+            function_registry=self._function_registry
+        )
 
     def evaluate(
         self,
@@ -167,6 +175,10 @@ class SafeCalculationEvaluator:
         catalog: WorkbookCatalog,
         compilations: Sequence[FormulaCompilation],
         configuration: CalculationRuleExtractionConfiguration | None = None,
+        *,
+        evaluation_cells: Sequence[WorkbookCellRef] | None = None,
+        initial_calculated_values: Mapping[WorkbookCellRef, ScalarValue] | None = None,
+        input_values: Mapping[WorkbookCellRef, ScalarValue] | None = None,
     ) -> dict[WorkbookCellRef, FormulaExecution]:
         configuration = configuration or CalculationRuleExtractionConfiguration()
         formula_by_ref = catalog.formula_by_ref()
@@ -174,7 +186,10 @@ class SafeCalculationEvaluator:
             compilation.formula_cell_id: compilation for compilation in compilations
         }
         results: dict[WorkbookCellRef, FormulaExecution] = {}
-        calculated: dict[WorkbookCellRef, ScalarValue] = {}
+        calculated: dict[WorkbookCellRef, ScalarValue] = dict(
+            initial_calculated_values or {}
+        )
+        selected = set(evaluation_cells) if evaluation_cells is not None else None
         for reference, status in plan.status_by_cell.items():
             if status == "ready":
                 continue
@@ -186,6 +201,8 @@ class SafeCalculationEvaluator:
                 warnings=(status,),
             )
         for reference in plan.evaluation_order:
+            if selected is not None and reference not in selected:
+                continue
             formula_cell = formula_by_ref[reference]
             compilation = compilation_by_formula_id[formula_cell.id]
             if compilation.ir_json is None:
@@ -196,6 +213,7 @@ class SafeCalculationEvaluator:
                 compilation=compilation,
                 calculated_values=calculated,
                 configuration=configuration,
+                input_values=input_values or {},
             )
             execution = self.evaluate(compilation.ir_json, context)
             results[reference] = execution
@@ -287,7 +305,7 @@ class SafeCalculationEvaluator:
     ) -> ScalarValue:
         name = node["function_name"]
         arguments = node["arguments"]
-        definition = FUNCTION_REGISTRY.get(name)
+        definition = self._function_registry.get(name)
         if definition is None:
             raise ValueError(f"Unregistered calculation function: {name}")
         if definition.lazy:
@@ -302,6 +320,36 @@ class SafeCalculationEvaluator:
                 return ScalarValue.boolean(False)
             value = self._evaluate_node(selected, context, trace)
             return value if isinstance(value, ScalarValue) else ScalarValue.error("#VALUE!")
+
+        if name in {"COUNT", "COUNTA"}:
+            count = 0
+            for argument in arguments:
+                value = self._evaluate_node(argument, context, trace)
+                values = value.values if isinstance(value, _RangeValue) else (value,)
+                for item in values:
+                    if name == "COUNT" and item.kind in {"number", "date_serial"}:
+                        count += 1
+                    elif name == "COUNTA" and item.kind != "blank":
+                        count += 1
+            return ScalarValue.number(count)
+
+        if name == "COUNTIF":
+            criteria_range = self._evaluate_node(arguments[0], context, trace)
+            criteria = self._evaluate_node(arguments[1], context, trace)
+            if isinstance(criteria, _RangeValue):
+                return ScalarValue.error("#VALUE!")
+            values = (
+                criteria_range.values
+                if isinstance(criteria_range, _RangeValue)
+                else (criteria_range,)
+            )
+            count = 0
+            for item in values:
+                matched = _countif_match(item, criteria)
+                if isinstance(matched, ScalarValue):
+                    return matched
+                count += int(matched)
+            return ScalarValue.number(count)
 
         if name in {"SUM", "AVERAGE", "MIN", "MAX"}:
             numeric_values: list[float] = []
@@ -367,7 +415,9 @@ class SafeCalculationEvaluator:
             cell["sheet_position"],
             cell["cell_address"],
         )
-        if reference in context.calculated_values:
+        if reference in context.input_values:
+            value = context.input_values[reference]
+        elif reference in context.calculated_values:
             value = context.calculated_values[reference]
         else:
             fact = context.catalog.cell(reference)
@@ -472,6 +522,50 @@ def _truthy(value: ScalarValue | _RangeValue) -> bool | ScalarValue:
     if value.kind in {"number", "date_serial"}:
         return value.number_value != 0
     return ScalarValue.error("#VALUE!")
+
+
+def _countif_match(
+    value: ScalarValue,
+    criteria: ScalarValue,
+) -> bool | ScalarValue:
+    if value.kind == "error":
+        return value
+    if criteria.kind == "error":
+        return criteria
+    operator = "equal"
+    expected = criteria
+    if criteria.kind == "text":
+        source = str(criteria.value)
+        if any(character in source for character in ("*", "?", "~")):
+            return ScalarValue.error("#VALUE!")
+        operators = (
+            (">=", "greater_equal"),
+            ("<=", "less_equal"),
+            ("<>", "not_equal"),
+            (">", "greater"),
+            ("<", "less"),
+            ("=", "equal"),
+        )
+        operand = source
+        for prefix, registered in operators:
+            if source.startswith(prefix):
+                operator = registered
+                operand = source[len(prefix) :]
+                break
+        try:
+            number = float(operand)
+        except ValueError:
+            expected = ScalarValue.text(operand)
+        else:
+            if not math.isfinite(number):
+                return ScalarValue.error("#VALUE!")
+            expected = ScalarValue.number(number)
+    if value.kind == "blank" and expected.kind in {"number", "date_serial"}:
+        return False
+    compared = _compare(value, expected, operator)
+    if compared.kind == "error":
+        return False
+    return bool(compared.value)
 
 
 def _compare(left: ScalarValue, right: ScalarValue, operator: str) -> ScalarValue:

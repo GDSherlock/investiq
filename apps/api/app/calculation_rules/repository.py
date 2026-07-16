@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
@@ -21,6 +20,7 @@ from .models import (
     FormulaExecutionResultRecord,
     FormulaReferenceRecord,
     WorkbookFormulaCellRecord,
+    utcnow,
 )
 from .types import (
     CalculationRuleExtractionConfiguration,
@@ -130,7 +130,7 @@ class CalculationRuleRepository:
                 existing.error_message = None
                 existing.summary_json = None
                 existing.warnings_json = None
-                existing.started_at = _utcnow()
+                existing.started_at = utcnow()
                 existing.completed_at = None
             self._session.flush()
             return existing
@@ -147,7 +147,7 @@ class CalculationRuleRepository:
             semantics_profile=configuration.semantics_profile,
             configuration_hash=configuration.configuration_hash,
             status="running",
-            started_at=_utcnow(),
+            started_at=utcnow(),
         )
         self._session.add(run)
         self._session.flush()
@@ -374,8 +374,8 @@ class CalculationRuleRepository:
                         result.comparison.cached_value_freshness
                     ),
                     warnings_json=list(result.execution.warnings),
-                    started_at=_utcnow(),
-                    completed_at=_utcnow(),
+                    started_at=utcnow(),
+                    completed_at=utcnow(),
                 )
             )
         self._session.flush()
@@ -398,7 +398,7 @@ class CalculationRuleRepository:
         run.warnings_json = list(warnings)
         run.error_code = None
         run.error_message = None
-        run.completed_at = _utcnow()
+        run.completed_at = utcnow()
         self._session.flush()
 
     def mark_failed(
@@ -413,7 +413,7 @@ class CalculationRuleRepository:
         run.status = "failed"
         run.error_code = error_code[:100]
         run.error_message = error_message[:1000]
-        run.completed_at = _utcnow()
+        run.completed_at = utcnow()
         self._session.flush()
 
     def load_result(self, extraction_id: str) -> CalculationRuleExtractionResult:
@@ -621,7 +621,3 @@ class CalculationRuleRepository:
             financial_series_value_id=row.financial_series_value_id,
             warnings=tuple(row.warnings_json or ()),
         )
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)

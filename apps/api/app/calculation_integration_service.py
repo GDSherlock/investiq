@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import json
+import logging
+import traceback
 
 from pydantic import TypeAdapter
 from sqlalchemy.orm import Session
@@ -15,7 +18,10 @@ from .calculation_rules.phase2_types import (
 )
 from .calculation_rules.repository import CalculationRuleRepository
 from .calculation_rules.service import CalculationRuleExtractionService
-from .calculation_rules.types import CalculationRuleExtractionConfiguration
+from .calculation_rules.types import (
+    CalculationRuleExtractionConfiguration,
+    FormulaIdFactory,
+)
 from .model_extraction_read_service import ModelExtractionReadService
 from .model_extraction_types import (
     FinancialSeriesValueNotFound,
@@ -46,6 +52,40 @@ from .schemas import (
 
 
 _OUTPUT_VALUE_ADAPTER = TypeAdapter(CalculationOutputValue)
+_LOGGER = logging.getLogger("uvicorn.error")
+
+
+def _sanitized_traceback(exc: BaseException) -> list[dict[str, object]]:
+    return [
+        {
+            "file": frame.filename,
+            "function": frame.name,
+            "line": frame.lineno,
+        }
+        for frame in traceback.extract_tb(exc.__traceback__)
+    ]
+
+
+def _log_preparation_failure(
+    exc: BaseException,
+    *,
+    model_version_id: str,
+    workbook_version_id: str | None,
+    calculation_rule_extraction_id: str | None,
+    failure_stage: str,
+) -> None:
+    payload = {
+        "model_version_id": model_version_id,
+        "workbook_version_id": workbook_version_id,
+        "calculation_rule_extraction_id": calculation_rule_extraction_id,
+        "failure_stage": failure_stage,
+        "exception_type": type(exc).__name__,
+        "traceback": _sanitized_traceback(exc),
+    }
+    _LOGGER.error(
+        "Calculation preparation failed: %s",
+        json.dumps(payload, sort_keys=True),
+    )
 
 
 class CalculationIntegrationError(RuntimeError):
@@ -103,18 +143,30 @@ class CalculationIntegrationService:
         )
 
     def prepare(self, model_version_id: str) -> CalculationReadinessResponse:
+        workbook_version_id: str | None = None
+        calculation_rule_extraction_id: str | None = None
+        failure_stage = "model_lookup"
         try:
             model = self._read_service.load_model_version(
                 model_version_id,
                 require_materialized=True,
             )
+            workbook_version_id = model.workbook_version_id
+            calculation_rule_extraction_id = FormulaIdFactory.extraction_id(
+                model.id,
+                workbook_version_id,
+                self._phase1_configuration,
+            )
+            failure_stage = "phase1_preparation"
             self._phase1_service.extract_and_execute(
                 model_version_id=model.id,
-                workbook_version_id=model.workbook_version_id,
+                workbook_version_id=workbook_version_id,
             )
+            failure_stage = "phase2_compilation"
             self._phase2_service.compile_workbook(
-                workbook_version_id=model.workbook_version_id,
+                workbook_version_id=workbook_version_id,
             )
+            failure_stage = "readiness_reload"
             return self.get_readiness(model.id)
         except ModelVersionNotFound as exc:
             raise CalculationIntegrationError(
@@ -140,6 +192,13 @@ class CalculationIntegrationService:
         except CalculationIntegrationError:
             raise
         except Exception as exc:
+            _log_preparation_failure(
+                exc,
+                model_version_id=model_version_id,
+                workbook_version_id=workbook_version_id,
+                calculation_rule_extraction_id=calculation_rule_extraction_id,
+                failure_stage=failure_stage,
+            )
             raise CalculationIntegrationError(
                 "CALCULATION_PREPARATION_FAILED",
                 "Calculation preparation failed.",

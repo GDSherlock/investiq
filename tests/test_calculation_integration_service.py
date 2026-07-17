@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import logging
 from pathlib import Path
 import uuid
 
@@ -429,6 +430,30 @@ class _ExplodingInventory:
         raise RuntimeError("internal workbook details must not cross the facade")
 
 
+def _preparation_failure_log_payload(caplog) -> dict[str, object]:
+    prefix = "Calculation preparation failed: "
+    matching = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith(prefix)
+    ]
+    assert len(matching) == 1
+    return json.loads(matching[0][len(prefix) :])
+
+
+def _assert_sanitized_traceback(payload: dict[str, object]) -> None:
+    frames = payload["traceback"]
+    assert isinstance(frames, list)
+    assert frames
+    assert all(
+        set(frame) == {"file", "function", "line"}
+        and isinstance(frame["file"], str)
+        and isinstance(frame["function"], str)
+        and isinstance(frame["line"], int)
+        for frame in frames
+    )
+
+
 def test_preparation_is_successful_and_replay_is_idempotent(
     integration_context,
 ) -> None:
@@ -495,6 +520,7 @@ def test_preparation_rejects_non_materialized_model_without_artifacts(
 @pytest.mark.parametrize("integration_context", [False], indirect=True)
 def test_phase1_preparation_failure_preserves_canonical_state_and_retry_converges(
     integration_context,
+    caplog,
 ) -> None:
     from apps.api.app.calculation_integration_service import (
         CalculationIntegrationError,
@@ -511,6 +537,10 @@ def test_phase1_preparation_failure_preserves_canonical_state_and_retry_converge
         context["read_service"],
         inventory=_ExplodingInventory(),
     )
+    caplog.set_level(
+        logging.ERROR,
+        logger="uvicorn.error",
+    )
 
     with pytest.raises(CalculationIntegrationError) as captured:
         CalculationIntegrationService(
@@ -521,6 +551,21 @@ def test_phase1_preparation_failure_preserves_canonical_state_and_retry_converge
 
     failed = context["session"].scalar(select(CalculationRuleExtraction))
     assert captured.value.code == "CALCULATION_PREPARATION_FAILED"
+    assert captured.value.detail() == {
+        "code": "CALCULATION_PREPARATION_FAILED",
+        "message": "Calculation preparation failed.",
+        "retryable": False,
+        "resource_id": context["model"].id,
+    }
+    log_payload = _preparation_failure_log_payload(caplog)
+    assert log_payload["model_version_id"] == context["model"].id
+    assert log_payload["workbook_version_id"] == context["workbook"].id
+    assert log_payload["calculation_rule_extraction_id"] == failed.id
+    assert log_payload["failure_stage"] == "phase1_preparation"
+    assert log_payload["exception_type"] == "RuntimeError"
+    _assert_sanitized_traceback(log_payload)
+    assert "internal workbook details must not cross the facade" not in caplog.text
+    assert "=SUM(" not in caplog.text
     assert failed.status == "failed"
     assert failed.error_message == "Calculation rule extraction failed"
     assert context["session"].scalar(
@@ -547,6 +592,7 @@ def test_phase1_preparation_failure_preserves_canonical_state_and_retry_converge
 
 def test_phase2_preparation_failure_preserves_phase1_and_retry_converges(
     integration_context,
+    caplog,
 ) -> None:
     from apps.api.app.calculation_integration_service import (
         CalculationIntegrationError,
@@ -562,6 +608,10 @@ def test_phase2_preparation_failure_preserves_phase1_and_retry_converges(
         context["read_service"],
         inventory=_ExplodingInventory(),
     )
+    caplog.set_level(
+        logging.ERROR,
+        logger="uvicorn.error",
+    )
 
     with pytest.raises(CalculationIntegrationError) as captured:
         CalculationIntegrationService(
@@ -572,6 +622,21 @@ def test_phase2_preparation_failure_preserves_phase1_and_retry_converges(
 
     phase1 = context["session"].scalar(select(CalculationRuleExtraction))
     assert captured.value.code == "CALCULATION_PREPARATION_FAILED"
+    assert captured.value.detail() == {
+        "code": "CALCULATION_PREPARATION_FAILED",
+        "message": "Calculation preparation failed.",
+        "retryable": False,
+        "resource_id": context["model"].id,
+    }
+    log_payload = _preparation_failure_log_payload(caplog)
+    assert log_payload["model_version_id"] == context["model"].id
+    assert log_payload["workbook_version_id"] == context["workbook"].id
+    assert log_payload["calculation_rule_extraction_id"] == phase1.id
+    assert log_payload["failure_stage"] == "phase2_compilation"
+    assert log_payload["exception_type"] == "RuntimeError"
+    _assert_sanitized_traceback(log_payload)
+    assert "internal workbook details must not cross the facade" not in caplog.text
+    assert "=SUM(" not in caplog.text
     assert phase1.status == "completed_with_warning"
     assert context["session"].scalar(
         select(func.count()).select_from(CalculationGraphVersionRecord)

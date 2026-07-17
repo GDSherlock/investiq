@@ -14,7 +14,7 @@ from apps.api.app.database import Base, DATABASE_URL
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 configured_url = config.get_main_option("sqlalchemy.url").strip()
 database_url = configured_url or DATABASE_URL

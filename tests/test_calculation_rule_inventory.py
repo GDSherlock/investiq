@@ -12,6 +12,7 @@ from apps.api.app.calculation_rules.types import (
     FormulaIdFactory,
     WorkbookCellRef,
 )
+from tests.calculation_rule_test_support import without_calculation_properties
 
 
 WORKBOOK_VERSION_ID = "12345678-1234-5678-9234-567812345678"
@@ -109,6 +110,22 @@ def test_inventory_scans_visible_hidden_and_very_hidden_formula_cells() -> None:
     assert catalog.formulas[0].cache_status == "missing"
     assert catalog.formulas[0].cache_freshness == "recalculation_required"
     assert catalog.formulas[0].number_format == "0.00"
+
+
+def test_inventory_handles_workbook_without_calculation_properties() -> None:
+    content_bytes = without_calculation_properties(_workbook_bytes())
+
+    catalog = WorkbookFormulaInventory().scan(
+        content_bytes,
+        WORKBOOK_VERSION_ID,
+    )
+
+    assert len(catalog.formulas) == 3
+    assert catalog.recalculation_required is False
+    assert all(
+        formula.cache_freshness == "missing"
+        for formula in catalog.formulas
+    )
 
 
 def test_inventory_catalog_retains_static_and_blank_cell_facts() -> None:

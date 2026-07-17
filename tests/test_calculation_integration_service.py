@@ -50,14 +50,17 @@ from apps.api.app.workbook_storage import DatabaseWorkbookStorage
 
 
 @pytest.fixture
-def integration_context(tmp_path: Path):
+def integration_context(tmp_path: Path, request):
     engine, session_factory = create_sqlite_session_factory(
         sqlite_file_url(tmp_path / "calculation-integration.db")
     )
     Base.metadata.create_all(engine)
     session = session_factory()
     storage, workbook, model, parameter, series, series_value = (
-        create_materialized_rule_model(session)
+        create_materialized_rule_model(
+            session,
+            include_calculation_properties=getattr(request, "param", True),
+        )
     )
     other_model = ModelVersion(
         id=new_uuid(),
@@ -489,6 +492,7 @@ def test_preparation_rejects_non_materialized_model_without_artifacts(
     assert context["session"].get(ModelVersion, context["model"].id).status == "extracted"
 
 
+@pytest.mark.parametrize("integration_context", [False], indirect=True)
 def test_phase1_preparation_failure_preserves_canonical_state_and_retry_converges(
     integration_context,
 ) -> None:
@@ -533,6 +537,9 @@ def test_phase1_preparation_failure_preserves_canonical_state_and_retry_converge
 
     assert retried.status == "ready_with_warning"
     assert retried.calculation_rule_extraction_id == failed.id
+    assert context["session"].scalar(
+        select(func.count()).select_from(CalculationRuleExtraction)
+    ) == 1
     assert _canonical_fingerprint(
         context["session"], context["model"].id
     ) == canonical_before

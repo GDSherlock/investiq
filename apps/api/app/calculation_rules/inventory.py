@@ -168,6 +168,8 @@ class WorkbookFormulaInventory:
     @staticmethod
     def _requires_recalculation(workbook: Any) -> bool:
         calculation = workbook.calculation
+        if calculation is None:
+            return False
         return bool(
             calculation.fullCalcOnLoad
             or calculation.forceFullCalc

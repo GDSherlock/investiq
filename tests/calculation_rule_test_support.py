@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from io import BytesIO
+import re
+from zipfile import ZipFile
 
 from openpyxl import Workbook
 
@@ -16,7 +18,31 @@ from apps.api.app.model_extraction_types import FinancialEntityIdFactory, new_uu
 from apps.api.app.workbook_storage import DatabaseWorkbookStorage
 
 
-def calculation_workbook_bytes() -> bytes:
+_CALCULATION_PROPERTIES_PATTERN = re.compile(
+    rb"<calcPr\b[^>]*/>|<calcPr\b[^>]*>.*?</calcPr>",
+    re.DOTALL,
+)
+
+
+def without_calculation_properties(content_bytes: bytes) -> bytes:
+    source_buffer = BytesIO(content_bytes)
+    output_buffer = BytesIO()
+    with ZipFile(source_buffer, "r") as source, ZipFile(output_buffer, "w") as output:
+        removed = 0
+        for member in source.infolist():
+            payload = source.read(member.filename)
+            if member.filename == "xl/workbook.xml":
+                payload, removed = _CALCULATION_PROPERTIES_PATTERN.subn(b"", payload)
+            output.writestr(member, payload)
+    if removed != 1:
+        raise AssertionError("Expected one workbook calculation-properties element")
+    return output_buffer.getvalue()
+
+
+def calculation_workbook_bytes(
+    *,
+    include_calculation_properties: bool = True,
+) -> bytes:
     workbook = Workbook()
     inputs = workbook.active
     inputs.title = "Inputs"
@@ -44,13 +70,22 @@ def calculation_workbook_bytes() -> bytes:
     buffer = BytesIO()
     workbook.save(buffer)
     workbook.close()
-    return buffer.getvalue()
+    content_bytes = buffer.getvalue()
+    if not include_calculation_properties:
+        return without_calculation_properties(content_bytes)
+    return content_bytes
 
 
-def create_materialized_rule_model(session):
+def create_materialized_rule_model(
+    session,
+    *,
+    include_calculation_properties: bool = True,
+):
     storage = DatabaseWorkbookStorage(session)
     workbook = WorkbookVersionRepository(session, storage).get_or_create(
-        calculation_workbook_bytes(),
+        calculation_workbook_bytes(
+            include_calculation_properties=include_calculation_properties
+        ),
         "calculation-rules.xlsx",
     )
     model = ModelVersion(

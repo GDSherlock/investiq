@@ -143,7 +143,7 @@ def test_duplicate_override_target_is_rejected() -> None:
 
 
 @pytest.fixture
-def api_context(tmp_path: Path):
+def api_context(tmp_path: Path, request):
     engine, session_factory = create_sqlite_session_factory(
         sqlite_file_url(tmp_path / "calculation-api.db")
     )
@@ -151,7 +151,10 @@ def api_context(tmp_path: Path):
     setup = session_factory()
     try:
         _storage, workbook, model, parameter, _series, series_value = (
-            create_materialized_rule_model(setup)
+            create_materialized_rule_model(
+                setup,
+                include_calculation_properties=getattr(request, "param", True),
+            )
         )
         identifiers = {
             "workbook_version_id": workbook.id,
@@ -275,6 +278,21 @@ def test_calculation_api_returns_stable_structured_domain_errors(api_context) ->
     assert prepared.status_code == 200
     assert mismatch.status_code == 409
     assert mismatch.json()["detail"]["code"] == "GRAPH_VERSION_MISMATCH"
+
+
+@pytest.mark.parametrize("api_context", [False], indirect=True)
+def test_prepare_handles_workbook_without_calculation_properties(api_context) -> None:
+    context = api_context
+
+    response = context["client"].post(
+        f"/api/v1/models/{context['model_version_id']}/calculation/prepare",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready_with_warning"
+    assert response.json()["calculation_rule_extraction_id"] is not None
+    assert response.json()["graph_version_id"] is not None
 
 
 def _api_canonical_fingerprint(session, model_version_id: str) -> tuple[object, ...]:

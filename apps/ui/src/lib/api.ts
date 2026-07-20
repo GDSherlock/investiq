@@ -1,3 +1,5 @@
+import { normalizeUploadResponseError } from './uploadAttempt';
+
 const API_BASE = '';
 
 function getAuthHeaders(): Record<string, string> {
@@ -17,7 +19,10 @@ export async function uploadModel(file: File) {
     headers: { ...getAuthHeaders() },
     body: formData,
   });
-  if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
+  if (!res.ok) {
+    const errorPayload = await res.json().catch(() => null);
+    throw new Error(normalizeUploadResponseError(res.statusText, errorPayload));
+  }
   return res.json();
 }
 

@@ -1,7 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ExtractionLoadingExperience } from '@/components/extraction/ExtractionLoadingExperience';
 import { uploadModel } from '@/lib/api';
+import {
+  createProgressDriver,
+  type ProgressDriver,
+  type ProgressSnapshot,
+} from '@/lib/extractionProgress';
+import { normalizeUploadError, runUploadAttempt } from '@/lib/uploadAttempt';
 
 interface HealthReport {
   health_score: number;
@@ -24,6 +31,17 @@ export default function HomePage() {
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadingState, setLoadingState] = useState<'processing' | 'completed'>('processing');
+  const [progressSnapshot, setProgressSnapshot] = useState<ProgressSnapshot>({
+    progress: 0,
+    stage: 'upload',
+    phase: 'processing',
+  });
+  const activeDriverRef = useRef<ProgressDriver | null>(null);
+  const attemptInFlightRef = useRef(false);
+  const handoffTimerRef = useRef<number | null>(null);
+  const handoffResolveRef = useRef<(() => void) | null>(null);
+  const mountedRef = useRef(true);
 
   // Migrate legacy localStorage keys from projagent → investiq
   useEffect(() => {
@@ -41,24 +59,92 @@ export default function HomePage() {
     }
   }, []);
 
-  const handleUpload = async () => {
-    if (!file) return;
-    setUploading(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      activeDriverRef.current?.stop();
+      if (handoffTimerRef.current !== null) {
+        window.clearTimeout(handoffTimerRef.current);
+      }
+      handoffResolveRef.current?.();
+      handoffResolveRef.current = null;
+    };
+  }, []);
+
+  const waitForCompletedState = useCallback(() => {
+    return new Promise<void>((resolve) => {
+      if (!mountedRef.current) {
+        resolve();
+        return;
+      }
+
+      handoffResolveRef.current = resolve;
+      handoffTimerRef.current = window.setTimeout(() => {
+        handoffTimerRef.current = null;
+        handoffResolveRef.current = null;
+        resolve();
+      }, 350);
+    });
+  }, []);
+
+  const handleUpload = useCallback(async () => {
+    if (!file || attemptInFlightRef.current) return;
+    attemptInFlightRef.current = true;
     setError(null);
-    try {
-      const data = await uploadModel(file);
-      setResult(data);
-      // Store IDs for other pages
-      if (typeof window !== 'undefined') {
+    setProgressSnapshot({
+      progress: 0,
+      stage: 'upload',
+      phase: 'processing',
+    });
+
+    const progress = createProgressDriver({
+      onUpdate: (snapshot) => {
+        if (mountedRef.current) setProgressSnapshot(snapshot);
+      },
+      reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    });
+    activeDriverRef.current = progress;
+
+    await runUploadAttempt<UploadResult>({
+      request: () => uploadModel(file),
+      progress,
+      onPending: () => {
+        if (!mountedRef.current) return;
+        setLoadingState('processing');
+        setUploading(true);
+      },
+      onCompleted: () => {
+        if (mountedRef.current) setLoadingState('completed');
+      },
+      waitForHandoff: waitForCompletedState,
+      onSucceeded: (data) => {
+        if (!mountedRef.current) return;
         localStorage.setItem('investiq_model_id', data.model_id);
         localStorage.setItem('investiq_investment_id', data.investment_id);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
-      setUploading(false);
-    }
-  };
+        setResult(data);
+        setUploading(false);
+      },
+      onFailed: (uploadError) => {
+        if (!mountedRef.current) return;
+        setError(normalizeUploadError(uploadError));
+        setUploading(false);
+      },
+    });
+
+    activeDriverRef.current = null;
+    attemptInFlightRef.current = false;
+  }, [file, waitForCompletedState]);
+
+  if (uploading) {
+    return (
+      <ExtractionLoadingExperience
+        progress={progressSnapshot.progress}
+        stage={progressSnapshot.stage}
+        state={loadingState}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">

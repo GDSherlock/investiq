@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+import math
 import re
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .model_extraction_models import (
@@ -16,17 +18,20 @@ from .model_extraction_models import (
 )
 from .model_extraction_types import (
     AmbiguousSourceCellError,
+    CanonicalCalculationInput,
     CanonicalFinancialSeries,
     CanonicalFinancialSeriesValue,
     CanonicalParameter,
     FinancialEntity,
     FinancialSeriesNotFound,
+    FinancialSeriesValueNotFound,
     FinancialSeriesValueResolution,
     InvalidCellAddress,
     ModelVersionData,
     ModelVersionNotFound,
     ModelVersionNotReady,
     ModelWorkbookMismatch,
+    ParameterNotFound,
     ParameterResolution,
     SourceResolvedEntity,
     WorkbookVersionData,
@@ -110,6 +115,24 @@ class ModelExtractionReadService:
         ).all()
         return [self._parameter_data(row) for row in rows]
 
+    def get_parameter(
+        self,
+        model_version_id: str,
+        parameter_id: str,
+    ) -> CanonicalParameter:
+        self.load_model_version(model_version_id)
+        row = self._session.scalar(
+            select(ModelParameter).where(
+                ModelParameter.id == parameter_id,
+                ModelParameter.model_version_id == model_version_id,
+            )
+        )
+        if row is None:
+            raise ParameterNotFound(
+                "Canonical parameter was not found in the model version"
+            )
+        return self._parameter_data(row)
+
     def list_financial_series(
         self,
         model_version_id: str,
@@ -155,6 +178,150 @@ class ModelExtractionReadService:
             )
         rows = self._session.scalars(statement).all()
         return [self._value_data(row) for row in rows]
+
+    def get_financial_series_value(
+        self,
+        model_version_id: str,
+        financial_series_value_id: str,
+    ) -> FinancialSeriesValueResolution:
+        self.load_model_version(model_version_id)
+        row = self._session.execute(
+            select(FinancialSeriesValue, FinancialSeries)
+            .join(FinancialSeries)
+            .where(
+                FinancialSeriesValue.id == financial_series_value_id,
+                FinancialSeries.model_version_id == model_version_id,
+            )
+        ).one_or_none()
+        if row is None:
+            raise FinancialSeriesValueNotFound(
+                "Canonical financial-series value was not found in the model version"
+            )
+        value, series = row
+        series_data = self._series_data(series)
+        return FinancialSeriesValueResolution(
+            entity=series_data.entity_ref,
+            series=series_data,
+            value=self._value_data(value),
+        )
+
+    def get_calculation_input(
+        self,
+        model_version_id: str,
+        target_kind: str,
+        target_id: str,
+    ) -> CanonicalCalculationInput:
+        if target_kind == "parameter":
+            parameter = self.get_parameter(model_version_id, target_id)
+            return CanonicalCalculationInput(
+                target_kind="parameter",
+                target_id=parameter.id,
+                model_version_id=parameter.model_version_id,
+                label=parameter.label,
+                category=parameter.category,
+                unit=parameter.unit,
+                scenario=parameter.scenario,
+                period=(
+                    str(parameter.period_json)
+                    if parameter.period_json is not None
+                    else None
+                ),
+                current_value=parameter.validated_value_json,
+                value_type=_canonical_value_type(
+                    parameter.validated_value_json,
+                    parameter.data_type,
+                ),
+                source_sheet=parameter.source_sheet,
+                source_cell=parameter.source_cell,
+                formula_backed=_formula_backed(
+                    parameter.exact_formula,
+                    parameter.formula_status,
+                ),
+                source_owner_count=self._source_owner_count(
+                    model_version_id,
+                    parameter.source_sheet,
+                    parameter.source_cell,
+                ),
+            )
+        if target_kind == "financial_series_value":
+            resolution = self.get_financial_series_value(model_version_id, target_id)
+            series = resolution.series
+            value = resolution.value
+            return CanonicalCalculationInput(
+                target_kind="financial_series_value",
+                target_id=value.id,
+                model_version_id=series.model_version_id,
+                label=series.label,
+                category=series.category,
+                unit=series.unit,
+                scenario=series.scenario,
+                period=value.display_period_label,
+                current_value=value.value_json,
+                value_type=_canonical_value_type(value.value_json, value.data_type),
+                source_sheet=value.value_source_sheet,
+                source_cell=value.value_source_cell,
+                formula_backed=_formula_backed(
+                    value.exact_formula,
+                    value.formula_status,
+                ),
+                source_owner_count=self._source_owner_count(
+                    model_version_id,
+                    value.value_source_sheet,
+                    value.value_source_cell,
+                ),
+            )
+        raise ValueError("Calculation input kind is not registered")
+
+    def list_calculation_inputs(
+        self,
+        model_version_id: str,
+        target_kind: str,
+    ) -> list[CanonicalCalculationInput]:
+        if target_kind == "parameter":
+            target_ids = [
+                parameter.id for parameter in self.list_parameters(model_version_id)
+            ]
+        elif target_kind == "financial_series_value":
+            target_ids = [
+                value.id
+                for value in self.list_financial_series_values(model_version_id)
+            ]
+        else:
+            raise ValueError("Calculation input kind is not registered")
+        return sorted(
+            (
+                self.get_calculation_input(model_version_id, target_kind, target_id)
+                for target_id in target_ids
+            ),
+            key=lambda item: item.target_id,
+        )
+
+    def _source_owner_count(
+        self,
+        model_version_id: str,
+        sheet_name: str,
+        cell_address: str,
+    ) -> int:
+        parameter_count = self._session.scalar(
+            select(func.count())
+            .select_from(ModelParameter)
+            .where(
+                ModelParameter.model_version_id == model_version_id,
+                ModelParameter.source_sheet == sheet_name,
+                ModelParameter.source_cell == cell_address,
+            )
+        ) or 0
+        series_value_count = self._session.scalar(
+            select(func.count())
+            .select_from(FinancialSeriesValue)
+            .join(FinancialSeries)
+            .where(
+                FinancialSeries.model_version_id == model_version_id,
+                FinancialSeriesValue.value_source_sheet == sheet_name,
+                FinancialSeriesValue.value_source_cell == cell_address,
+            )
+        ) or 0
+        return parameter_count + series_value_count
 
     def resolve_entity_by_source_cell(
         self,
@@ -307,3 +474,23 @@ def _normalize_a1(cell_address: str) -> str:
     if column_index > _MAX_EXCEL_COLUMN or row_index > _MAX_EXCEL_ROW:
         raise InvalidCellAddress("Cell address is outside Excel worksheet bounds")
     return f"{column_letters.upper()}{row_index}"
+
+
+def _formula_backed(exact_formula: str | None, formula_status: str) -> bool:
+    return bool(exact_formula) or formula_status.startswith("formula")
+
+
+def _canonical_value_type(value: object, data_type: str | None) -> str | None:
+    if value is None:
+        return "blank"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (datetime, date)) or data_type == "d":
+        return "date"
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return "number"
+    if isinstance(value, str):
+        return "text"
+    return None

@@ -53,6 +53,14 @@ class FinancialSeriesNotFound(ModelExtractionPersistenceError):
     """The requested financial series is not part of the model version."""
 
 
+class ParameterNotFound(ModelExtractionPersistenceError):
+    """The requested canonical parameter is not part of the model version."""
+
+
+class FinancialSeriesValueNotFound(ModelExtractionPersistenceError):
+    """The requested canonical series value is not part of the model version."""
+
+
 class InvalidCellAddress(ModelExtractionPersistenceError):
     """A source cell is not a valid bounded Excel A1 address."""
 
@@ -269,6 +277,38 @@ class CanonicalFinancialSeriesValue:
     number_format: str | None
     data_type: str | None
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class CanonicalCalculationInput:
+    target_kind: Literal["parameter", "financial_series_value"]
+    target_id: str
+    model_version_id: str
+    label: str
+    category: str | None
+    unit: str | None
+    scenario: str | None
+    period: str | None
+    current_value: Any
+    value_type: str | None
+    source_sheet: str
+    source_cell: str
+    formula_backed: bool
+    source_owner_count: int
+
+    @property
+    def editable(self) -> bool:
+        return self.non_editable_reason is None
+
+    @property
+    def non_editable_reason(self) -> str | None:
+        if self.formula_backed:
+            return "formula_backed"
+        if self.source_owner_count != 1:
+            return "ambiguous_source_ownership"
+        if self.value_type not in {"number", "boolean", "text", "blank", "date"}:
+            return "unsupported_value_type"
+        return None
 
 
 FinancialEntity = CanonicalParameter | CanonicalFinancialSeries

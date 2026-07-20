@@ -268,6 +268,16 @@ def test_task_failure_is_sanitized_and_same_identity_can_retry(service_context) 
     [
         ("Financial_Model_Data.xlsx", 352, 351),
         ("experiments/workbook_agent_poc/fixtures/multilingual.xlsx", 3, 3),
+        (
+            "tests/fixtures/calculation_rules/01_solar_pv_project_finance.xlsx",
+            735,
+            651,
+        ),
+        (
+            "tests/fixtures/calculation_rules/06_battery_storage_revenue_stack.xlsx",
+            489,
+            464,
+        ),
     ],
 )
 def test_repository_workbook_corpus_compiles_graphs_and_executes_without_crash(

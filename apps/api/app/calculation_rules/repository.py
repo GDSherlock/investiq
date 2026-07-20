@@ -93,6 +93,25 @@ class CalculationRuleExtractionResult:
         return metrics if isinstance(metrics, Mapping) else {}
 
 
+@dataclass(frozen=True)
+class CalculationPreparationState:
+    calculation_rule_extraction_id: str
+    model_version_id: str
+    workbook_version_id: str
+    inventory_version: str
+    ir_version: str
+    compiler_version: str
+    engine_version: str
+    function_registry_version: str
+    semantics_profile: str
+    configuration_hash: str
+    status: str
+    summary: Mapping[str, Any]
+    warnings: tuple[str, ...]
+    error_code: str | None
+    error_message: str | None
+
+
 class CalculationRuleRepository:
     def __init__(self, session: Session):
         self._session = session
@@ -161,6 +180,45 @@ class CalculationRuleRepository:
         if run is None or run.status not in {"completed", "completed_with_warning"}:
             return None
         return self.load_result(extraction_id)
+
+    def find_preparation(
+        self,
+        model_version_id: str,
+        workbook_version_id: str,
+        configuration: CalculationRuleExtractionConfiguration,
+    ) -> CalculationPreparationState | None:
+        run = self._session.scalar(
+            select(CalculationRuleExtraction).where(
+                CalculationRuleExtraction.model_version_id == model_version_id,
+                CalculationRuleExtraction.workbook_version_id == workbook_version_id,
+                CalculationRuleExtraction.compiler_version
+                == configuration.compiler_version,
+                CalculationRuleExtraction.engine_version == configuration.engine_version,
+                CalculationRuleExtraction.semantics_profile
+                == configuration.semantics_profile,
+                CalculationRuleExtraction.configuration_hash
+                == configuration.configuration_hash,
+            )
+        )
+        if run is None:
+            return None
+        return CalculationPreparationState(
+            calculation_rule_extraction_id=run.id,
+            model_version_id=run.model_version_id,
+            workbook_version_id=run.workbook_version_id,
+            inventory_version=run.inventory_version,
+            ir_version=run.ir_version,
+            compiler_version=run.compiler_version,
+            engine_version=run.engine_version,
+            function_registry_version=run.function_registry_version,
+            semantics_profile=run.semantics_profile,
+            configuration_hash=run.configuration_hash,
+            status=run.status,
+            summary=dict(run.summary_json or {}),
+            warnings=tuple(run.warnings_json or ()),
+            error_code=run.error_code,
+            error_message=run.error_message,
+        )
 
     def save_compilation(
         self,

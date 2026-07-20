@@ -83,6 +83,26 @@ class PersistedCalculationRun:
         return {value.display: value for value in self.values}
 
 
+@dataclass(frozen=True)
+class PersistedCalculationGraphMetadata:
+    graph_version_id: str
+    workbook_version_id: str
+    compiler_version: str
+    ir_version: str
+    function_registry_version: str
+    semantics_profile: str
+    compiler_manifest_hash: str
+    content_fingerprint: str
+    node_count: int
+    edge_count: int
+
+
+@dataclass(frozen=True)
+class PersistedCalculationRunBundle:
+    run: PersistedCalculationRun
+    graph: PersistedCalculationGraphMetadata
+
+
 class Phase2CalculationRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
@@ -191,6 +211,73 @@ class Phase2CalculationRepository:
                     )
                 )
         self._session.flush()
+
+    def find_matching_graph(
+        self,
+        workbook_version_id: str,
+        configuration: Phase2CalculationConfiguration,
+    ) -> PersistedCalculationGraphMetadata | None:
+        graph_id = self._session.scalar(
+            select(CalculationGraphVersionRecord.id)
+            .where(
+                CalculationGraphVersionRecord.workbook_version_id
+                == workbook_version_id,
+                CalculationGraphVersionRecord.compiler_version
+                == configuration.compiler_version,
+                CalculationGraphVersionRecord.ir_version == configuration.ir_version,
+                CalculationGraphVersionRecord.function_registry_version
+                == configuration.function_registry_version,
+                CalculationGraphVersionRecord.semantics_profile
+                == configuration.semantics_profile,
+            )
+            .order_by(
+                CalculationGraphVersionRecord.created_at.desc(),
+                CalculationGraphVersionRecord.id.desc(),
+            )
+            .limit(1)
+        )
+        return self.load_graph_metadata(graph_id) if graph_id is not None else None
+
+    def load_graph_metadata(
+        self,
+        graph_version_id: str,
+    ) -> PersistedCalculationGraphMetadata | None:
+        row = self._session.get(CalculationGraphVersionRecord, graph_version_id)
+        if row is None:
+            return None
+        return PersistedCalculationGraphMetadata(
+            graph_version_id=row.id,
+            workbook_version_id=row.workbook_version_id,
+            compiler_version=row.compiler_version,
+            ir_version=row.ir_version,
+            function_registry_version=row.function_registry_version,
+            semantics_profile=row.semantics_profile,
+            compiler_manifest_hash=row.compiler_manifest_hash,
+            content_fingerprint=row.content_fingerprint,
+            node_count=row.node_count,
+            edge_count=row.edge_count,
+        )
+
+    def is_current_graph(
+        self,
+        workbook_version_id: str,
+        graph_version_id: str,
+        configuration: Phase2CalculationConfiguration,
+    ) -> bool:
+        current = self.find_matching_graph(workbook_version_id, configuration)
+        return current is not None and current.graph_version_id == graph_version_id
+
+    def load_run_bundle(
+        self,
+        run_id: str,
+    ) -> PersistedCalculationRunBundle | None:
+        if self._session.get(CalculationRunRecord, run_id) is None:
+            return None
+        run = self.load_run(run_id)
+        graph = self.load_graph_metadata(run.graph_version_id)
+        if graph is None:
+            raise ValueError("Calculation run graph metadata was not found")
+        return PersistedCalculationRunBundle(run=run, graph=graph)
 
     def start_run(
         self,

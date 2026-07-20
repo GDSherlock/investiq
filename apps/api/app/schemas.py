@@ -1,12 +1,286 @@
 """Pydantic schemas for API request/response validation."""
 
-from datetime import datetime
-from typing import Any, Optional, Annotated
-from pydantic import BaseModel, Field, ConfigDict, BeforeValidator
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+import math
+from typing import Annotated, Any, Literal, Optional
+import uuid
+
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 
 # Coerce UUID objects to strings
 StrFromUUID = Annotated[str, BeforeValidator(lambda v: str(v) if v is not None else v)]
+
+
+def _validated_uuid_string(value: str) -> str:
+    return str(uuid.UUID(value))
+
+
+UUIDString = Annotated[
+    str,
+    BeforeValidator(lambda value: str(value) if isinstance(value, uuid.UUID) else value),
+    AfterValidator(_validated_uuid_string),
+]
+
+
+class _CalculationDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+
+class CalculationNumberValue(_CalculationDTO):
+    value_type: Literal["number"]
+    value: StrictStr
+
+    @field_validator("value")
+    @classmethod
+    def validate_finite_decimal(cls, value: str) -> str:
+        try:
+            decimal_value = Decimal(value)
+        except InvalidOperation as exc:
+            raise ValueError("Number value must be a decimal string") from exc
+        if not decimal_value.is_finite():
+            raise ValueError("Number value must be finite")
+        try:
+            finite_float = math.isfinite(float(decimal_value))
+        except (OverflowError, ValueError):
+            finite_float = False
+        if not finite_float:
+            raise ValueError("Number value is outside the calculation engine range")
+        return value
+
+
+class CalculationBooleanValue(_CalculationDTO):
+    value_type: Literal["boolean"]
+    value: StrictBool
+
+
+class CalculationTextValue(_CalculationDTO):
+    value_type: Literal["text"]
+    value: StrictStr
+
+    @field_validator("value")
+    @classmethod
+    def reject_formula_text(cls, value: str) -> str:
+        if value.startswith("="):
+            raise ValueError("Formula-like text is not allowed")
+        return value
+
+
+class CalculationBlankValue(_CalculationDTO):
+    value_type: Literal["blank"]
+    value: None
+
+
+class CalculationDateValue(_CalculationDTO):
+    value_type: Literal["date"]
+    value: date
+
+
+CalculationInputValue = Annotated[
+    CalculationNumberValue
+    | CalculationBooleanValue
+    | CalculationTextValue
+    | CalculationBlankValue
+    | CalculationDateValue,
+    Field(discriminator="value_type"),
+]
+
+
+class ParameterOverrideTarget(_CalculationDTO):
+    kind: Literal["parameter"]
+    parameter_id: UUIDString
+
+    @property
+    def identity(self) -> tuple[str, str]:
+        return self.kind, self.parameter_id
+
+
+class FinancialSeriesValueOverrideTarget(_CalculationDTO):
+    kind: Literal["financial_series_value"]
+    financial_series_value_id: UUIDString
+
+    @property
+    def identity(self) -> tuple[str, str]:
+        return self.kind, self.financial_series_value_id
+
+
+CalculationOverrideTarget = Annotated[
+    ParameterOverrideTarget | FinancialSeriesValueOverrideTarget,
+    Field(discriminator="kind"),
+]
+
+
+class CalculationOverrideRequest(_CalculationDTO):
+    target: CalculationOverrideTarget
+    value: CalculationInputValue
+
+
+class CalculationRequest(_CalculationDTO):
+    graph_version_id: UUIDString
+    overrides: list[CalculationOverrideRequest] = Field(default_factory=list)
+    idempotency_key: str | None = None
+
+    @model_validator(mode="after")
+    def reject_duplicate_targets(self) -> "CalculationRequest":
+        identities = [override.target.identity for override in self.overrides]
+        if len(identities) != len(set(identities)):
+            raise ValueError("Duplicate override target")
+        return self
+
+
+class CalculationPrepareRequest(_CalculationDTO):
+    pass
+
+
+class CalculationErrorDetail(_CalculationDTO):
+    code: str
+    message: str
+    retryable: bool
+    resource_id: UUIDString | None = None
+
+
+class CalculationReadinessVersions(_CalculationDTO):
+    phase1_ir: str
+    phase2_ir: str
+    compiler: str
+    engine: str
+    registry: str
+    semantics: str
+
+
+class CalculationReadinessSummary(_CalculationDTO):
+    formula_cells_total: int = 0
+    formula_cells_supported: int = 0
+    graph_nodes: int = 0
+    graph_edges: int = 0
+
+
+class CalculationReadinessResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    workbook_version_id: UUIDString
+    model_status: str
+    validation_status: str
+    status: Literal[
+        "model_not_ready",
+        "not_prepared",
+        "preparing",
+        "ready",
+        "ready_with_warning",
+        "failed",
+    ]
+    calculation_rule_extraction_id: UUIDString | None = None
+    graph_version_id: UUIDString | None = None
+    versions: CalculationReadinessVersions
+    summary: CalculationReadinessSummary
+    warnings: list[str] = Field(default_factory=list)
+    error: CalculationErrorDetail | None = None
+
+
+class CalculationInputItem(_CalculationDTO):
+    target_kind: Literal["parameter", "financial_series_value"]
+    target_id: UUIDString
+    label: str
+    category: str | None = None
+    unit: str | None = None
+    scenario: str | None = None
+    period: str | None = None
+    current_value: CalculationInputValue
+    editable: bool
+    non_editable_reason: str | None = None
+
+
+class CalculationInputsResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    inputs: list[CalculationInputItem]
+    next_cursor: UUIDString | None = None
+
+
+class CalculationDateSerialValue(_CalculationDTO):
+    value_type: Literal["date_serial"]
+    value: StrictStr
+    iso_evidence: str | None = None
+
+
+class CalculationErrorValue(_CalculationDTO):
+    value_type: Literal["error"]
+    error_code: str
+
+
+CalculationOutputValue = Annotated[
+    CalculationNumberValue
+    | CalculationBooleanValue
+    | CalculationTextValue
+    | CalculationBlankValue
+    | CalculationDateSerialValue
+    | CalculationErrorValue,
+    Field(discriminator="value_type"),
+]
+
+
+class CalculationRunSummary(_CalculationDTO):
+    formula_cells_total: int = 0
+    formula_cells_supported: int = 0
+    unsupported_formula_cells: int = 0
+    calculated_formula_cells: int = 0
+    reused_formula_cells: int = 0
+    dirty_formula_cells: int = 0
+    cycle_formula_cells: int = 0
+    blocked_formula_cells: int = 0
+    execution_error_cells: int = 0
+    grouped_calculation_rules: int = 0
+    graph_nodes: int = 0
+    graph_edges: int = 0
+
+
+class CalculationRunVersions(_CalculationDTO):
+    phase2_ir: str
+    compiler: str
+    engine: str
+    registry: str
+    semantics: str
+
+
+class CalculationRunValueResponse(_CalculationDTO):
+    formula_cell_id: UUIDString
+    sheet_name: str
+    cell_address: str
+    status: str
+    value: CalculationOutputValue | None
+    engine_error_code: str | None = None
+    reused_from_run_id: UUIDString | None = None
+    validation_status: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalculationRunResponse(_CalculationDTO):
+    calculation_run_id: UUIDString
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    base_run_id: UUIDString | None = None
+    status: Literal[
+        "pending",
+        "running",
+        "completed",
+        "completed_with_warning",
+        "failed",
+        "cancelled",
+    ]
+    versions: CalculationRunVersions
+    summary: CalculationRunSummary
+    warnings: list[str] = Field(default_factory=list)
+    values: list[CalculationRunValueResponse] = Field(default_factory=list)
 
 
 # --- Model schemas ---

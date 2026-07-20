@@ -22,15 +22,14 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Show introduction / welcome page on first visit
-  if (showIntro && pathname !== '/login') {
-    return (
-      <IntroductionPage
-        onSkip={() => setShowIntro(false)}
-      />
-    );
-  }
-
-  // Show app
-  return <>{children}</>;
+  // Keep the application mounted behind the introduction so hydration and
+  // persisted calculation restore are not deferred until Skip.
+  return (
+    <>
+      {children}
+      {showIntro && pathname !== '/login' ? (
+        <IntroductionPage onSkip={() => setShowIntro(false)} />
+      ) : null}
+    </>
+  );
 }

@@ -1,4 +1,23 @@
+import type {
+  CalculationInputsResponse,
+  CalculationReadinessResponse,
+  CalculationRequest,
+  CalculationRunResponse,
+  WorkbookValidationResponse,
+} from './calculation-api-types';
+import { parseCalculationApiErrorPayload } from './calculation-flow';
+
 const API_BASE = '';
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+interface LegacyModelUploadResponse {
+  model_id: string;
+  investment_id: string;
+  health_report: Record<string, unknown>;
+  parsed_sheets: string[];
+  assumptions_count: number;
+}
 
 function getAuthHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('investiq_token') : null;
@@ -9,23 +28,178 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
-export async function uploadModel(file: File) {
+async function postModelUpload(file: File): Promise<Response> {
   const formData = new FormData();
   formData.append('file', file);
-  const res = await fetch(`${API_BASE}/api/v1/models/upload`, {
+  return fetch(`${API_BASE}/api/v1/models/upload`, {
     method: 'POST',
     headers: { ...getAuthHeaders() },
     body: formData,
   });
-  if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
-  return res.json();
+}
+
+async function readResponsePayload(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function parseJsonResponse<T>(res: Response): Promise<T> {
+  const payload = await readResponsePayload(res);
+  if (!res.ok) {
+    throw parseCalculationApiErrorPayload(
+      res.status,
+      res.statusText,
+      payload,
+    );
+  }
+  return payload as T;
+}
+
+/**
+ * Compatibility surface for existing legacy pages. New calculation code must
+ * use uploadWorkbookForCalculation so model_version_id stays distinct from
+ * legacy model_id.
+ */
+export async function uploadModel(
+  file: File,
+): Promise<LegacyModelUploadResponse> {
+  return parseJsonResponse<LegacyModelUploadResponse>(
+    await postModelUpload(file),
+  );
+}
+
+export async function uploadWorkbookForCalculation(
+  file: File,
+): Promise<WorkbookValidationResponse> {
+  return parseJsonResponse<WorkbookValidationResponse>(
+    await postModelUpload(file),
+  );
+}
+
+export async function getCalculationReadiness(
+  modelVersionId: string,
+): Promise<CalculationReadinessResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/calculation/readiness`,
+    {
+      cache: 'no-store',
+      headers: { ...getAuthHeaders() },
+    },
+  );
+  return parseJsonResponse<CalculationReadinessResponse>(res);
+}
+
+export async function prepareCalculation(
+  modelVersionId: string,
+): Promise<CalculationReadinessResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/calculation/prepare`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({}),
+    },
+  );
+  return parseJsonResponse<CalculationReadinessResponse>(res);
+}
+
+export async function getCalculationInputs(
+  modelVersionId: string,
+  options: {
+    targetKind?: 'parameter' | 'financial_series_value';
+    editableOnly?: boolean;
+    limit?: number;
+    cursor?: string;
+  } = {},
+): Promise<CalculationInputsResponse> {
+  const params = new URLSearchParams();
+  if (options.targetKind !== undefined) {
+    params.set('target_kind', options.targetKind);
+  }
+  if (options.editableOnly !== undefined) {
+    params.set('editable_only', String(options.editableOnly));
+  }
+  if (options.limit !== undefined) {
+    params.set('limit', String(options.limit));
+  }
+  if (options.cursor !== undefined) {
+    params.set('cursor', options.cursor);
+  }
+  const query = params.size > 0 ? `?${params.toString()}` : '';
+  const res = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/calculation/inputs${query}`,
+    {
+      cache: 'no-store',
+      headers: { ...getAuthHeaders() },
+    },
+  );
+  return parseJsonResponse<CalculationInputsResponse>(res);
+}
+
+export async function runCalculation(
+  modelVersionId: string,
+  request: CalculationRequest,
+): Promise<CalculationRunResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/calculations`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify(request),
+    },
+  );
+  return parseJsonResponse<CalculationRunResponse>(res);
+}
+
+export async function getCalculationRun(
+  calculationRunId: string,
+): Promise<CalculationRunResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/calculation-runs/${encodeURIComponent(calculationRunId)}`,
+    {
+      cache: 'no-store',
+      headers: { ...getAuthHeaders() },
+    },
+  );
+  return parseJsonResponse<CalculationRunResponse>(res);
+}
+
+export function isUsableLegacyModelId(
+  modelId: string | null | undefined,
+): modelId is string {
+  return typeof modelId === 'string' && UUID_PATTERN.test(modelId.trim());
+}
+
+export async function loadLegacyModelIfAvailable<T>(
+  modelId: string | null | undefined,
+  loader: (validModelId: string) => Promise<T>,
+): Promise<T | null> {
+  if (!isUsableLegacyModelId(modelId)) {
+    return null;
+  }
+  return loader(modelId.trim());
 }
 
 export async function getModel(modelId: string) {
-  const res = await fetch(`${API_BASE}/api/v1/models/${modelId}?_t=${Date.now()}`, {
-    cache: 'no-store',
-    headers: { ...getAuthHeaders() },
-  });
+  if (!isUsableLegacyModelId(modelId)) {
+    throw new Error('A valid legacy model ID is required.');
+  }
+  const res = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelId.trim())}?_t=${Date.now()}`,
+    {
+      cache: 'no-store',
+      headers: { ...getAuthHeaders() },
+    },
+  );
   if (!res.ok) throw new Error('Model not found');
   return res.json();
 }

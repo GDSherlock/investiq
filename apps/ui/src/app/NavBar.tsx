@@ -7,6 +7,11 @@ import { useAuth } from './AuthContext';
 import { useTheme } from './ThemeContext';
 import { useScenario, SCENARIO_META } from './ScenarioContext';
 import { useState, useEffect, useCallback } from 'react';
+import {
+  getModel,
+  isUsableLegacyModelId,
+  loadLegacyModelIfAvailable,
+} from '@/lib/api';
 
 /* ── Nav links with optional badges ── */
 const NAV_LINKS: { href: string; label: string; badge?: string; badgeColor?: string }[] = [
@@ -43,13 +48,15 @@ export default function NavBar() {
   const [modelIdState, setModelIdState] = useState<string | null>(null);
 
   /* Fetch project info for a model ID */
-  const fetchProjectInfo = useCallback((id: string) => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('investiq_token') : null;
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    fetch(`/api/v1/models/${id}`, { headers })
-      .then((r) => r.json())
+  const fetchProjectInfo = useCallback((id: string | null | undefined) => {
+    if (!isUsableLegacyModelId(id)) {
+      return;
+    }
+    void loadLegacyModelIfAvailable(id, getModel)
       .then((m) => {
+        if (!m) {
+          return;
+        }
         const pj = m?.parsed_json || {};
         const cover = pj['Cover'] || pj['cover'] || {};
 
@@ -86,10 +93,13 @@ export default function NavBar() {
   /* Read project info from stored model — on mount, route change, and poll for localStorage changes */
   useEffect(() => {
     const id = typeof window !== 'undefined' ? localStorage.getItem('investiq_model_id') : null;
-    if (id && id !== modelIdState) {
+    if (isUsableLegacyModelId(id) && id !== modelIdState) {
       setModelIdState(id);
       fetchProjectInfo(id);
-    } else if (!id) {
+    } else if (!isUsableLegacyModelId(id)) {
+      if (id !== null) {
+        localStorage.removeItem('investiq_model_id');
+      }
       setProjectInfo(null);
       setModelIdState(null);
     }
@@ -99,9 +109,11 @@ export default function NavBar() {
   useEffect(() => {
     const interval = setInterval(() => {
       const id = localStorage.getItem('investiq_model_id');
-      if (id && id !== modelIdState) {
+      if (isUsableLegacyModelId(id) && id !== modelIdState) {
         setModelIdState(id);
         fetchProjectInfo(id);
+      } else if (!isUsableLegacyModelId(id) && id !== null) {
+        localStorage.removeItem('investiq_model_id');
       }
     }, 1000);
     return () => clearInterval(interval);
@@ -110,10 +122,16 @@ export default function NavBar() {
   /* Listen for model uploads (cross-tab) */
   useEffect(() => {
     const handler = (e: StorageEvent) => {
-      if (e.key === 'investiq_model_id' && e.newValue) {
+      if (
+        e.key === 'investiq_model_id' &&
+        isUsableLegacyModelId(e.newValue)
+      ) {
         setModelIdState(e.newValue);
         fetchProjectInfo(e.newValue);
-      } else if (e.key === 'investiq_model_id' && !e.newValue) {
+      } else if (
+        e.key === 'investiq_model_id' &&
+        !isUsableLegacyModelId(e.newValue)
+      ) {
         setProjectInfo(null);
         setModelIdState(null);
       }

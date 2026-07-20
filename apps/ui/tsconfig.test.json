@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": false,
+    "incremental": false,
+    "isolatedModules": false,
+    "jsx": "react-jsx",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "noEmit": false,
+    "plugins": [],
+    "rootDir": ".",
+    "target": "es2020"
+  },
+  "include": [
+    "src/lib/calculation-api-types.ts",
+    "src/lib/calculation-flow.ts",
+    "src/lib/calculation-storage.ts",
+    "src/lib/calculation-value-utils.ts",
+    "src/lib/calculation-logic.test.ts"
+  ]
+}

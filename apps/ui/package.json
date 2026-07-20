@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "tsc -p tsconfig.test.json --outDir /tmp/investiq-ui-calculation-tests && node --test /tmp/investiq-ui-calculation-tests/src/lib/calculation-logic.test.js"
   },
   "dependencies": {
     "next": "^14.2.0",

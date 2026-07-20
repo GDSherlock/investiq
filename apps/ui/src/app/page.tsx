@@ -1,177 +1,264 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { uploadModel } from '@/lib/api';
+import { useEffect, useState } from 'react';
 
-interface HealthReport {
-  health_score: number;
-  sheets_found: string[];
-  assumptions_count: number;
-  issues: string[];
-  status: string;
+import { CalculationPreparationPanel } from '@/components/calculation/CalculationPreparationPanel';
+import { uploadWorkbookForCalculation } from '@/lib/api';
+import {
+  CalculationApiError,
+  type CalculationUiPhase,
+  type WorkbookValidationResponse,
+} from '@/lib/calculation-api-types';
+import { canStartCalculationFlow } from '@/lib/calculation-flow';
+import {
+  CALCULATION_STORAGE_KEYS,
+  clearCalculationArtifacts,
+  persistUploadIdentity,
+  readPersistedCalculationState,
+} from '@/lib/calculation-storage';
+
+interface ActiveCalculationIdentity {
+  modelVersionId: string;
+  workbookVersionId: string;
 }
 
-interface UploadResult {
-  model_id: string;
-  investment_id: string;
-  health_report: HealthReport;
-  parsed_sheets: string[];
-  assumptions_count: number;
+function UploadErrorDetails({ error }: { error: Error }) {
+  if (error instanceof CalculationApiError) {
+    return (
+      <dl className="mt-2 grid gap-1 font-mono text-xs">
+        <div>
+          <dt className="inline text-red-300">code: </dt>
+          <dd className="inline">{error.code}</dd>
+        </div>
+        <div>
+          <dt className="inline text-red-300">message: </dt>
+          <dd className="inline">{error.message}</dd>
+        </div>
+        <div>
+          <dt className="inline text-red-300">retryable: </dt>
+          <dd className="inline">{String(error.retryable)}</dd>
+        </div>
+        <div>
+          <dt className="inline text-red-300">resource_id: </dt>
+          <dd className="inline">{error.resourceId ?? 'null'}</dd>
+        </div>
+      </dl>
+    );
+  }
+  return <p className="mt-2 text-sm">{error.message}</p>;
 }
 
 export default function HomePage() {
   const [file, setFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<UploadResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<CalculationUiPhase>('idle');
+  const [uploadResult, setUploadResult] =
+    useState<WorkbookValidationResponse | null>(null);
+  const [uploadError, setUploadError] = useState<Error | null>(null);
+  const [activeIdentity, setActiveIdentity] =
+    useState<ActiveCalculationIdentity | null>(null);
 
-  // Migrate legacy localStorage keys from projagent → investiq
   useEffect(() => {
+    // Keep the legacy page migration for other application pages. Calculation
+    // APIs never read investiq_model_id.
     const migrations: [string, string][] = [
       ['projagent_model_id', 'investiq_model_id'],
       ['projagent_investment_id', 'investiq_investment_id'],
       ['projagent_persona', 'investiq_persona'],
     ];
     for (const [oldKey, newKey] of migrations) {
-      const v = localStorage.getItem(oldKey);
-      if (v && !localStorage.getItem(newKey)) {
-        localStorage.setItem(newKey, v);
+      const value = localStorage.getItem(oldKey);
+      if (value && !localStorage.getItem(newKey)) {
+        localStorage.setItem(newKey, value);
       }
       localStorage.removeItem(oldKey);
+    }
+
+    const persisted = readPersistedCalculationState(localStorage);
+    if (persisted.modelVersionId && persisted.workbookVersionId) {
+      setActiveIdentity({
+        modelVersionId: persisted.modelVersionId,
+        workbookVersionId: persisted.workbookVersionId,
+      });
+      setPhase('uploaded');
     }
   }, []);
 
   const handleUpload = async () => {
-    if (!file) return;
-    setUploading(true);
-    setError(null);
+    if (!file || phase === 'uploading') {
+      return;
+    }
+    clearCalculationArtifacts(localStorage);
+    setActiveIdentity(null);
+    setUploadResult(null);
+    setUploadError(null);
+    setPhase('uploading');
+
     try {
-      const data = await uploadModel(file);
-      setResult(data);
-      // Store IDs for other pages
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('investiq_model_id', data.model_id);
-        localStorage.setItem('investiq_investment_id', data.investment_id);
+      const response = await uploadWorkbookForCalculation(file);
+      setUploadResult(response);
+      if (canStartCalculationFlow(response)) {
+        persistUploadIdentity(localStorage, response);
+        setActiveIdentity({
+          modelVersionId: response.model_version_id,
+          workbookVersionId: response.workbook_version_id,
+        });
+        setPhase('uploaded');
+      } else {
+        setPhase('failed');
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed');
-    } finally {
-      setUploading(false);
+    } catch (caught) {
+      setUploadError(
+        caught instanceof Error ? caught : new Error('Upload failed.'),
+      );
+      setPhase('failed');
     }
   };
 
+  const uploading = phase === 'uploading';
+
   return (
     <div className="space-y-6">
-      <div className="text-center py-8">
+      <div className="py-8 text-center">
         <h1 className="text-3xl font-bold text-white">InvestIQ</h1>
-        <p className="text-d-muted mt-2">Upload your financial model to begin analysis</p>
+        <p className="mt-2 text-d-muted">
+          Upload a financial model, then exercise the persisted calculation
+          APIs.
+        </p>
       </div>
 
-      {/* Upload Section */}
-      <div className="max-w-xl mx-auto bg-d-card rounded-lg shadow p-6 border border-d-border">
-        <h2 className="text-lg font-semibold mb-4 text-white">Upload Financial Model</h2>
-        <div className="border-2 border-dashed border-d-border rounded-lg p-8 text-center">
+      <section className="mx-auto max-w-xl rounded-lg border border-d-border bg-d-card p-6 shadow">
+        <h2 className="mb-4 text-lg font-semibold text-white">
+          Upload Financial Model
+        </h2>
+        <div className="rounded-lg border-2 border-dashed border-d-border p-8 text-center">
           <input
             type="file"
             accept=".xlsx,.xls"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-            className="block w-full text-sm text-d-muted file:mr-4 file:py-2 file:px-4
-              file:rounded file:border-0 file:text-sm file:font-semibold
-              file:bg-gold-500 file:text-white hover:file:bg-gold-600
-              file:cursor-pointer file:shadow-sm"
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            className="block w-full text-sm text-d-muted file:mr-4 file:cursor-pointer
+              file:rounded file:border-0 file:bg-gold-500 file:px-4 file:py-2
+              file:text-sm file:font-semibold file:text-white file:shadow-sm
+              hover:file:bg-gold-600"
           />
-          {file && (
+          {file ? (
             <p className="mt-2 text-sm text-slate-300">
               Selected: {file.name} ({(file.size / 1024).toFixed(1)} KB)
             </p>
-          )}
+          ) : null}
         </div>
         <button
-          onClick={handleUpload}
+          type="button"
+          onClick={() => void handleUpload()}
           disabled={!file || uploading}
-          className="mt-4 w-full bg-gold-500 text-white font-semibold py-2.5 px-4 rounded hover:bg-gold-600
-            disabled:bg-gray-500 disabled:text-gray-300 disabled:cursor-not-allowed transition shadow-sm"
+          className="mt-4 w-full rounded bg-gold-500 px-4 py-2.5 font-semibold
+            text-white shadow-sm transition hover:bg-gold-600 disabled:cursor-not-allowed
+            disabled:bg-gray-500 disabled:text-gray-300"
         >
-          {uploading ? 'Processing...' : 'Upload & Analyze'}
+          {uploading
+            ? 'Processing…'
+            : phase === 'failed'
+              ? 'Retry upload'
+              : 'Upload & Analyze'}
         </button>
-        {error && <p className="mt-2 text-red-400 text-sm">{error}</p>}
-      </div>
 
-      {/* Results */}
-      {result && (
-        <div className="max-w-4xl mx-auto space-y-4">
-          {/* Health Report */}
-          <div className="bg-d-card rounded-lg shadow p-6 border border-d-border">
-            <h3 className="text-lg font-semibold mb-3 text-white">Model Health Report</h3>
-            <div className="grid grid-cols-3 gap-4 mb-4">
-              <div className="text-center p-3 bg-d-bg rounded border border-d-border">
-                <div className={`text-3xl font-bold ${
-                  result.health_report.health_score >= 80 ? 'text-green-400' :
-                  result.health_report.health_score >= 50 ? 'text-gold-500' : 'text-red-400'
-                }`}>
-                  {result.health_report.health_score}
-                </div>
-                <div className="text-sm text-d-muted">Health Score</div>
-              </div>
-              <div className="text-center p-3 bg-d-bg rounded border border-d-border">
-                <div className="text-3xl font-bold text-white">
-                  {result.parsed_sheets.length}
-                </div>
-                <div className="text-sm text-d-muted">Sheets Parsed</div>
-              </div>
-              <div className="text-center p-3 bg-d-bg rounded border border-d-border">
-                <div className="text-3xl font-bold text-white">
-                  {result.assumptions_count}
-                </div>
-                <div className="text-sm text-d-muted">Assumptions</div>
-              </div>
+        {uploadError ? (
+          <div className="mt-3 rounded border border-red-700/60 bg-red-900/20 p-3 text-red-200">
+            <p className="font-semibold">Upload request failed</p>
+            <UploadErrorDetails error={uploadError} />
+          </div>
+        ) : null}
+      </section>
+
+      {uploadResult ? (
+        <section className="mx-auto max-w-4xl rounded-lg border border-d-border bg-d-card p-6 shadow">
+          <h2 className="text-lg font-semibold text-white">
+            Workbook validation response
+          </h2>
+          <dl className="mt-4 grid gap-3 text-sm md:grid-cols-2">
+            <div className="rounded bg-d-bg p-3">
+              <dt className="text-d-muted">submitted</dt>
+              <dd className="font-mono text-white">
+                {String(uploadResult.submitted)}
+              </dd>
             </div>
-
-            <div className={`inline-block px-3 py-1 rounded text-sm font-semibold ${
-              result.health_report.status === 'HEALTHY' ? 'bg-green-900/30 text-green-400' :
-              result.health_report.status === 'DEGRADED' ? 'bg-yellow-900/30 text-yellow-400' :
-              'bg-red-900/30 text-red-400'
-            }`}>
-              {result.health_report.status}
+            <div className="rounded bg-d-bg p-3">
+              <dt className="text-d-muted">stop_reason</dt>
+              <dd className="font-mono text-white">
+                {uploadResult.stop_reason || '—'}
+              </dd>
             </div>
+            <div className="rounded bg-d-bg p-3">
+              <dt className="text-d-muted">model_version_id</dt>
+              <dd className="break-all font-mono text-white">
+                {uploadResult.model_version_id ?? 'null'}
+              </dd>
+            </div>
+            <div className="rounded bg-d-bg p-3">
+              <dt className="text-d-muted">workbook_version_id</dt>
+              <dd className="break-all font-mono text-white">
+                {uploadResult.workbook_version_id ?? 'null'}
+              </dd>
+            </div>
+          </dl>
 
-            {result.health_report.issues.length > 0 && (
+          <div className="mt-4 rounded border border-d-border bg-d-bg p-3">
+            <h3 className="text-sm font-medium text-white">
+              Validation summary
+            </h3>
+            <pre className="mt-2 overflow-auto text-xs text-slate-200">
+              {JSON.stringify(uploadResult.validation_summary, null, 2)}
+            </pre>
+          </div>
+
+          {!uploadResult.submitted ? (
+            <div className="mt-4 rounded border border-red-700/60 bg-red-900/20 p-4 text-red-200">
+              <p className="font-semibold">
+                Upload stopped before model submission
+              </p>
+              <p className="mt-1 font-mono text-sm">
+                stop_reason: {uploadResult.stop_reason || 'unknown'}
+              </p>
               <div className="mt-3">
-                <h4 className="text-sm font-medium text-white">Issues:</h4>
-                <ul className="list-disc list-inside text-sm text-red-400">
-                  {result.health_report.issues.map((issue, i) => (
-                    <li key={i}>{issue}</li>
-                  ))}
-                </ul>
+                <p className="text-sm font-medium">errors</p>
+                <pre className="mt-1 overflow-auto text-xs">
+                  {JSON.stringify(uploadResult.errors, null, 2)}
+                </pre>
               </div>
-            )}
-          </div>
-
-          {/* Sheets */}
-          <div className="bg-d-card rounded-lg shadow p-6 border border-d-border">
-            <h3 className="text-lg font-semibold mb-3 text-white">Parsed Sheets</h3>
-            <div className="flex flex-wrap gap-2">
-              {result.parsed_sheets.map((sheet) => (
-                <span key={sheet} className="px-3 py-1 bg-d-hover text-white rounded text-sm border border-navy-100">
-                  {sheet}
-                </span>
-              ))}
+              <div className="mt-3">
+                <p className="text-sm font-medium">validation_summary</p>
+                <pre className="mt-1 overflow-auto text-xs">
+                  {JSON.stringify(uploadResult.validation_summary, null, 2)}
+                </pre>
+              </div>
             </div>
-          </div>
+          ) : null}
 
-          {/* IDs for reference */}
-          <div className="bg-d-card rounded-lg shadow p-6 border border-d-border">
-            <h3 className="text-lg font-semibold mb-3 text-white">Reference IDs</h3>
-            <div className="space-y-1 text-sm font-mono">
-              <p><span className="text-d-muted">Model ID:</span> {result.model_id}</p>
-              <p><span className="text-d-muted">Investment ID:</span> {result.investment_id}</p>
-            </div>
-            <p className="mt-3 text-sm text-d-muted">
-              Navigate to Dashboard, Sensitivity, Monte Carlo, or other pages to analyze this model.
-            </p>
-          </div>
-        </div>
-      )}
+          {uploadResult.warnings.length > 0 ? (
+            <details className="mt-4">
+              <summary className="cursor-pointer text-sm font-medium text-yellow-300">
+                Upload warnings ({uploadResult.warnings.length})
+              </summary>
+              <pre className="mt-2 max-h-80 overflow-auto rounded bg-d-bg p-3 text-xs text-yellow-100">
+                {JSON.stringify(uploadResult.warnings, null, 2)}
+              </pre>
+            </details>
+          ) : null}
+        </section>
+      ) : null}
+
+      {activeIdentity ? (
+        <CalculationPreparationPanel
+          key={activeIdentity.modelVersionId}
+          modelVersionId={activeIdentity.modelVersionId}
+          workbookVersionId={activeIdentity.workbookVersionId}
+        />
+      ) : null}
+
+      <p className="mx-auto max-w-4xl break-all text-center font-mono text-[11px] text-d-muted">
+        Calculation identity keys:{' '}
+        {CALCULATION_STORAGE_KEYS.modelVersionId},{' '}
+        {CALCULATION_STORAGE_KEYS.workbookVersionId}
+      </p>
     </div>
   );
 }

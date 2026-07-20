@@ -1,11 +1,22 @@
 import type { CalculationInput } from '@/lib/calculation-api-types';
 import { formatTypedValue } from '@/lib/calculation-value-utils';
 
+export interface OverrideSubmissionReceipt {
+  label: string;
+  originalValue: string;
+  submittedValue: string;
+  unit: string | null;
+  runId: string;
+  status: string;
+  changedFormulaValues: number;
+}
+
 interface CalculationInputPanelProps {
   inputs: CalculationInput[];
   selectedInputId: string;
   draftValue: string;
   disabled: boolean;
+  lastOverrideReceipt: OverrideSubmissionReceipt | null;
   onSelect: (targetId: string) => void;
   onDraftValueChange: (value: string) => void;
   onSubmit: () => void;
@@ -16,6 +27,7 @@ export function CalculationInputPanel({
   selectedInputId,
   draftValue,
   disabled,
+  lastOverrideReceipt,
   onSelect,
   onDraftValueChange,
   onSubmit,
@@ -78,7 +90,9 @@ export function CalculationInputPanel({
             <div className="md:col-span-2 rounded border border-d-border bg-d-bg p-3 text-sm">
               <dl className="grid gap-2 md:grid-cols-2">
                 <div>
-                  <dt className="text-d-muted">Current typed value</dt>
+                  <dt className="text-d-muted">
+                    Model input value before override
+                  </dt>
                   <dd className="font-mono text-white">
                     {formatTypedValue(selectedInput.current_value)}
                   </dd>
@@ -113,6 +127,58 @@ export function CalculationInputPanel({
           </button>
         </div>
       )}
+
+      {lastOverrideReceipt ? (
+        <div
+          aria-live="polite"
+          className="mt-5 rounded border border-blue-700/50 bg-blue-900/20 p-4 text-sm text-blue-100"
+        >
+          <p className="font-semibold text-white">Override submitted</p>
+          <dl className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <dt className="text-blue-200">Parameter</dt>
+              <dd className="text-white">{lastOverrideReceipt.label}</dd>
+            </div>
+            <div>
+              <dt className="text-blue-200">
+                Model input value before override
+              </dt>
+              <dd className="font-mono text-white">
+                {lastOverrideReceipt.originalValue}
+                {lastOverrideReceipt.unit
+                  ? ` ${lastOverrideReceipt.unit}`
+                  : ''}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-blue-200">Submitted override</dt>
+              <dd className="font-mono text-white">
+                {lastOverrideReceipt.submittedValue}
+                {lastOverrideReceipt.unit
+                  ? ` ${lastOverrideReceipt.unit}`
+                  : ''}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-blue-200">Result</dt>
+              <dd className="text-white">
+                {`${lastOverrideReceipt.changedFormulaValues} persisted formula values changed`}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-3 break-all font-mono text-xs text-blue-200">
+            {lastOverrideReceipt.status} · run_id:{' '}
+            {lastOverrideReceipt.runId}
+          </p>
+          {lastOverrideReceipt.changedFormulaValues === 0 ? (
+            <p className="mt-3 text-blue-100">
+              The calculation completed, but its persisted formula outputs
+              match the baseline. The inputs table below continues to show the
+              uploaded model values.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <details className="mt-5">
         <summary className="cursor-pointer text-sm font-medium text-white">

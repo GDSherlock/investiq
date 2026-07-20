@@ -8,6 +8,8 @@ import type {
 import { parseCalculationApiErrorPayload } from './calculation-flow';
 
 const API_BASE = '';
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface LegacyModelUploadResponse {
   model_id: string;
@@ -171,11 +173,33 @@ export async function getCalculationRun(
   return parseJsonResponse<CalculationRunResponse>(res);
 }
 
+export function isUsableLegacyModelId(
+  modelId: string | null | undefined,
+): modelId is string {
+  return typeof modelId === 'string' && UUID_PATTERN.test(modelId.trim());
+}
+
+export async function loadLegacyModelIfAvailable<T>(
+  modelId: string | null | undefined,
+  loader: (validModelId: string) => Promise<T>,
+): Promise<T | null> {
+  if (!isUsableLegacyModelId(modelId)) {
+    return null;
+  }
+  return loader(modelId.trim());
+}
+
 export async function getModel(modelId: string) {
-  const res = await fetch(`${API_BASE}/api/v1/models/${modelId}?_t=${Date.now()}`, {
-    cache: 'no-store',
-    headers: { ...getAuthHeaders() },
-  });
+  if (!isUsableLegacyModelId(modelId)) {
+    throw new Error('A valid legacy model ID is required.');
+  }
+  const res = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelId.trim())}?_t=${Date.now()}`,
+    {
+      cache: 'no-store',
+      headers: { ...getAuthHeaders() },
+    },
+  );
   if (!res.ok) throw new Error('Model not found');
   return res.json();
 }

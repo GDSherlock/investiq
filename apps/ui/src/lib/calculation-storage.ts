@@ -26,6 +26,23 @@ export interface PersistedCalculationState {
   overrideRunId: string | null;
 }
 
+export interface RestorableCalculationIdentity {
+  modelVersionId: string;
+  workbookVersionId: string;
+}
+
+function normalizeStoredIdentity(value: string | null): string | null {
+  const normalized = value?.trim();
+  if (
+    !normalized ||
+    normalized.toLowerCase() === 'undefined' ||
+    normalized.toLowerCase() === 'null'
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
 export function clearCalculationArtifacts(storage: StorageLike): void {
   storage.removeItem(CALCULATION_STORAGE_KEYS.graphVersionId);
   storage.removeItem(CALCULATION_STORAGE_KEYS.baselineRunId);
@@ -90,6 +107,20 @@ export function readPersistedCalculationState(
       CALCULATION_STORAGE_KEYS.overrideRunId,
     ),
   };
+}
+
+export function readRestorableCalculationIdentity(
+  storage: StorageLike,
+): RestorableCalculationIdentity | null {
+  const persisted = readPersistedCalculationState(storage);
+  const modelVersionId = normalizeStoredIdentity(persisted.modelVersionId);
+  const workbookVersionId = normalizeStoredIdentity(
+    persisted.workbookVersionId,
+  );
+  if (!modelVersionId || !workbookVersionId) {
+    return null;
+  }
+  return { modelVersionId, workbookVersionId };
 }
 
 export function shouldAutoRunBaseline(

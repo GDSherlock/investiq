@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
   getCalculationInputs,
   getCalculationReadiness,
   getCalculationRun,
+  getModel,
   prepareCalculation,
   runCalculation,
 } from './api';
@@ -450,4 +452,189 @@ test('calculation API methods throw structured backend errors', async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('does not call legacy model API without a legacy model id', async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => {
+    fetchCalls += 1;
+    return new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    for (const modelId of [undefined, null, '', ' ', 'undefined', 'null']) {
+      await assert.rejects(
+        () => getModel(modelId as unknown as string),
+        /valid legacy model id/i,
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(fetchCalls, 0);
+});
+
+test('restores calculation flow from model version storage', async () => {
+  const storage = new MemoryStorage();
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.modelVersionId,
+    'stored-model-version',
+  );
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'stored-workbook-version',
+  );
+  const persisted = readPersistedCalculationState(storage);
+  const pageSource = readFileSync('src/app/page.tsx', 'utf8');
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    calls.push(String(input));
+    return new Response(
+      JSON.stringify({
+        model_version_id: 'stored-model-version',
+        workbook_version_id: 'stored-workbook-version',
+        model_status: 'materialized',
+        validation_status: 'validated',
+        status: 'not_prepared',
+        calculation_rule_extraction_id: null,
+        graph_version_id: null,
+        versions: {
+          phase1_ir: '1',
+          phase2_ir: '1',
+          compiler: '1',
+          engine: '1',
+          registry: '1',
+          semantics: '1',
+        },
+        summary: {
+          formula_cells_total: 0,
+          formula_cells_supported: 0,
+          graph_nodes: 0,
+          graph_edges: 0,
+        },
+        warnings: [],
+        error: null,
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }) as typeof fetch;
+
+  try {
+    assert.equal(persisted.modelVersionId, 'stored-model-version');
+    assert.equal(persisted.workbookVersionId, 'stored-workbook-version');
+    await getCalculationReadiness(persisted.modelVersionId);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(calls, [
+    '/api/v1/models/stored-model-version/calculation/readiness',
+  ]);
+  assert.match(pageSource, /readRestorableCalculationIdentity/);
+  assert.match(pageSource, /source:\s*'storage'/);
+});
+
+test('introduction Skip does not lose restore state', () => {
+  const storage = new MemoryStorage();
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.modelVersionId,
+    'stored-model-version',
+  );
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'stored-workbook-version',
+  );
+  const authGuardSource = readFileSync('src/app/AuthGuard.tsx', 'utf8');
+  const beforeSkip = readPersistedCalculationState(storage);
+  let restoreCalls = 0;
+
+  if (beforeSkip.modelVersionId && beforeSkip.workbookVersionId) {
+    restoreCalls += 1;
+  }
+  const afterSkip = readPersistedCalculationState(storage);
+
+  assert.equal(afterSkip.modelVersionId, 'stored-model-version');
+  assert.equal(afterSkip.workbookVersionId, 'stored-workbook-version');
+  assert.equal(restoreCalls, 1);
+  assert.match(
+    authGuardSource,
+    /return\s*\(\s*<>\s*\{children\}\s*\{showIntro[\s\S]*<IntroductionPage/,
+  );
+});
+
+test('no repeated failing requests without a usable legacy id', () => {
+  const navBarSource = readFileSync('src/app/NavBar.tsx', 'utf8');
+
+  assert.match(navBarSource, /loadLegacyModelIfAvailable/);
+  assert.doesNotMatch(
+    navBarSource,
+    /fetch\(`\/api\/v1\/models\/\$\{id\}`/,
+  );
+  assert.match(navBarSource, /isUsableLegacyModelId/);
+});
+
+test('existing run reload uses GET without recalculating', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: { url: string; method: string }[] = [];
+  const panelSource = readFileSync(
+    'src/components/calculation/CalculationPreparationPanel.tsx',
+    'utf8',
+  );
+  globalThis.fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    calls.push({
+      url: String(input),
+      method: init?.method ?? 'GET',
+    });
+    return new Response(JSON.stringify(runResponse()), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    await getCalculationRun('baseline-run');
+    await getCalculationRun('override-run');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(calls, [
+    { url: '/api/v1/calculation-runs/baseline-run', method: 'GET' },
+    { url: '/api/v1/calculation-runs/override-run', method: 'GET' },
+  ]);
+  assert.match(panelSource, /restoreFromStorage/);
+  assert.match(
+    panelSource,
+    /restoreFromStorage[\s\S]*No calculation was submitted/,
+  );
+});
+
+test('successful override shows an inline receipt before the returned inputs table', () => {
+  const preparationPanelSource = readFileSync(
+    'src/components/calculation/CalculationPreparationPanel.tsx',
+    'utf8',
+  );
+  const inputPanelSource = readFileSync(
+    'src/components/calculation/CalculationInputPanel.tsx',
+    'utf8',
+  );
+
+  assert.match(preparationPanelSource, /setLastOverrideReceipt\(\{/);
+  assert.match(inputPanelSource, /Override submitted/);
+  assert.match(inputPanelSource, /Model input value before override/);
+  assert.match(inputPanelSource, /persisted formula values changed/);
+  assert.ok(
+    inputPanelSource.indexOf('Override submitted') <
+      inputPanelSource.indexOf('<details'),
+    'the override receipt should stay visible above the expandable input table',
+  );
 });

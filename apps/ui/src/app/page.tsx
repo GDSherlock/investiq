@@ -14,12 +14,13 @@ import {
   CALCULATION_STORAGE_KEYS,
   clearCalculationArtifacts,
   persistUploadIdentity,
-  readPersistedCalculationState,
+  readRestorableCalculationIdentity,
 } from '@/lib/calculation-storage';
 
 interface ActiveCalculationIdentity {
   modelVersionId: string;
   workbookVersionId: string;
+  source: 'storage' | 'upload';
 }
 
 function UploadErrorDetails({ error }: { error: Error }) {
@@ -73,11 +74,12 @@ export default function HomePage() {
       localStorage.removeItem(oldKey);
     }
 
-    const persisted = readPersistedCalculationState(localStorage);
-    if (persisted.modelVersionId && persisted.workbookVersionId) {
+    const persisted = readRestorableCalculationIdentity(localStorage);
+    if (persisted) {
       setActiveIdentity({
         modelVersionId: persisted.modelVersionId,
         workbookVersionId: persisted.workbookVersionId,
+        source: 'storage',
       });
       setPhase('uploaded');
     }
@@ -101,6 +103,7 @@ export default function HomePage() {
         setActiveIdentity({
           modelVersionId: response.model_version_id,
           workbookVersionId: response.workbook_version_id,
+          source: 'upload',
         });
         setPhase('uploaded');
       } else {
@@ -251,6 +254,7 @@ export default function HomePage() {
           key={activeIdentity.modelVersionId}
           modelVersionId={activeIdentity.modelVersionId}
           workbookVersionId={activeIdentity.workbookVersionId}
+          restoreFromStorage={activeIdentity.source === 'storage'}
         />
       ) : null}
 

@@ -30,13 +30,18 @@ import {
   reconcileStoredRun,
   shouldAutoRunBaseline,
 } from '@/lib/calculation-storage';
+import { diffCalculationRunValues } from '@/lib/calculation-value-utils';
 
-import { CalculationInputPanel } from './CalculationInputPanel';
+import {
+  CalculationInputPanel,
+  type OverrideSubmissionReceipt,
+} from './CalculationInputPanel';
 import { CalculationResultsDiff } from './CalculationResultsDiff';
 
 interface CalculationPreparationPanelProps {
   modelVersionId: string;
   workbookVersionId: string;
+  restoreFromStorage: boolean;
 }
 
 type EditableNumericParameter = CalculationInput & {
@@ -167,6 +172,7 @@ function RunSummary({
 export function CalculationPreparationPanel({
   modelVersionId,
   workbookVersionId,
+  restoreFromStorage,
 }: CalculationPreparationPanelProps) {
   const [phase, setPhase] =
     useState<CalculationUiPhase>('checking_readiness');
@@ -180,6 +186,8 @@ export function CalculationPreparationPanel({
     useState<CalculationRunResponse | null>(null);
   const [overrideRun, setOverrideRun] =
     useState<CalculationRunResponse | null>(null);
+  const [lastOverrideReceipt, setLastOverrideReceipt] =
+    useState<OverrideSubmissionReceipt | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [stateNotice, setStateNotice] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -401,6 +409,13 @@ export function CalculationPreparationPanel({
         setPhase('ready_for_override');
         return;
       }
+      if (restoreFromStorage) {
+        setStateNotice(
+          'Restored calculation readiness and inputs from stored version IDs. No calculation was submitted.',
+        );
+        setPhase('ready_for_override');
+        return;
+      }
       if (shouldAutoRunBaseline(persisted)) {
         await executeBaseline(targetGraphVersionId, requestRevision);
       }
@@ -409,6 +424,7 @@ export function CalculationPreparationPanel({
       applyDefaultInput,
       executeBaseline,
       modelVersionId,
+      restoreFromStorage,
       restorePersistedRuns,
     ],
   );
@@ -526,7 +542,8 @@ export function CalculationPreparationPanel({
     if (
       overrideInFlightRef.current ||
       !graphVersionId ||
-      !selectedInputId
+      !selectedInputId ||
+      !baselineRun
     ) {
       return;
     }
@@ -556,8 +573,11 @@ export function CalculationPreparationPanel({
 
     overrideInFlightRef.current = true;
     const overrideRevision = ++overrideRequestRevisionRef.current;
+    const submittedValue = request.overrides[0].value;
+    const baselineForComparison = baselineRun;
     setPhase('running_override');
     setError(null);
+    setLastOverrideReceipt(null);
     try {
       const run = await runCalculation(modelVersionId, request);
       if (
@@ -573,6 +593,21 @@ export function CalculationPreparationPanel({
         run.calculation_run_id,
       );
       setOverrideRun(run);
+      setLastOverrideReceipt({
+        label: selected.label,
+        originalValue: selected.current_value.value,
+        submittedValue:
+          submittedValue.value_type === 'number'
+            ? submittedValue.value
+            : draftValue.trim(),
+        unit: selected.unit,
+        runId: run.calculation_run_id,
+        status: run.status,
+        changedFormulaValues: diffCalculationRunValues(
+          baselineForComparison.values,
+          run.values,
+        ).length,
+      });
       setPhase('completed');
     } catch (caught) {
       if (overrideRevision === overrideRequestRevisionRef.current) {
@@ -831,9 +866,10 @@ export function CalculationPreparationPanel({
         <CalculationInputPanel
           inputs={inputs}
           selectedInputId={selectedInputId}
-          draftValue={draftValue}
-          disabled={phase === 'running_override'}
-          onSelect={handleSelectInput}
+              draftValue={draftValue}
+              disabled={phase === 'running_override'}
+              lastOverrideReceipt={lastOverrideReceipt}
+              onSelect={handleSelectInput}
           onDraftValueChange={setDraftValue}
           onSubmit={() => void handleOverride()}
         />

@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .evaluator import ScalarValue
-from .models import WorkbookFormulaCellRecord, utcnow
+from .models import ExecutableFormulaRule, WorkbookFormulaCellRecord, utcnow
 from .phase2_graph import CalculationGraphVersion
 from .phase2_grouping import GroupedCalculationRule
 from .phase2_models import (
@@ -47,6 +47,7 @@ class PersistedCalculationRunValue:
     sheet_name: str
     sheet_position: int
     cell_address: str
+    support_status: str
     execution_status: str
     value: ScalarValue | None
     engine_error_code: str | None
@@ -460,11 +461,20 @@ class Phase2CalculationRepository:
         if row is None:
             raise ValueError("Calculation run was not found")
         value_rows = self._session.execute(
-            select(CalculationRunValueRecord, WorkbookFormulaCellRecord)
+            select(
+                CalculationRunValueRecord,
+                WorkbookFormulaCellRecord,
+                ExecutableFormulaRule,
+            )
             .join(
                 WorkbookFormulaCellRecord,
                 WorkbookFormulaCellRecord.id
                 == CalculationRunValueRecord.formula_cell_id,
+            )
+            .join(
+                ExecutableFormulaRule,
+                ExecutableFormulaRule.id
+                == CalculationRunValueRecord.expression_id,
             )
             .where(CalculationRunValueRecord.calculation_run_id == run_id)
             .order_by(
@@ -481,6 +491,7 @@ class Phase2CalculationRepository:
                 sheet_name=formula.sheet_name,
                 sheet_position=formula.sheet_position,
                 cell_address=formula.cell_address,
+                support_status=rule.support_status,
                 execution_status=value.execution_status,
                 value=ScalarValue.from_json(value.value_json),
                 engine_error_code=value.engine_error_code,
@@ -489,7 +500,7 @@ class Phase2CalculationRepository:
                 validation_status=value.validation_status,
                 warnings=tuple(value.warnings_json or ()),
             )
-            for value, formula in value_rows
+            for value, formula, rule in value_rows
         )
         return PersistedCalculationRun(
             calculation_run_id=row.id,

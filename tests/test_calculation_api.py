@@ -195,6 +195,7 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
         ("/api/v1/models/{model_version_id}/calculation/outputs", "get"),
         ("/api/v1/models/{model_version_id}/calculations", "post"),
         ("/api/v1/calculation-runs/{calculation_run_id}", "get"),
+        ("/api/v1/calculation-runs/{calculation_run_id}/outputs", "get"),
     }
 
     for path, method in expected:
@@ -282,6 +283,58 @@ def test_output_discovery_returns_business_definitions_without_cell_input(
     assert "project_irr" not in by_role
 
 
+def test_run_output_projection_returns_business_values_without_cell_coordinates(
+    api_context,
+) -> None:
+    context = api_context
+    client = context["client"]
+    prepared = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculation/prepare",
+        json={},
+    )
+    graph_version_id = prepared.json()["graph_version_id"]
+    baseline = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculations",
+        json={
+            "graph_version_id": graph_version_id,
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    )
+    override = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculations",
+        json={
+            "graph_version_id": graph_version_id,
+            "overrides": [
+                {
+                    "target": {
+                        "kind": "parameter",
+                        "parameter_id": context["parameter_id"],
+                    },
+                    "value": {"value_type": "number", "value": "10"},
+                }
+            ],
+            "idempotency_key": None,
+        },
+    )
+
+    response = client.get(
+        f"/api/v1/calculation-runs/"
+        f"{override.json()['calculation_run_id']}/outputs"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["base_run_id"] == baseline.json()["calculation_run_id"]
+    by_role = {item["business_role"]: item for item in payload["outputs"]}
+    assert by_role["total_project_cost"]["baseline"]["value"]["value"] == "5"
+    assert by_role["total_project_cost"]["current"]["value"]["value"] == "13"
+    assert by_role["revenue"]["points"][0]["baseline"]["value"]["value"] == "10"
+    assert by_role["revenue"]["points"][0]["current"]["value"]["value"] == "26"
+    assert "sheet_name" not in response.text
+    assert "cell_address" not in response.text
+
+
 def test_calculation_api_returns_stable_structured_domain_errors(api_context) -> None:
     context = api_context
     client = context["client"]
@@ -289,6 +342,9 @@ def test_calculation_api_returns_stable_structured_domain_errors(api_context) ->
 
     missing = client.get(
         f"/api/v1/models/{missing_id}/calculation/readiness"
+    )
+    missing_projection = client.get(
+        f"/api/v1/calculation-runs/{missing_id}/outputs"
     )
     prepared = client.post(
         f"/api/v1/models/{context['model_version_id']}/calculation/prepare"
@@ -302,6 +358,13 @@ def test_calculation_api_returns_stable_structured_domain_errors(api_context) ->
     assert missing.json()["detail"] == {
         "code": "MODEL_VERSION_NOT_FOUND",
         "message": "Model version was not found.",
+        "retryable": False,
+        "resource_id": missing_id,
+    }
+    assert missing_projection.status_code == 404
+    assert missing_projection.json()["detail"] == {
+        "code": "CALCULATION_RUN_NOT_FOUND",
+        "message": "Calculation run was not found.",
         "retryable": False,
         "resource_id": missing_id,
     }

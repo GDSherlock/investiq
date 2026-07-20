@@ -31,6 +31,7 @@ from apps.api.app.calculation_rules.types import (
 )
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
+    CanonicalOutput,
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
@@ -387,6 +388,11 @@ def _canonical_fingerprint(session, model_version_id: str) -> dict[str, object]:
         .where(FinancialSeries.model_version_id == model_version_id)
         .order_by(FinancialSeries.id)
     ).all()
+    outputs = session.scalars(
+        select(CanonicalOutput)
+        .where(CanonicalOutput.model_version_id == model_version_id)
+        .order_by(CanonicalOutput.id)
+    ).all()
     series_ids = [item.id for item in series]
     values = session.scalars(
         select(FinancialSeriesValue)
@@ -408,6 +414,16 @@ def _canonical_fingerprint(session, model_version_id: str) -> dict[str, object]:
                 json.dumps(item.validated_value_json, sort_keys=True),
             )
             for item in parameters
+        ),
+        "outputs": tuple(
+            (
+                item.id,
+                item.business_role,
+                item.source_sheet,
+                item.source_cell,
+                json.dumps(item.raw_value_json, sort_keys=True),
+            )
+            for item in outputs
         ),
         "series": tuple(
             (item.id, item.label, item.value_source_range) for item in series
@@ -915,6 +931,270 @@ def test_parameter_override_creates_distinct_immutable_incremental_run(
     ) == canonical_before
 
 
+def test_run_outputs_project_scalar_and_series_baseline_current_values(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    context["session"].add(
+        FinancialSeriesValue(
+            id=FinancialEntityIdFactory(context["model"].id).value_id(
+                context["series"].id,
+                1,
+            ),
+            financial_series_id=context["series"].id,
+            period_index=1,
+            raw_period_label_json=2027,
+            display_period_label="2027",
+            period_type="annual",
+            year=2027,
+            is_forecast=True,
+            value_json=None,
+            period_source_sheet="Calc",
+            period_source_cell="A2",
+            value_source_sheet="Calc",
+            value_source_cell="B8",
+            exact_formula="=IF(TRUE,B2,1/0)",
+            formula_status="formula_no_cache",
+            cached_value_available=False,
+            cached_value_freshness="missing",
+            number_format="General",
+            data_type="f",
+        )
+    )
+    context["session"].commit()
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    override = facade.calculate(
+        context["model"].id,
+        _calculation_request(
+            prepared.graph_version_id,
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter"].id,
+                },
+                "value": {"value_type": "number", "value": "10"},
+            },
+        ),
+    )
+
+    projection = facade.get_run_outputs(override.calculation_run_id)
+
+    assert projection.calculation_run_id == override.calculation_run_id
+    assert projection.base_run_id == baseline.calculation_run_id
+    assert projection.model_version_id == context["model"].id
+    by_role = {item.business_role: item for item in projection.outputs}
+
+    scalar = by_role["total_project_cost"]
+    assert scalar.entity_kind == "scalar"
+    assert scalar.mapping_status == "mapped"
+    assert scalar.support_status == "supported"
+    assert scalar.number_format == "General"
+    assert scalar.availability_status == "available"
+    assert scalar.baseline.availability_status == "available"
+    assert scalar.baseline.value.value_type == "number"
+    assert scalar.baseline.value.value == "5"
+    assert scalar.current.availability_status == "available"
+    assert scalar.current.value.value_type == "number"
+    assert scalar.current.value.value == "13"
+
+    series = by_role["revenue"]
+    assert series.entity_kind == "series"
+    assert series.availability_status == "available"
+    assert len(series.points) == 2
+    assert series.points[0].financial_series_value_id == (
+        context["series_value"].id
+    )
+    assert [point.period for point in series.points] == ["2026", "2027"]
+    assert {point.mapping_status for point in series.points} == {"mapped"}
+    assert {point.support_status for point in series.points} == {"supported"}
+    assert {point.number_format for point in series.points} == {"General"}
+    assert [point.baseline.value.value for point in series.points] == ["10", "10"]
+    assert [point.current.value.value for point in series.points] == ["26", "26"]
+
+
+def test_run_outputs_keep_unsupported_output_explicitly_unavailable(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    context["session"].add(
+        CanonicalOutput(
+            id=FinancialEntityIdFactory(context["model"].id).output_id(
+                "Calc",
+                "B7",
+            ),
+            model_version_id=context["model"].id,
+            entity_kind="canonical_output",
+            label="Project IRR",
+            business_role="project_irr",
+            submitted_role="formula_output",
+            validated_role="formula_output",
+            raw_value_json=0.1234,
+            unit="%",
+            scenario="base",
+            source_sheet="Calc",
+            source_cell="B7",
+            exact_formula="='[rates.xlsx]Inputs'!A1+1",
+            formula_status="formula_cached",
+            source_validation_status="validated",
+            role_validation_status="validated",
+            validation_status="validated",
+            data_type="f",
+            number_format="0.00%",
+        )
+    )
+    context["session"].commit()
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+
+    projection = facade.get_run_outputs(baseline.calculation_run_id)
+
+    output = next(
+        item for item in projection.outputs if item.business_role == "project_irr"
+    )
+    assert output.availability_status == "unavailable"
+    assert output.baseline.value is None
+    assert output.current.value is None
+    assert output.support_status == "external_reference"
+    assert output.current.execution_status == "not_executable"
+    assert output.current.unavailable_reason == "not_executable"
+
+
+def test_run_outputs_isolate_missing_mapping_from_available_outputs(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    context["session"].add(
+        CanonicalOutput(
+            id=FinancialEntityIdFactory(context["model"].id).output_id(
+                "Calc",
+                "C10",
+            ),
+            model_version_id=context["model"].id,
+            entity_kind="canonical_output",
+            label="NPV",
+            business_role="npv",
+            submitted_role="formula_output",
+            validated_role="formula_output",
+            raw_value_json=999,
+            unit="USD",
+            scenario="base",
+            source_sheet="Calc",
+            source_cell="C10",
+            exact_formula="=SUM(Inputs!A1:A2)",
+            formula_status="formula_cached",
+            source_validation_status="validated",
+            role_validation_status="validated",
+            validation_status="validated",
+            data_type="f",
+            number_format="General",
+        )
+    )
+    context["session"].commit()
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+
+    projection = facade.get_run_outputs(baseline.calculation_run_id)
+
+    by_role = {item.business_role: item for item in projection.outputs}
+    assert by_role["npv"].formula_cell_id is None
+    assert by_role["npv"].mapping_status == "missing"
+    assert by_role["npv"].support_status == "not_prepared"
+    assert by_role["npv"].availability_status == "unavailable"
+    assert by_role["npv"].current.value is None
+    assert by_role["npv"].current.unavailable_reason == "formula_cell_missing"
+    assert by_role["total_project_cost"].availability_status == "available"
+    assert by_role["total_project_cost"].current.value.value == "5"
+
+
+def test_run_outputs_use_persisted_expression_support_not_latest_rule(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    formula_cell = context["session"].scalar(
+        select(WorkbookFormulaCellRecord).where(
+            WorkbookFormulaCellRecord.workbook_version_id
+            == context["workbook"].id,
+            WorkbookFormulaCellRecord.sheet_name == "Calc",
+            WorkbookFormulaCellRecord.cell_address == "B1",
+        )
+    )
+    context["session"].add(
+        ExecutableFormulaRule(
+            id=new_uuid(),
+            formula_cell_id=formula_cell.id,
+            ir_version="calc-ir-v2",
+            compiler_version="future-formula-compiler",
+            semantics_profile="excel-compatible-v2",
+            formula_sha256=formula_cell.formula_sha256,
+            parse_status="parsed",
+            support_status="unsupported",
+            ir_json=None,
+            unsupported_constructs_json=["FUTURE_POLICY"],
+            warnings_json=["future_policy"],
+        )
+    )
+    context["session"].commit()
+
+    discovery = facade.list_outputs(context["model"].id)
+    projection = facade.get_run_outputs(baseline.calculation_run_id)
+
+    discovered = next(
+        item
+        for item in discovery.outputs
+        if item.business_role == "total_project_cost"
+    )
+    projected = next(
+        item
+        for item in projection.outputs
+        if item.business_role == "total_project_cost"
+    )
+    assert discovered.support_status == "unsupported"
+    assert projected.support_status == "supported"
+
+
 def test_financial_series_value_override_resolves_trusted_canonical_cell(
     integration_context,
 ) -> None:
@@ -1156,6 +1436,69 @@ def test_fresh_session_reloads_completed_baseline_and_override_without_rerun(
         "registry": "calc-functions-v2",
         "semantics": "excel-compatible-v2",
     }
+
+
+def test_fresh_session_reloads_projected_outputs_without_rerun_or_writes(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    override = facade.calculate(
+        context["model"].id,
+        _calculation_request(
+            prepared.graph_version_id,
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter"].id,
+                },
+                "value": {"value_type": "number", "value": "10"},
+            },
+        ),
+    )
+    expected = {
+        run_id: facade.get_run_outputs(run_id).model_dump(mode="json")
+        for run_id in (
+            baseline.calculation_run_id,
+            override.calculation_run_id,
+        )
+    }
+    context["session"].close()
+
+    restarted = context["session_factory"]()
+    try:
+        before = _calculation_artifact_counts(restarted)
+        reloaded_facade = CalculationIntegrationService(
+            restarted,
+            ModelExtractionReadService(
+                restarted,
+                DatabaseWorkbookStorage(restarted),
+            ),
+            phase2_service=_CalculationMustNotRun(),
+        )
+        reloaded = {
+            run_id: reloaded_facade.get_run_outputs(run_id).model_dump(
+                mode="json"
+            )
+            for run_id in expected
+        }
+        after = _calculation_artifact_counts(restarted)
+    finally:
+        restarted.close()
+
+    assert reloaded == expected
+    assert after == before
 
 
 def test_persisted_running_and_failed_runs_reload_without_values(

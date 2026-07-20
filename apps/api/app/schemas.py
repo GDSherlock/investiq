@@ -268,6 +268,72 @@ CalculationOutputValue = Annotated[
 ]
 
 
+class CalculationProjectedValueItem(_CalculationDTO):
+    availability_status: Literal["available", "unavailable"]
+    value: CalculationOutputValue | None = None
+    unavailable_reason: str | None = None
+    execution_status: str | None = None
+    engine_error_code: str | None = None
+    validation_status: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalculationRunScalarOutputItem(_CalculationDTO):
+    output_id: UUIDString
+    entity_kind: Literal["scalar"]
+    business_role: str
+    label: str
+    unit: str | None = None
+    scenario: str | None = None
+    formula_cell_id: UUIDString | None = None
+    mapping_status: Literal["mapped", "partial", "missing", "static"]
+    support_status: str
+    number_format: str | None = None
+    availability_status: Literal["available", "partial", "unavailable"]
+    baseline: CalculationProjectedValueItem
+    current: CalculationProjectedValueItem
+
+
+class CalculationRunSeriesPointItem(_CalculationDTO):
+    financial_series_value_id: UUIDString
+    period_index: int
+    period: str | None = None
+    formula_cell_id: UUIDString | None = None
+    mapping_status: Literal["mapped", "missing", "static"]
+    support_status: str
+    number_format: str | None = None
+    availability_status: Literal["available", "partial", "unavailable"]
+    baseline: CalculationProjectedValueItem
+    current: CalculationProjectedValueItem
+
+
+class CalculationRunSeriesOutputItem(_CalculationDTO):
+    output_id: UUIDString
+    entity_kind: Literal["series"]
+    business_role: str
+    label: str
+    unit: str | None = None
+    scenario: str | None = None
+    mapping_status: Literal["mapped", "partial", "missing", "static"]
+    support_status: str
+    availability_status: Literal["available", "partial", "unavailable"]
+    points: list[CalculationRunSeriesPointItem] = Field(default_factory=list)
+
+
+CalculationRunOutputItem = Annotated[
+    CalculationRunScalarOutputItem | CalculationRunSeriesOutputItem,
+    Field(discriminator="entity_kind"),
+]
+
+
+class CalculationRunOutputsResponse(_CalculationDTO):
+    calculation_run_id: UUIDString
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    base_run_id: UUIDString | None = None
+    outputs: list[CalculationRunOutputItem] = Field(default_factory=list)
+
+
 class CalculationRunSummary(_CalculationDTO):
     formula_cells_total: int = 0
     formula_cells_supported: int = 0

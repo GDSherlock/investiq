@@ -20,6 +20,7 @@ from ..schemas import (
     CalculationPrepareRequest,
     CalculationReadinessResponse,
     CalculationRequest,
+    CalculationRunOutputsResponse,
     CalculationRunResponse,
 )
 from ..workbook_storage import DatabaseWorkbookStorage
@@ -149,5 +150,21 @@ def get_calculation_run(
 ) -> CalculationRunResponse:
     try:
         return service.get_run(str(calculation_run_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.get(
+    "/calculation-runs/{calculation_run_id}/outputs",
+    response_model=CalculationRunOutputsResponse,
+)
+def get_calculation_run_outputs(
+    calculation_run_id: UUID,
+    service: CalculationIntegrationService = Depends(
+        get_calculation_integration_service
+    ),
+) -> CalculationRunOutputsResponse:
+    try:
+        return service.get_run_outputs(str(calculation_run_id))
     except CalculationIntegrationError as error:
         _translate_error(error)

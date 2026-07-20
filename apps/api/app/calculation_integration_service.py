@@ -47,7 +47,12 @@ from .schemas import (
     CalculationReadinessResponse,
     CalculationReadinessSummary,
     CalculationReadinessVersions,
+    CalculationProjectedValueItem,
+    CalculationRunOutputsResponse,
     CalculationRunResponse,
+    CalculationRunScalarOutputItem,
+    CalculationRunSeriesOutputItem,
+    CalculationRunSeriesPointItem,
     CalculationRunSummary,
     CalculationRunValueResponse,
     CalculationRunVersions,
@@ -515,6 +520,262 @@ class CalculationIntegrationService:
                 status_code=500,
                 resource_id=calculation_run_id,
             ) from exc
+
+    def get_run_outputs(
+        self,
+        calculation_run_id: str,
+    ) -> CalculationRunOutputsResponse:
+        try:
+            bundle = self._phase2_repository.load_run_bundle(calculation_run_id)
+            if bundle is None:
+                raise CalculationIntegrationError(
+                    "CALCULATION_RUN_NOT_FOUND",
+                    "Calculation run was not found.",
+                    status_code=404,
+                    resource_id=calculation_run_id,
+                )
+            current_run = bundle.run
+            if current_run.base_run_id is None:
+                baseline_run = current_run
+            else:
+                baseline_run = self._phase2_repository.load_run(
+                    current_run.base_run_id
+                )
+            definitions = self._read_service.list_calculation_outputs(
+                current_run.model_version_id
+            )
+            baseline_values = {
+                value.formula_cell_id: value for value in baseline_run.values
+            }
+            current_values = {
+                value.formula_cell_id: value for value in current_run.values
+            }
+            outputs = []
+            for definition in definitions:
+                if definition.entity_kind == "scalar":
+                    formula_cell_id = (
+                        definition.source.formula_cell_id
+                        if definition.source is not None
+                        else None
+                    )
+                    baseline_persisted = (
+                        baseline_values.get(formula_cell_id)
+                        if formula_cell_id is not None
+                        else None
+                    )
+                    current_persisted = (
+                        current_values.get(formula_cell_id)
+                        if formula_cell_id is not None
+                        else None
+                    )
+                    baseline = self._projected_value(
+                        baseline_persisted,
+                        missing_reason=self._missing_projection_reason(
+                            definition.mapping_status
+                        ),
+                    )
+                    current = self._projected_value(
+                        current_persisted,
+                        missing_reason=self._missing_projection_reason(
+                            definition.mapping_status
+                        ),
+                    )
+                    outputs.append(
+                        CalculationRunScalarOutputItem(
+                            output_id=definition.output_id,
+                            entity_kind="scalar",
+                            business_role=definition.business_role,
+                            label=definition.label,
+                            unit=definition.unit,
+                            scenario=definition.scenario,
+                            formula_cell_id=formula_cell_id,
+                            mapping_status=definition.mapping_status,
+                            support_status=(
+                                current_persisted.support_status
+                                if current_persisted is not None
+                                else definition.support_status
+                            ),
+                            number_format=(
+                                definition.source.number_format
+                                if definition.source is not None
+                                else None
+                            ),
+                            availability_status=self._availability_status(
+                                baseline,
+                                current,
+                            ),
+                            baseline=baseline,
+                            current=current,
+                        )
+                    )
+                    continue
+
+                points = []
+                for point in definition.points:
+                    baseline_persisted = (
+                        baseline_values.get(point.formula_cell_id)
+                        if point.formula_cell_id is not None
+                        else None
+                    )
+                    current_persisted = (
+                        current_values.get(point.formula_cell_id)
+                        if point.formula_cell_id is not None
+                        else None
+                    )
+                    baseline = self._projected_value(
+                        baseline_persisted,
+                        missing_reason=self._missing_projection_reason(
+                            point.mapping_status
+                        ),
+                    )
+                    current = self._projected_value(
+                        current_persisted,
+                        missing_reason=self._missing_projection_reason(
+                            point.mapping_status
+                        ),
+                    )
+                    points.append(
+                        CalculationRunSeriesPointItem(
+                            financial_series_value_id=(
+                                point.financial_series_value_id
+                            ),
+                            period_index=point.period_index,
+                            period=point.period,
+                            formula_cell_id=point.formula_cell_id,
+                            mapping_status=point.mapping_status,
+                            support_status=(
+                                current_persisted.support_status
+                                if current_persisted is not None
+                                else point.support_status
+                            ),
+                            number_format=point.number_format,
+                            availability_status=self._availability_status(
+                                baseline,
+                                current,
+                            ),
+                            baseline=baseline,
+                            current=current,
+                        )
+                    )
+                outputs.append(
+                    CalculationRunSeriesOutputItem(
+                        output_id=definition.output_id,
+                        entity_kind="series",
+                        business_role=definition.business_role,
+                        label=definition.label,
+                        unit=definition.unit,
+                        scenario=definition.scenario,
+                        mapping_status=definition.mapping_status,
+                        support_status=self._aggregate_support_status(
+                            [point.support_status for point in points],
+                            fallback=definition.support_status,
+                        ),
+                        availability_status=self._aggregate_availability_status(
+                            [point.availability_status for point in points]
+                        ),
+                        points=points,
+                    )
+                )
+            return CalculationRunOutputsResponse(
+                calculation_run_id=current_run.calculation_run_id,
+                model_version_id=current_run.model_version_id,
+                graph_version_id=current_run.graph_version_id,
+                base_run_id=current_run.base_run_id,
+                outputs=outputs,
+            )
+        except CalculationIntegrationError:
+            raise
+        except Exception as exc:
+            raise CalculationIntegrationError(
+                "CALCULATION_RUN_OUTPUT_PROJECTION_FAILED",
+                "Persisted calculation outputs could not be projected.",
+                status_code=500,
+                resource_id=calculation_run_id,
+            ) from exc
+
+    @staticmethod
+    def _projected_value(
+        persisted,
+        *,
+        missing_reason: str,
+    ) -> CalculationProjectedValueItem:
+        execution_status = (
+            persisted.execution_status if persisted is not None else None
+        )
+        is_available = (
+            persisted is not None
+            and execution_status in {"executed", "reused"}
+            and persisted.value is not None
+        )
+        value = (
+            _OUTPUT_VALUE_ADAPTER.validate_python(persisted.value.to_json())
+            if is_available
+            else None
+        )
+        return CalculationProjectedValueItem(
+            availability_status="available" if is_available else "unavailable",
+            value=value,
+            unavailable_reason=(
+                None
+                if is_available
+                else execution_status or missing_reason
+            ),
+            execution_status=execution_status,
+            engine_error_code=(
+                persisted.engine_error_code if persisted is not None else None
+            ),
+            validation_status=(
+                persisted.validation_status if persisted is not None else None
+            ),
+            warnings=list(persisted.warnings) if persisted is not None else [],
+        )
+
+    @staticmethod
+    def _missing_projection_reason(mapping_status: str) -> str:
+        if mapping_status == "static":
+            return "static_not_calculation_addressable"
+        if mapping_status == "missing":
+            return "formula_cell_missing"
+        return "run_value_missing"
+
+    @staticmethod
+    def _availability_status(
+        baseline: CalculationProjectedValueItem,
+        current: CalculationProjectedValueItem,
+    ) -> str:
+        statuses = {
+            baseline.availability_status,
+            current.availability_status,
+        }
+        if statuses == {"available"}:
+            return "available"
+        if statuses == {"unavailable"}:
+            return "unavailable"
+        return "partial"
+
+    @staticmethod
+    def _aggregate_availability_status(statuses: list[str]) -> str:
+        if not statuses:
+            return "unavailable"
+        unique_statuses = set(statuses)
+        if unique_statuses == {"available"}:
+            return "available"
+        if unique_statuses == {"unavailable"}:
+            return "unavailable"
+        return "partial"
+
+    @staticmethod
+    def _aggregate_support_status(
+        statuses: list[str],
+        *,
+        fallback: str,
+    ) -> str:
+        if not statuses:
+            return fallback
+        unique_statuses = set(statuses)
+        if len(unique_statuses) == 1:
+            return next(iter(unique_statuses))
+        return "partial"
 
     def _internal_override(self, model_version_id: str, override) -> CalculationOverride:
         target = override.target

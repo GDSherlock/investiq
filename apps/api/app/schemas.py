@@ -207,6 +207,45 @@ class CalculationInputsResponse(_CalculationDTO):
     next_cursor: UUIDString | None = None
 
 
+class CalculationOutputSourceItem(_CalculationDTO):
+    sheet_name: str
+    cell_address: str
+    formula_cell_id: UUIDString | None = None
+    formula_status: str
+    number_format: str | None = None
+
+
+class CalculationOutputPointItem(_CalculationDTO):
+    financial_series_value_id: UUIDString
+    period_index: int
+    period: str | None = None
+    formula_cell_id: UUIDString | None = None
+    mapping_status: Literal["mapped", "missing", "static"]
+    support_status: str
+    source_sheet: str
+    source_cell: str
+    formula_status: str
+    number_format: str | None = None
+
+
+class CalculationOutputDefinitionItem(_CalculationDTO):
+    output_id: UUIDString
+    entity_kind: Literal["scalar", "series"]
+    business_role: str
+    label: str
+    unit: str | None = None
+    scenario: str | None = None
+    mapping_status: Literal["mapped", "partial", "missing", "static"]
+    support_status: str
+    source: CalculationOutputSourceItem | None = None
+    points: list[CalculationOutputPointItem] = Field(default_factory=list)
+
+
+class CalculationOutputsResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    outputs: list[CalculationOutputDefinitionItem] = Field(default_factory=list)
+
+
 class CalculationDateSerialValue(_CalculationDTO):
     value_type: Literal["date_serial"]
     value: StrictStr

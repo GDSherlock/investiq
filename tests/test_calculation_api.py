@@ -19,6 +19,7 @@ from apps.api.app.calculation_rules.phase2_models import (
 from apps.api.app.database import Base, get_db
 from apps.api.app.main import app
 from apps.api.app.model_extraction_models import (
+    CanonicalOutput,
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
@@ -191,6 +192,7 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
         ("/api/v1/models/{model_version_id}/calculation/readiness", "get"),
         ("/api/v1/models/{model_version_id}/calculation/prepare", "post"),
         ("/api/v1/models/{model_version_id}/calculation/inputs", "get"),
+        ("/api/v1/models/{model_version_id}/calculation/outputs", "get"),
         ("/api/v1/models/{model_version_id}/calculations", "post"),
         ("/api/v1/calculation-runs/{calculation_run_id}", "get"),
     }
@@ -252,6 +254,34 @@ def test_raw_cell_request_is_rejected_by_public_schema(api_context) -> None:
     assert response.status_code == 422
 
 
+def test_output_discovery_returns_business_definitions_without_cell_input(
+    api_context,
+) -> None:
+    context = api_context
+    client = context["client"]
+    prepared = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculation/prepare",
+        json={},
+    )
+    assert prepared.status_code == 200
+
+    response = client.get(
+        f"/api/v1/models/{context['model_version_id']}/calculation/outputs"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["model_version_id"] == context["model_version_id"]
+    by_role = {item["business_role"]: item for item in payload["outputs"]}
+    assert set(by_role) == {"revenue", "total_project_cost"}
+    assert by_role["total_project_cost"]["entity_kind"] == "scalar"
+    assert by_role["total_project_cost"]["mapping_status"] == "mapped"
+    assert by_role["total_project_cost"]["source"]["formula_cell_id"]
+    assert by_role["revenue"]["entity_kind"] == "series"
+    assert by_role["revenue"]["points"][0]["formula_cell_id"]
+    assert "project_irr" not in by_role
+
+
 def test_calculation_api_returns_stable_structured_domain_errors(api_context) -> None:
     context = api_context
     client = context["client"]
@@ -307,6 +337,11 @@ def _api_canonical_fingerprint(session, model_version_id: str) -> tuple[object, 
         .where(FinancialSeries.model_version_id == model_version_id)
         .order_by(FinancialSeries.id)
     ).all()
+    outputs = session.scalars(
+        select(CanonicalOutput)
+        .where(CanonicalOutput.model_version_id == model_version_id)
+        .order_by(CanonicalOutput.id)
+    ).all()
     values = session.scalars(
         select(FinancialSeriesValue)
         .where(FinancialSeriesValue.financial_series_id.in_([item.id for item in series]))
@@ -315,6 +350,10 @@ def _api_canonical_fingerprint(session, model_version_id: str) -> tuple[object, 
     return (
         (model.id, model.status, model.validation_status),
         tuple((item.id, item.validated_value_json) for item in parameters),
+        tuple(
+            (item.id, item.business_role, item.raw_value_json)
+            for item in outputs
+        ),
         tuple((item.id, item.label) for item in series),
         tuple((item.id, item.value_json) for item in values),
     )

@@ -8,6 +8,40 @@ from typing import Any, Literal
 import uuid
 
 
+BUSINESS_OUTPUT_ROLES = (
+    "project_irr",
+    "equity_irr",
+    "npv",
+    "minimum_dscr",
+    "average_dscr",
+    "total_project_cost",
+    "total_capex",
+    "total_debt",
+    "peak_debt",
+    "average_ebitda_margin",
+    "payback_period",
+    "equity_multiple",
+    "revenue",
+    "opex",
+    "fixed_opex",
+    "variable_opex",
+    "ebitda",
+    "cfads",
+    "debt_service",
+    "debt_balance",
+    "opening_debt",
+    "closing_debt",
+    "principal_repayment",
+    "interest_expense",
+    "cash_flow",
+    "equity_cash_flow",
+    "tax",
+    "net_generation",
+    "power_price",
+    "unclassified",
+)
+
+
 class ModelExtractionPersistenceError(RuntimeError):
     """Base error for persistence operations safe to translate at an API boundary."""
 
@@ -103,6 +137,17 @@ class FinancialEntityIdFactory:
             [
                 "financial_entity",
                 "parameter",
+                source_sheet,
+                source_cell.upper(),
+            ]
+        )
+        return str(uuid.uuid5(self._model_namespace, key))
+
+    def output_id(self, source_sheet: str, source_cell: str) -> str:
+        key = "|".join(
+            [
+                "financial_entity",
+                "output",
                 source_sheet,
                 source_cell.upper(),
             ]
@@ -223,6 +268,7 @@ class CanonicalFinancialSeries:
     label: str
     category: str | None
     semantic_role: str
+    business_role: str | None
     unit: str | None
     frequency: str | None
     orientation: str
@@ -277,6 +323,43 @@ class CanonicalFinancialSeriesValue:
     number_format: str | None
     data_type: str | None
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class CalculationOutputSource:
+    sheet_name: str
+    cell_address: str
+    formula_cell_id: str | None
+    formula_status: str
+    number_format: str | None
+
+
+@dataclass(frozen=True)
+class CalculationOutputPoint:
+    financial_series_value_id: str
+    period_index: int
+    period: str | None
+    formula_cell_id: str | None
+    mapping_status: Literal["mapped", "missing", "static"]
+    support_status: str
+    source_sheet: str
+    source_cell: str
+    formula_status: str
+    number_format: str | None
+
+
+@dataclass(frozen=True)
+class CalculationOutputDefinition:
+    output_id: str
+    entity_kind: Literal["scalar", "series"]
+    business_role: str
+    label: str
+    unit: str | None
+    scenario: str | None
+    mapping_status: Literal["mapped", "partial", "missing", "static"]
+    support_status: str
+    source: CalculationOutputSource | None
+    points: tuple[CalculationOutputPoint, ...] = ()
 
 
 @dataclass(frozen=True)

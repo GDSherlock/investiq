@@ -339,6 +339,7 @@ def test_postgres_service_matches_sqlite_dto_and_persistence_behavior() -> None:
                 "executable_formula_rules",
                 "workbook_formula_cells",
                 "calculation_rule_extractions",
+                "canonical_outputs",
                 "financial_series_values",
                 "financial_series",
                 "model_parameters",

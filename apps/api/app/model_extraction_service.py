@@ -17,6 +17,7 @@ from .model_extraction_repository import (
     WorkbookVersionRepository,
 )
 from .model_extraction_types import (
+    BUSINESS_OUTPUT_ROLES,
     CanonicalSourceConflictError,
     FinancialEntityIdFactory,
     ModelExtractionPersistenceError,
@@ -55,6 +56,11 @@ _CANONICAL_PARAMETER_ROLES = {
     "derived",
     "formula_derived_value",
     "scenario_selector",
+}
+_CANONICAL_OUTPUT_ROLES = {
+    "formula_output",
+    "hardcoded_display_output",
+    "sensitivity_output",
 }
 _SOURCE_VALID_STATUSES = {"validated", "validated_null"}
 _DEFAULT_MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
@@ -289,6 +295,7 @@ class ModelExtractionPersistenceService:
             workbook_bytes = self._storage.load(location)
             tools = WorkbookToolset(file_bytes=workbook_bytes)
             parameters = _canonicalize_parameters(model_version_id, snapshot, tools)
+            outputs = _canonicalize_outputs(model_version_id, snapshot, tools)
             financial_series, values = _canonicalize_financial_series(
                 model_version_id,
                 snapshot,
@@ -297,6 +304,7 @@ class ModelExtractionPersistenceService:
             self._repository.persist_canonical_model(
                 model_version_id,
                 parameters=parameters,
+                outputs=outputs,
                 financial_series=financial_series,
                 financial_series_values=values,
                 validation_status=validation_status,
@@ -490,6 +498,9 @@ def _canonicalize_financial_series(
                 "label": str(submitted.get("label") or submitted.get("series_id") or series_id),
                 "category": submitted.get("category"),
                 "semantic_role": "financial_series",
+                "business_role": _validated_business_role(
+                    submitted.get("business_role")
+                ),
                 "unit": submitted.get("unit"),
                 "frequency": submitted.get("frequency"),
                 "orientation": str(submitted.get("orientation") or "unknown"),
@@ -555,6 +566,112 @@ def _canonicalize_financial_series(
     return series_rows, value_rows
 
 
+def _canonicalize_outputs(
+    model_version_id: str,
+    snapshot: dict[str, Any],
+    tools: WorkbookToolset,
+) -> list[dict[str, Any]]:
+    final_extraction = _required_dict(snapshot.get("final_extraction"), "final_extraction")
+    candidates = final_extraction.get("output_candidates") or []
+    validation_results = snapshot.get("validation_results") or []
+    if not isinstance(candidates, list):
+        raise ModelExtractionPersistenceError("output_candidates must be a list")
+    if not isinstance(validation_results, list):
+        raise ModelExtractionPersistenceError("Validation results must be a list")
+    validation_by_id = {
+        result.get("candidate_id"): result
+        for result in validation_results
+        if isinstance(result, dict)
+        and result.get("_bucket") == "output_candidates"
+        and result.get("candidate_id") is not None
+    }
+
+    grouped: dict[tuple[str, str], list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        validation = validation_by_id.get(candidate.get("candidate_id"))
+        if validation is None or not _is_canonical_output_validation(validation):
+            continue
+        business_role = candidate.get("business_role")
+        if business_role is None:
+            continue
+        _validated_business_role(business_role)
+        source = _candidate_source(candidate)
+        if source is None:
+            continue
+        grouped.setdefault(source, []).append((candidate, validation))
+
+    id_factory = FinancialEntityIdFactory(model_version_id)
+    rows: list[dict[str, Any]] = []
+    for (sheet_name, submitted_cell), source_candidates in sorted(grouped.items()):
+        business_roles = {
+            str(candidate.get("business_role"))
+            for candidate, _validation in source_candidates
+        }
+        if len(business_roles) != 1:
+            raise CanonicalSourceConflictError(
+                f"Canonical output candidates disagree at {sheet_name}!{submitted_cell}"
+            )
+        candidate, validation = min(
+            source_candidates,
+            key=lambda item: str(item[0].get("candidate_id") or ""),
+        )
+        fact = tools.get_cell(sheet_name, submitted_cell)
+        source_cell = str(fact["cell"]).upper()
+        candidate_id = candidate.get("candidate_id")
+        rows.append(
+            {
+                "id": id_factory.output_id(sheet_name, source_cell),
+                "model_version_id": model_version_id,
+                "entity_kind": "canonical_output",
+                "llm_candidate_alias": (
+                    str(candidate_id) if candidate_id is not None else None
+                ),
+                "label": str(
+                    candidate.get("original_label")
+                    or candidate_id
+                    or fact["source_reference"]
+                ),
+                "category": candidate.get("category"),
+                "canonical_name": candidate.get("canonical_name"),
+                "business_role": str(candidate["business_role"]),
+                "submitted_role": str(
+                    candidate.get("submitted_role")
+                    or validation.get("submitted_role")
+                    or "unknown"
+                ),
+                "validated_role": str(validation.get("validated_role") or "unknown"),
+                "raw_value_json": json_safe(fact.get("raw_value")),
+                "unit": candidate.get("unit"),
+                "scenario": candidate.get("scenario"),
+                "period_json": json_safe(candidate.get("period")),
+                "source_sheet": sheet_name,
+                "source_cell": source_cell,
+                "exact_formula": fact.get("formula"),
+                "formula_status": str(fact.get("formula_status") or "unknown"),
+                "source_validation_status": str(
+                    validation.get("source_validation_status") or "unknown"
+                ),
+                "role_validation_status": str(
+                    validation.get("role_validation_status") or "unknown"
+                ),
+                "validation_status": str(
+                    validation.get("validation_status") or "unknown"
+                ),
+                "data_type": fact.get("data_type"),
+                "number_format": fact.get("number_format"),
+                "llm_confidence": candidate.get("llm_confidence"),
+                "validation_confidence": validation.get("validation_confidence"),
+                "reasoning_summary": candidate.get("reasoning_summary"),
+                "validation_warnings_json": json_safe(
+                    validation.get("validation_warnings") or []
+                ),
+            }
+        )
+    return rows
+
+
 def _candidate_source(candidate: dict[str, Any]) -> tuple[str, str] | None:
     references = candidate.get("source_references") or []
     if not isinstance(references, list) or not references:
@@ -575,6 +692,25 @@ def _is_canonical_parameter_validation(validation: dict[str, Any]) -> bool:
         and validation.get("validation_status") != "rejected"
         and validation.get("validated_role") in _CANONICAL_PARAMETER_ROLES
     )
+
+
+def _is_canonical_output_validation(validation: dict[str, Any]) -> bool:
+    return (
+        validation.get("source_validation_status") in _SOURCE_VALID_STATUSES
+        and validation.get("validation_status") != "rejected"
+        and validation.get("validated_role") in _CANONICAL_OUTPUT_ROLES
+    )
+
+
+def _validated_business_role(value: Any) -> str | None:
+    if value is None:
+        return None
+    business_role = str(value)
+    if business_role not in BUSINESS_OUTPUT_ROLES:
+        raise ModelExtractionPersistenceError(
+            f"Business output role is not registered: {business_role}"
+        )
+    return business_role
 
 
 def _split_qualified_cell(reference: str) -> tuple[str, str]:

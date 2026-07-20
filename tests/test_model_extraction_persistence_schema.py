@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
+    CanonicalOutput,
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
@@ -97,6 +98,28 @@ def _series(model_version_id: str, **overrides) -> FinancialSeries:
     }
     values.update(overrides)
     return FinancialSeries(**values)
+
+
+def _output(model_version_id: str, **overrides) -> CanonicalOutput:
+    values = {
+        "id": new_id(),
+        "model_version_id": model_version_id,
+        "entity_kind": "canonical_output",
+        "llm_candidate_alias": "output-1",
+        "label": "Project IRR",
+        "business_role": "project_irr",
+        "submitted_role": "formula_output",
+        "validated_role": "formula_output",
+        "source_sheet": "Returns",
+        "source_cell": "B8",
+        "formula_status": "formula_no_cache",
+        "source_validation_status": "validated",
+        "role_validation_status": "validated",
+        "validation_status": "validated",
+        "created_at": utcnow(),
+    }
+    values.update(overrides)
+    return CanonicalOutput(**values)
 
 
 def _series_value(series_id: str, **overrides) -> FinancialSeriesValue:
@@ -198,6 +221,50 @@ def test_financial_series_entity_kind_is_checked(schema_session) -> None:
         session.commit()
 
 
+def test_financial_series_persists_controlled_business_role(schema_session) -> None:
+    _engine, session = schema_session
+    assert hasattr(FinancialSeries, "business_role")
+    workbook = _workbook()
+    model_version = _model_version(workbook.id)
+    series = _series(model_version.id, business_role="revenue")
+    session.add_all([workbook, model_version, series])
+    session.commit()
+
+    assert session.scalar(select(FinancialSeries.business_role)) == "revenue"
+
+
+def test_scalar_output_rejects_unregistered_business_role(schema_session) -> None:
+    _engine, session = schema_session
+    workbook = _workbook()
+    model_version = _model_version(workbook.id)
+    session.add_all(
+        [
+            workbook,
+            model_version,
+            _output(model_version.id, business_role="project_return_guess"),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_financial_series_rejects_unregistered_business_role(schema_session) -> None:
+    _engine, session = schema_session
+    workbook = _workbook()
+    model_version = _model_version(workbook.id)
+    session.add_all(
+        [
+            workbook,
+            model_version,
+            _series(model_version.id, business_role="sales_maybe"),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
 def test_period_index_is_unique_within_series(schema_session) -> None:
     _engine, session = schema_session
     workbook = _workbook()
@@ -257,9 +324,13 @@ def test_alembic_upgrades_empty_sqlite_database_to_persistence_head(tmp_path: Pa
             "workbook_versions",
             "model_versions",
             "model_parameters",
+            "canonical_outputs",
             "financial_series",
             "financial_series_values",
         } <= set(inspect(engine).get_table_names())
+        assert "business_role" in {
+            column["name"] for column in inspect(engine).get_columns("financial_series")
+        }
     finally:
         engine.dispose()
 
@@ -293,6 +364,7 @@ def _reset_postgres_persistence_schema(database_url: str) -> None:
                 "executable_formula_rules",
                 "workbook_formula_cells",
                 "calculation_rule_extractions",
+                "canonical_outputs",
                 "financial_series_values",
                 "financial_series",
                 "model_parameters",
@@ -330,6 +402,7 @@ def test_alembic_upgrades_postgres_database_to_persistence_head() -> None:
             "workbook_versions",
             "model_versions",
             "model_parameters",
+            "canonical_outputs",
             "financial_series",
             "financial_series_values",
             "workbook_named_expressions",

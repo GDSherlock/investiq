@@ -9,7 +9,9 @@ import re
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .calculation_rules.models import ExecutableFormulaRule, WorkbookFormulaCellRecord
 from .model_extraction_models import (
+    CanonicalOutput,
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
@@ -18,6 +20,9 @@ from .model_extraction_models import (
 )
 from .model_extraction_types import (
     AmbiguousSourceCellError,
+    CalculationOutputDefinition,
+    CalculationOutputPoint,
+    CalculationOutputSource,
     CanonicalCalculationInput,
     CanonicalFinancialSeries,
     CanonicalFinancialSeriesValue,
@@ -144,6 +149,82 @@ class ModelExtractionReadService:
             .order_by(FinancialSeries.id)
         ).all()
         return [self._series_data(row) for row in rows]
+
+    def list_calculation_outputs(
+        self,
+        model_version_id: str,
+    ) -> list[CalculationOutputDefinition]:
+        model_version = self.load_model_version(model_version_id)
+        formula_cells = self._session.scalars(
+            select(WorkbookFormulaCellRecord).where(
+                WorkbookFormulaCellRecord.workbook_version_id
+                == model_version.workbook_version_id
+            )
+        ).all()
+        formula_by_source = {
+            (row.sheet_name, row.cell_address): row for row in formula_cells
+        }
+        executable_rules = self._session.scalars(
+            select(ExecutableFormulaRule)
+            .join(WorkbookFormulaCellRecord)
+            .where(
+                WorkbookFormulaCellRecord.workbook_version_id
+                == model_version.workbook_version_id
+            )
+            .order_by(
+                ExecutableFormulaRule.created_at,
+                ExecutableFormulaRule.id,
+            )
+        ).all()
+        support_by_formula_cell_id = {
+            row.formula_cell_id: row.support_status for row in executable_rules
+        }
+
+        scalar_rows = self._session.scalars(
+            select(CanonicalOutput)
+            .where(CanonicalOutput.model_version_id == model_version_id)
+            .order_by(CanonicalOutput.id)
+        ).all()
+        definitions = [
+            self._scalar_output_definition(
+                row,
+                formula_by_source,
+                support_by_formula_cell_id,
+            )
+            for row in scalar_rows
+        ]
+
+        series_rows = self._session.scalars(
+            select(FinancialSeries)
+            .where(
+                FinancialSeries.model_version_id == model_version_id,
+                FinancialSeries.business_role.is_not(None),
+            )
+            .order_by(FinancialSeries.id)
+        ).all()
+        values_by_series: dict[str, list[FinancialSeriesValue]] = {}
+        if series_rows:
+            series_ids = [row.id for row in series_rows]
+            values = self._session.scalars(
+                select(FinancialSeriesValue)
+                .where(FinancialSeriesValue.financial_series_id.in_(series_ids))
+                .order_by(
+                    FinancialSeriesValue.financial_series_id,
+                    FinancialSeriesValue.period_index,
+                )
+            ).all()
+            for value in values:
+                values_by_series.setdefault(value.financial_series_id, []).append(value)
+        definitions.extend(
+            self._series_output_definition(
+                row,
+                values_by_series.get(row.id, []),
+                formula_by_source,
+                support_by_formula_cell_id,
+            )
+            for row in series_rows
+        )
+        return sorted(definitions, key=lambda item: (item.entity_kind, item.output_id))
 
     def list_financial_series_values(
         self,
@@ -413,6 +494,7 @@ class ModelExtractionReadService:
             label=row.label,
             category=row.category,
             semantic_role=row.semantic_role,
+            business_role=row.business_role,
             unit=row.unit,
             frequency=row.frequency,
             orientation=row.orientation,
@@ -461,6 +543,91 @@ class ModelExtractionReadService:
             created_at=row.created_at,
         )
 
+    @staticmethod
+    def _scalar_output_definition(
+        row: CanonicalOutput,
+        formula_by_source: dict[tuple[str, str], WorkbookFormulaCellRecord],
+        support_by_formula_cell_id: dict[str, str],
+    ) -> CalculationOutputDefinition:
+        formula_cell = formula_by_source.get((row.source_sheet, row.source_cell))
+        mapping_status = _output_mapping_status(
+            row.exact_formula,
+            row.formula_status,
+            formula_cell is not None,
+        )
+        return CalculationOutputDefinition(
+            output_id=row.id,
+            entity_kind="scalar",
+            business_role=row.business_role,
+            label=row.label,
+            unit=row.unit,
+            scenario=row.scenario,
+            mapping_status=mapping_status,
+            support_status=_output_support_status(
+                row.exact_formula,
+                row.formula_status,
+                formula_cell,
+                support_by_formula_cell_id,
+            ),
+            source=CalculationOutputSource(
+                sheet_name=row.source_sheet,
+                cell_address=row.source_cell,
+                formula_cell_id=formula_cell.id if formula_cell is not None else None,
+                formula_status=row.formula_status,
+                number_format=row.number_format,
+            ),
+        )
+
+    @staticmethod
+    def _series_output_definition(
+        row: FinancialSeries,
+        values: list[FinancialSeriesValue],
+        formula_by_source: dict[tuple[str, str], WorkbookFormulaCellRecord],
+        support_by_formula_cell_id: dict[str, str],
+    ) -> CalculationOutputDefinition:
+        points: list[CalculationOutputPoint] = []
+        for value in values:
+            formula_cell = formula_by_source.get(
+                (value.value_source_sheet, value.value_source_cell)
+            )
+            points.append(
+                CalculationOutputPoint(
+                    financial_series_value_id=value.id,
+                    period_index=value.period_index,
+                    period=value.display_period_label,
+                    formula_cell_id=(
+                        formula_cell.id if formula_cell is not None else None
+                    ),
+                    mapping_status=_output_mapping_status(
+                        value.exact_formula,
+                        value.formula_status,
+                        formula_cell is not None,
+                    ),
+                    support_status=_output_support_status(
+                        value.exact_formula,
+                        value.formula_status,
+                        formula_cell,
+                        support_by_formula_cell_id,
+                    ),
+                    source_sheet=value.value_source_sheet,
+                    source_cell=value.value_source_cell,
+                    formula_status=value.formula_status,
+                    number_format=value.number_format,
+                )
+            )
+        return CalculationOutputDefinition(
+            output_id=row.id,
+            entity_kind="series",
+            business_role=row.business_role or "unclassified",
+            label=row.label,
+            unit=row.unit,
+            scenario=row.scenario,
+            mapping_status=_aggregate_output_mapping_status(points),
+            support_status=_aggregate_output_support_status(points),
+            source=None,
+            points=tuple(points),
+        )
+
 
 def _normalize_a1(cell_address: str) -> str:
     match = _A1_PATTERN.fullmatch(cell_address)
@@ -478,6 +645,53 @@ def _normalize_a1(cell_address: str) -> str:
 
 def _formula_backed(exact_formula: str | None, formula_status: str) -> bool:
     return bool(exact_formula) or formula_status.startswith("formula")
+
+
+def _output_mapping_status(
+    exact_formula: str | None,
+    formula_status: str,
+    formula_cell_exists: bool,
+) -> Literal["mapped", "missing", "static"]:
+    if not _formula_backed(exact_formula, formula_status):
+        return "static"
+    return "mapped" if formula_cell_exists else "missing"
+
+
+def _aggregate_output_mapping_status(
+    points: list[CalculationOutputPoint],
+) -> Literal["mapped", "partial", "missing", "static"]:
+    if not points:
+        return "missing"
+    statuses = {point.mapping_status for point in points}
+    if statuses == {"mapped"}:
+        return "mapped"
+    if statuses == {"static"}:
+        return "static"
+    if statuses == {"missing"}:
+        return "missing"
+    return "partial"
+
+
+def _output_support_status(
+    exact_formula: str | None,
+    formula_status: str,
+    formula_cell: WorkbookFormulaCellRecord | None,
+    support_by_formula_cell_id: dict[str, str],
+) -> str:
+    if not _formula_backed(exact_formula, formula_status):
+        return "static"
+    if formula_cell is None:
+        return "not_prepared"
+    return support_by_formula_cell_id.get(formula_cell.id, "not_prepared")
+
+
+def _aggregate_output_support_status(points: list[CalculationOutputPoint]) -> str:
+    if not points:
+        return "not_prepared"
+    statuses = {point.support_status for point in points}
+    if len(statuses) == 1:
+        return next(iter(statuses))
+    return "partial"
 
 
 def _canonical_value_type(value: object, data_type: str | None) -> str | None:

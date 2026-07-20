@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
+    CanonicalOutput,
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
@@ -247,6 +248,7 @@ def test_success_persists_parameter_series_values_and_returns_ids(
     assert response["workbook_version_id"]
     assert response["model_version_id"]
     assert _count(session, ModelParameter) == 2
+    assert _count(session, CanonicalOutput) == 1
     assert _count(session, FinancialSeries) == 1
     assert _count(session, FinancialSeriesValue) == 2
     model_version = session.get(ModelVersion, response["model_version_id"])
@@ -264,7 +266,9 @@ def test_snapshot_strips_dependency_evidence(lifecycle_context) -> None:
     assert not _contains_key(model_version.validation_results_json, "dependency_evidence")
 
 
-def test_metadata_and_output_candidates_remain_snapshot_only(lifecycle_context) -> None:
+def test_metadata_remains_snapshot_only_and_output_is_materialized(
+    lifecycle_context,
+) -> None:
     _engine, _session_factory, session = lifecycle_context
     service = ModelExtractionPersistenceService(session, validation_runner=RecordingRunner())
     response = service.process_upload(persistence_workbook_bytes(), "model.xlsx")
@@ -276,6 +280,11 @@ def test_metadata_and_output_candidates_remain_snapshot_only(lifecycle_context) 
         "Tax rate",
         "Discounted value",
     }
+    output = session.scalar(select(CanonicalOutput))
+    assert output.label == "Displayed revenue"
+    assert output.business_role == "revenue"
+    assert output.source_sheet == "P&L"
+    assert output.source_cell == "B3"
     model_version = session.get(ModelVersion, response["model_version_id"])
     final_extraction = model_version.extraction_snapshot_json["final_extraction"]
     assert final_extraction["metadata"][0]["original_label"] == "Project Alpha"
@@ -300,6 +309,18 @@ def test_formula_derived_parameter_reloads_exact_formula_and_null_cache(
     assert derived.validated_value_json is None
     assert derived.exact_formula == "=Assumptions!B4*100"
     assert derived.formula_status == "formula_no_cache"
+
+
+def test_financial_series_reloads_explicit_business_role(lifecycle_context) -> None:
+    _engine, _session_factory, session = lifecycle_context
+    service = ModelExtractionPersistenceService(session, validation_runner=RecordingRunner())
+    response = service.process_upload(persistence_workbook_bytes(), "model.xlsx")
+    read_service = ModelExtractionReadService(session, DatabaseWorkbookStorage(session))
+
+    series = read_service.list_financial_series(response["model_version_id"])
+
+    assert len(series) == 1
+    assert series[0].business_role == "revenue"
 
 
 def test_same_source_assumption_family_candidates_use_bucket_priority(
@@ -461,6 +482,7 @@ def test_postgres_t3_failure_rolls_back_every_canonical_child() -> None:
                 "executable_formula_rules",
                 "workbook_formula_cells",
                 "calculation_rule_extractions",
+                "canonical_outputs",
                 "financial_series_values",
                 "financial_series",
                 "model_parameters",

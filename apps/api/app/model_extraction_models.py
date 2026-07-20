@@ -25,6 +25,12 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from .database import Base
+from .model_extraction_types import BUSINESS_OUTPUT_ROLES
+
+
+_BUSINESS_OUTPUT_ROLES_SQL = ", ".join(
+    f"'{role}'" for role in BUSINESS_OUTPUT_ROLES
+)
 
 
 def utcnow() -> datetime:
@@ -111,6 +117,12 @@ class ModelVersion(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    canonical_outputs = relationship(
+        "CanonicalOutput",
+        back_populates="model_version",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     financial_series = relationship(
         "FinancialSeries",
         back_populates="model_version",
@@ -169,6 +181,66 @@ class ModelParameter(Base):
     model_version = relationship("ModelVersion", back_populates="parameters")
 
 
+class CanonicalOutput(Base):
+    __tablename__ = "canonical_outputs"
+    __table_args__ = (
+        CheckConstraint(
+            "entity_kind = 'canonical_output'",
+            name="ck_canonical_outputs_entity_kind",
+        ),
+        CheckConstraint(
+            f"business_role IN ({_BUSINESS_OUTPUT_ROLES_SQL})",
+            name="ck_canonical_outputs_business_role",
+        ),
+        UniqueConstraint(
+            "model_version_id",
+            "source_sheet",
+            "source_cell",
+            name="uq_canonical_outputs_source_cell",
+        ),
+        Index(
+            "ix_canonical_outputs_model_role",
+            "model_version_id",
+            "business_role",
+        ),
+    )
+
+    id = Column(Uuid(as_uuid=False), primary_key=True)
+    model_version_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey("model_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    entity_kind = Column(String(32), nullable=False, default="canonical_output")
+    llm_candidate_alias = Column(String(255), nullable=True)
+    label = Column(Text, nullable=False)
+    category = Column(String(100), nullable=True)
+    canonical_name = Column(String(255), nullable=True)
+    business_role = Column(String(64), nullable=False)
+    submitted_role = Column(String(64), nullable=False)
+    validated_role = Column(String(64), nullable=False)
+    raw_value_json = Column(JSON, nullable=True)
+    unit = Column(String(100), nullable=True)
+    scenario = Column(String(100), nullable=True)
+    period_json = Column(JSON, nullable=True)
+    source_sheet = Column(String(255), nullable=False)
+    source_cell = Column(String(32), nullable=False)
+    exact_formula = Column(Text, nullable=True)
+    formula_status = Column(String(64), nullable=False)
+    source_validation_status = Column(String(32), nullable=False)
+    role_validation_status = Column(String(32), nullable=False)
+    validation_status = Column(String(32), nullable=False)
+    data_type = Column(String(16), nullable=True)
+    number_format = Column(Text, nullable=True)
+    llm_confidence = Column(Float, nullable=True)
+    validation_confidence = Column(Float, nullable=True)
+    reasoning_summary = Column(Text, nullable=True)
+    validation_warnings_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    model_version = relationship("ModelVersion", back_populates="canonical_outputs")
+
+
 class FinancialSeries(Base):
     __tablename__ = "financial_series"
     __table_args__ = (
@@ -180,8 +252,17 @@ class FinancialSeries(Base):
             "semantic_role = 'financial_series'",
             name="ck_financial_series_semantic_role",
         ),
+        CheckConstraint(
+            f"business_role IS NULL OR business_role IN ({_BUSINESS_OUTPUT_ROLES_SQL})",
+            name="ck_financial_series_business_role",
+        ),
         Index("ix_financial_series_model_id", "model_version_id", "id"),
         Index("ix_financial_series_model_category", "model_version_id", "category"),
+        Index(
+            "ix_financial_series_model_business_role",
+            "model_version_id",
+            "business_role",
+        ),
     )
 
     id = Column(Uuid(as_uuid=False), primary_key=True)
@@ -195,6 +276,7 @@ class FinancialSeries(Base):
     label = Column(Text, nullable=False)
     category = Column(String(100), nullable=True)
     semantic_role = Column(String(64), nullable=False, default="financial_series")
+    business_role = Column(String(64), nullable=True)
     unit = Column(String(100), nullable=True)
     frequency = Column(String(64), nullable=True)
     orientation = Column(String(16), nullable=False)

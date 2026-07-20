@@ -14,6 +14,16 @@ ROLE_ENUM = [
     "presentation_only", "unknown",
 ]
 
+BUSINESS_OUTPUT_ROLE_ENUM = [
+    "project_irr", "equity_irr", "npv", "minimum_dscr", "average_dscr",
+    "total_project_cost", "total_capex", "total_debt", "peak_debt",
+    "average_ebitda_margin", "payback_period", "equity_multiple", "revenue",
+    "opex", "fixed_opex", "variable_opex", "ebitda", "cfads", "debt_service",
+    "debt_balance", "opening_debt", "closing_debt", "principal_repayment",
+    "interest_expense", "cash_flow", "equity_cash_flow", "tax",
+    "net_generation", "power_price", "unclassified",
+]
+
 _SOURCE_REF = {
     "type": "object",
     "properties": {"sheet_name": {"type": "string"}, "cell": {"type": "string", "description": "A1 ref, e.g. C3"}},
@@ -26,6 +36,10 @@ _FINANCIAL_SERIES = {
         "series_id": {"type": "string"},
         "label": {"type": "string"},
         "semantic_role": {"type": "string", "const": "financial_series"},
+        "business_role": {
+            "type": "string",
+            "enum": BUSINESS_OUTPUT_ROLE_ENUM,
+        },
         "category": {"type": ["string", "null"]},
         "unit": {"type": ["string", "null"]},
         "frequency": {"type": ["string", "null"]},
@@ -53,7 +67,7 @@ _FINANCIAL_SERIES = {
     },
     "required": [
         "series_id", "label", "semantic_role", "category", "unit", "frequency",
-        "period_range", "value_range",
+        "business_role", "period_range", "value_range",
     ],
 }
 
@@ -63,6 +77,10 @@ _CANDIDATE = {
         "candidate_id": {"type": "string"},
         "original_label": {"type": "string", "description": "Label EXACTLY as it appears in the workbook (preserve language/unknown terms)."},
         "submitted_role": {"type": "string", "enum": ROLE_ENUM},
+        "business_role": {
+            "type": ["string", "null"],
+            "enum": [*BUSINESS_OUTPUT_ROLE_ENUM, None],
+        },
         "raw_value": {"description": "Value EXACTLY as read from the cell. null if unavailable — NEVER guess or use 0."},
         "displayed_value": {"type": ["string", "number", "null"]},
         "unit": {"type": ["string", "null"]},
@@ -79,7 +97,20 @@ _CANDIDATE = {
     "required": ["candidate_id", "original_label", "submitted_role", "raw_value", "source_references"],
 }
 
+_OUTPUT_CANDIDATE = {
+    **_CANDIDATE,
+    "properties": {
+        **_CANDIDATE["properties"],
+        "business_role": {
+            "type": "string",
+            "enum": BUSINESS_OUTPUT_ROLE_ENUM,
+        },
+    },
+    "required": [*_CANDIDATE["required"], "business_role"],
+}
+
 _LIST = lambda: {"type": "array", "items": _CANDIDATE}
+_OUTPUT_LIST = lambda: {"type": "array", "items": _OUTPUT_CANDIDATE}
 
 SUBMIT_RESULT_SCHEMA = {
     "type": "object",
@@ -88,7 +119,7 @@ SUBMIT_RESULT_SCHEMA = {
         "all_assumption_candidates": _LIST(),
         "parameter_candidates": _LIST(),
         "derived_value_candidates": _LIST(),
-        "output_candidates": _LIST(),
+        "output_candidates": _OUTPUT_LIST(),
         "financial_series_candidates": _LIST(),
         "financial_series": {"type": "array", "items": _FINANCIAL_SERIES},
         "scenario_structures": {"type": "array", "items": {"type": "object"}},
@@ -151,6 +182,9 @@ SYSTEM_PROMPT = (
     "- hardcoded_input / scenario_input / parameter = editable inputs (no formula).\n"
     "- formula_derived_value = a cell that CONTAINS a formula (an intermediate); it is NOT an assumption.\n"
     "- formula_output / hardcoded_display_output = results; separate them from assumptions.\n"
+    "- Every output_candidate MUST provide one business_role from the registered enum. Use "
+    "unclassified when workbook evidence does not support a more specific role; never infer a "
+    "role from fuzzy label similarity.\n"
     "- For every canonical financial_series, identify the complete contiguous period range and the "
     "complete contiguous value range. Never use a single representative cell or one selected year "
     "when a complete row or column exists. Range references must include the sheet name unless the "
@@ -162,6 +196,8 @@ SYSTEM_PROMPT = (
     "labels are allowed when their cell references differ.\n"
     "- A formula-based row remains semantic_role=financial_series. Formula/hardcoded/mixed/blank is "
     "an independent calculation_type, not a competing semantic role.\n"
+    "- For financial_series, set business_role only when workbook evidence supports a registered "
+    "business meaning; otherwise use unclassified. Do not derive it from sheet names alone.\n"
     "- Recognize horizontal rows and vertical columns with annual, quarterly, monthly, actual/forecast, "
     "construction, or operating period labels without assuming sheet names, start columns, or year counts.\n"
     "- Keep Base/Stress/Upside and other scenario tables in scenario_structures. Keep one-way/two-way "

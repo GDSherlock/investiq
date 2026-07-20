@@ -16,6 +16,7 @@ from ..database import get_db
 from ..model_extraction_read_service import ModelExtractionReadService
 from ..schemas import (
     CalculationInputsResponse,
+    CalculationOutputsResponse,
     CalculationPrepareRequest,
     CalculationReadinessResponse,
     CalculationRequest,
@@ -99,6 +100,22 @@ def get_calculation_inputs(
             limit=limit,
             cursor=cursor,
         )
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.get(
+    "/models/{model_version_id}/calculation/outputs",
+    response_model=CalculationOutputsResponse,
+)
+def get_calculation_outputs(
+    model_version_id: UUID,
+    service: CalculationIntegrationService = Depends(
+        get_calculation_integration_service
+    ),
+) -> CalculationOutputsResponse:
+    try:
+        return service.list_outputs(str(model_version_id))
     except CalculationIntegrationError as error:
         _translate_error(error)
 

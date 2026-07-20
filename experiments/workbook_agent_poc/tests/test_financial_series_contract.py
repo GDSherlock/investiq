@@ -15,6 +15,7 @@ def test_submit_contract_accepts_descriptors_without_workbook_arrays():
         "series_id",
         "label",
         "semantic_role",
+        "business_role",
         "category",
         "unit",
         "frequency",
@@ -30,6 +31,7 @@ def test_submit_contract_accepts_descriptors_without_workbook_arrays():
         "series_id",
         "label",
         "semantic_role",
+        "business_role",
         "category",
         "unit",
         "frequency",
@@ -40,6 +42,14 @@ def test_submit_contract_accepts_descriptors_without_workbook_arrays():
     assert "value_axis" not in schema["properties"]
     assert "calculation_type" not in schema["properties"]
     assert "formula_pattern" not in schema["properties"]
+
+
+def test_output_candidates_require_registered_business_role():
+    schema = SUBMIT_RESULT_SCHEMA["properties"]["output_candidates"]["items"]
+
+    assert "business_role" in schema["properties"]
+    assert "business_role" in schema["required"]
+    assert "unclassified" in schema["properties"]["business_role"]["enum"]
 
 
 def test_prompt_forbids_representative_cells_and_keeps_formula_semantics_independent():

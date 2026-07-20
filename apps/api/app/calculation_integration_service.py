@@ -38,6 +38,10 @@ from .schemas import (
     CalculationInputItem,
     CalculationInputsResponse,
     CalculationNumberValue,
+    CalculationOutputDefinitionItem,
+    CalculationOutputPointItem,
+    CalculationOutputsResponse,
+    CalculationOutputSourceItem,
     CalculationOutputValue,
     CalculationRequest,
     CalculationReadinessResponse,
@@ -337,6 +341,77 @@ class CalculationIntegrationService:
             inputs=[self._input_item(candidate) for candidate in page],
             next_cursor=(page[-1].target_id if has_more and page else None),
         )
+
+    def list_outputs(self, model_version_id: str) -> CalculationOutputsResponse:
+        try:
+            definitions = self._read_service.list_calculation_outputs(
+                model_version_id
+            )
+            return CalculationOutputsResponse(
+                model_version_id=model_version_id,
+                outputs=[
+                    CalculationOutputDefinitionItem(
+                        output_id=definition.output_id,
+                        entity_kind=definition.entity_kind,
+                        business_role=definition.business_role,
+                        label=definition.label,
+                        unit=definition.unit,
+                        scenario=definition.scenario,
+                        mapping_status=definition.mapping_status,
+                        support_status=definition.support_status,
+                        source=(
+                            CalculationOutputSourceItem(
+                                sheet_name=definition.source.sheet_name,
+                                cell_address=definition.source.cell_address,
+                                formula_cell_id=definition.source.formula_cell_id,
+                                formula_status=definition.source.formula_status,
+                                number_format=definition.source.number_format,
+                            )
+                            if definition.source is not None
+                            else None
+                        ),
+                        points=[
+                            CalculationOutputPointItem(
+                                financial_series_value_id=point.financial_series_value_id,
+                                period_index=point.period_index,
+                                period=point.period,
+                                formula_cell_id=point.formula_cell_id,
+                                mapping_status=point.mapping_status,
+                                support_status=point.support_status,
+                                source_sheet=point.source_sheet,
+                                source_cell=point.source_cell,
+                                formula_status=point.formula_status,
+                                number_format=point.number_format,
+                            )
+                            for point in definition.points
+                        ],
+                    )
+                    for definition in definitions
+                ],
+            )
+        except ModelVersionNotFound as exc:
+            raise CalculationIntegrationError(
+                "MODEL_VERSION_NOT_FOUND",
+                "Model version was not found.",
+                status_code=404,
+                resource_id=model_version_id,
+            ) from exc
+        except ModelVersionNotReady as exc:
+            raise CalculationIntegrationError(
+                "MODEL_NOT_MATERIALIZED",
+                "Model version is not canonically materialized.",
+                status_code=409,
+                resource_id=model_version_id,
+            ) from exc
+        except CalculationIntegrationError:
+            raise
+        except Exception as exc:
+            raise CalculationIntegrationError(
+                "CALCULATION_OUTPUT_DISCOVERY_UNAVAILABLE",
+                "Calculation output discovery is unavailable.",
+                status_code=500,
+                resource_id=model_version_id,
+            ) from exc
 
     def calculate(
         self,

@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from apps.api.app import model_extraction_models
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
     FinancialSeries,
@@ -182,6 +183,18 @@ def test_parameter_and_series_ids_share_financial_entity_factory() -> None:
     ).entity_kind == "financial_series"
 
 
+def test_output_id_is_stable_for_exact_source_cell() -> None:
+    model_version_id = new_uuid()
+    factory = FinancialEntityIdFactory(model_version_id)
+
+    first_id = factory.output_id("Investor Returns", "b8")
+    second_id = factory.output_id("Investor Returns", "B8")
+
+    assert UUID(first_id).version == 5
+    assert first_id == second_id
+    assert first_id != factory.parameter_id("Investor Returns", "B8")
+
+
 def test_llm_alias_changes_do_not_change_backend_ids() -> None:
     model_version_id = new_uuid()
     factory = FinancialEntityIdFactory(model_version_id)
@@ -221,6 +234,64 @@ def test_repository_persists_parameter_series_and_aligned_values(persistence_con
     assert persisted_value.id == value["id"]
     assert persisted_value.period_index == 0
     assert persisted_value.exact_formula == "=B10+B11"
+
+
+def test_repository_persists_scalar_output_with_stable_business_role(
+    persistence_context,
+) -> None:
+    session, repository, model_version = persistence_context
+    assert hasattr(model_extraction_models, "CanonicalOutput")
+    output_model = model_extraction_models.CanonicalOutput
+    output_id = FinancialEntityIdFactory(model_version.id).output_id(
+        "Investor Returns",
+        "B8",
+    )
+
+    with session.begin():
+        repository.persist_canonical_model(
+            model_version.id,
+            parameters=[],
+            financial_series=[],
+            financial_series_values=[],
+            outputs=[
+                {
+                    "id": output_id,
+                    "model_version_id": model_version.id,
+                    "entity_kind": "canonical_output",
+                    "llm_candidate_alias": "o4",
+                    "label": "Project IRR",
+                    "category": "returns",
+                    "canonical_name": "Project IRR",
+                    "business_role": "project_irr",
+                    "submitted_role": "formula_output",
+                    "validated_role": "formula_output",
+                    "raw_value_json": None,
+                    "unit": "%",
+                    "scenario": "base",
+                    "period_json": None,
+                    "source_sheet": "Investor Returns",
+                    "source_cell": "B8",
+                    "exact_formula": "=IRR('Cash Flow'!B6:AB6)",
+                    "formula_status": "formula_no_cache",
+                    "source_validation_status": "validated",
+                    "role_validation_status": "validated",
+                    "validation_status": "validated",
+                    "data_type": "f",
+                    "number_format": "0.00%",
+                    "llm_confidence": 0.9,
+                    "validation_confidence": 1.0,
+                    "reasoning_summary": "Terminal return output",
+                    "validation_warnings_json": [],
+                }
+            ],
+            validation_status="validated",
+        )
+
+    persisted = session.scalar(select(output_model))
+    assert persisted.id == output_id
+    assert persisted.business_role == "project_irr"
+    assert persisted.source_sheet == "Investor Returns"
+    assert persisted.source_cell == "B8"
 
 
 def test_parameter_source_cell_conflict_rolls_back_all_canonical_rows(

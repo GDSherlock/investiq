@@ -246,6 +246,7 @@ def test_postgres_phase2_run_persists_and_round_trips() -> None:
                 "executable_formula_rules",
                 "workbook_formula_cells",
                 "calculation_rule_extractions",
+                "canonical_outputs",
                 "financial_series_values",
                 "financial_series",
                 "model_parameters",

@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .model_extraction_models import (
+    CanonicalOutput,
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
@@ -196,6 +197,7 @@ class ModelExtractionRepository:
         financial_series: list[dict[str, Any]],
         financial_series_values: list[dict[str, Any]],
         validation_status: str,
+        outputs: list[dict[str, Any]] | None = None,
     ) -> ModelVersion:
         model_version = self._get_model_version(model_version_id)
         if model_version.status not in {"extracted", "persistence_failed"}:
@@ -208,10 +210,13 @@ class ModelExtractionRepository:
             )
 
         parameter_rows = [ModelParameter(**row) for row in parameters]
+        output_rows = [CanonicalOutput(**row) for row in (outputs or [])]
         series_rows = [FinancialSeries(**row) for row in financial_series]
         value_rows = [FinancialSeriesValue(**row) for row in financial_series_values]
 
         self._session.add_all(parameter_rows)
+        self._session.flush()
+        self._session.add_all(output_rows)
         self._session.flush()
         self._session.add_all(series_rows)
         self._session.flush()
@@ -228,6 +233,11 @@ class ModelExtractionRepository:
                 FinancialSeries.model_version_id == model_version_id
             )
         )
+        actual_output_count = self._session.scalar(
+            select(func.count()).select_from(CanonicalOutput).where(
+                CanonicalOutput.model_version_id == model_version_id
+            )
+        )
         actual_value_count = self._session.scalar(
             select(func.count())
             .select_from(FinancialSeriesValue)
@@ -236,6 +246,7 @@ class ModelExtractionRepository:
         )
         if (
             actual_parameter_count != len(parameter_rows)
+            or actual_output_count != len(output_rows)
             or actual_series_count != len(series_rows)
             or actual_value_count != len(value_rows)
         ):
@@ -300,7 +311,16 @@ class ModelExtractionRepository:
                 FinancialSeries.model_version_id == model_version_id
             )
         )
-        return int(parameter_count or 0) + int(series_count or 0)
+        output_count = self._session.scalar(
+            select(func.count()).select_from(CanonicalOutput).where(
+                CanonicalOutput.model_version_id == model_version_id
+            )
+        )
+        return (
+            int(parameter_count or 0)
+            + int(output_count or 0)
+            + int(series_count or 0)
+        )
 
 
 def _utcnow() -> datetime:

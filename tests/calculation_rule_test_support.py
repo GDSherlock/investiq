@@ -8,6 +8,7 @@ from zipfile import ZipFile
 from openpyxl import Workbook
 
 from apps.api.app.model_extraction_models import (
+    CanonicalOutput,
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
@@ -51,6 +52,7 @@ def calculation_workbook_bytes(
 
     calc = workbook.create_sheet("Calc")
     calc["A1"] = 2026
+    calc["A2"] = 2027
     calc["B1"] = "=SUM(Inputs!A1:A2)"
     calc["B2"] = "=B1*2"
     calc["B3"] = '=COUNTIF(Inputs!A1:A2,">0")'
@@ -142,6 +144,7 @@ def create_materialized_rule_model(
         entity_kind="financial_series",
         label="Calculated output",
         semantic_role="financial_series",
+        business_role="revenue",
         unit="USD",
         frequency="annual",
         orientation="horizontal",
@@ -175,6 +178,31 @@ def create_materialized_rule_model(
         number_format="General",
         data_type="f",
     )
-    session.add_all([workbook, model, input_parameter, series, value])
+    output = CanonicalOutput(
+        id=id_factory.output_id("Calc", "B1"),
+        model_version_id=model.id,
+        entity_kind="canonical_output",
+        llm_candidate_alias="total-project-cost",
+        label="Total project cost",
+        category="summary",
+        canonical_name="Total Project Cost",
+        business_role="total_project_cost",
+        submitted_role="formula_output",
+        validated_role="formula_output",
+        raw_value_json=None,
+        unit="USD",
+        scenario="base",
+        source_sheet="Calc",
+        source_cell="B1",
+        exact_formula="=SUM(Inputs!A1:A2)",
+        formula_status="formula_no_cache",
+        source_validation_status="validated",
+        role_validation_status="validated",
+        validation_status="validated",
+        data_type="f",
+        number_format="General",
+        validation_warnings_json=[],
+    )
+    session.add_all([workbook, model, input_parameter, output, series, value])
     session.commit()
     return storage, workbook, model, input_parameter, series, value

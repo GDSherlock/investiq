@@ -12,6 +12,7 @@ from ..calculation_integration_service import (
     CalculationIntegrationError,
     CalculationIntegrationService,
 )
+from ..calculation_sensitivity_service import CalculationSensitivityService
 from ..database import get_db
 from ..model_extraction_read_service import ModelExtractionReadService
 from ..schemas import (
@@ -22,6 +23,8 @@ from ..schemas import (
     CalculationRequest,
     CalculationRunOutputsResponse,
     CalculationRunResponse,
+    CalculationSensitivityRequest,
+    CalculationSensitivityResponse,
 )
 from ..workbook_storage import DatabaseWorkbookStorage
 
@@ -37,6 +40,15 @@ def get_calculation_integration_service(
         DatabaseWorkbookStorage(session),
     )
     return CalculationIntegrationService(session, read_service)
+
+
+def get_calculation_sensitivity_service(
+    session: Session = Depends(get_db),
+    calculation_service: CalculationIntegrationService = Depends(
+        get_calculation_integration_service
+    ),
+) -> CalculationSensitivityService:
+    return CalculationSensitivityService(session, calculation_service)
 
 
 def _translate_error(error: CalculationIntegrationError) -> None:
@@ -117,6 +129,23 @@ def get_calculation_outputs(
 ) -> CalculationOutputsResponse:
     try:
         return service.list_outputs(str(model_version_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.post(
+    "/models/{model_version_id}/calculation/sensitivity",
+    response_model=CalculationSensitivityResponse,
+)
+def analyze_calculation_sensitivity(
+    model_version_id: UUID,
+    request: CalculationSensitivityRequest,
+    service: CalculationSensitivityService = Depends(
+        get_calculation_sensitivity_service
+    ),
+) -> CalculationSensitivityResponse:
+    try:
+        return service.analyze(str(model_version_id), request)
     except CalculationIntegrationError as error:
         _translate_error(error)
 

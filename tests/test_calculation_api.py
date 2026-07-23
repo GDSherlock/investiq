@@ -18,6 +18,9 @@ from apps.api.app.calculation_rules.phase2_models import (
 )
 from apps.api.app.database import Base, get_db
 from apps.api.app.main import app
+from apps.api.app.routers.calculations import (
+    get_calculation_sensitivity_service,
+)
 from apps.api.app.model_extraction_models import (
     CanonicalOutput,
     FinancialSeries,
@@ -193,6 +196,10 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
         ("/api/v1/models/{model_version_id}/calculation/prepare", "post"),
         ("/api/v1/models/{model_version_id}/calculation/inputs", "get"),
         ("/api/v1/models/{model_version_id}/calculation/outputs", "get"),
+        (
+            "/api/v1/models/{model_version_id}/calculation/sensitivity",
+            "post",
+        ),
         ("/api/v1/models/{model_version_id}/calculations", "post"),
         ("/api/v1/calculation-runs/{calculation_run_id}", "get"),
         ("/api/v1/calculation-runs/{calculation_run_id}/outputs", "get"),
@@ -223,6 +230,196 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
     assert set(financial_target) == {"kind", "financial_series_value_id"}
     assert "sheet_name" not in str(components["CalculationOverrideRequest"])
     assert "cell_address" not in str(components["CalculationOverrideRequest"])
+    sensitivity = schema["paths"][
+        "/api/v1/models/{model_version_id}/calculation/sensitivity"
+    ]["post"]
+    assert sensitivity["requestBody"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/CalculationSensitivityRequest"}
+    assert sensitivity["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ] == {"$ref": "#/components/schemas/CalculationSensitivityResponse"}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "graph_version_id": str(uuid.uuid4()),
+            "output_id": str(uuid.uuid4()),
+            "drivers": [
+                {
+                    "target": {
+                        "kind": "cell",
+                        "sheet_name": "Inputs",
+                        "cell_address": "A1",
+                    },
+                    "low": {"value_type": "number", "value": "1"},
+                    "high": {"value_type": "number", "value": "2"},
+                }
+            ],
+        },
+        {
+            "graph_version_id": str(uuid.uuid4()),
+            "output_id": str(uuid.uuid4()),
+            "drivers": [
+                {
+                    "target": {
+                        "kind": "parameter",
+                        "parameter_id": str(uuid.uuid4()),
+                    },
+                    "low": {"value_type": "number", "value": str(index)},
+                    "high": {
+                        "value_type": "number",
+                        "value": str(index + 1),
+                    },
+                }
+                for index in range(13)
+            ],
+        },
+    ],
+)
+def test_sensitivity_api_rejects_malformed_or_over_limit_before_service(
+    api_context,
+    payload: dict[str, object],
+) -> None:
+    class _SensitivityMustNotAnalyze:
+        def analyze(self, *_args, **_kwargs):
+            raise AssertionError("Malformed requests must not execute service")
+
+    app.dependency_overrides[get_calculation_sensitivity_service] = (
+        lambda: _SensitivityMustNotAnalyze()
+    )
+    try:
+        response = api_context["client"].post(
+            f"/api/v1/models/{api_context['model_version_id']}"
+            "/calculation/sensitivity",
+            json=payload,
+        )
+    finally:
+        app.dependency_overrides.pop(
+            get_calculation_sensitivity_service,
+            None,
+        )
+
+    assert response.status_code == 422
+
+
+def _sensitivity_api_payload(
+    context,
+    graph_version_id: str,
+    output_id: str,
+) -> dict[str, object]:
+    return {
+        "graph_version_id": graph_version_id,
+        "output_id": output_id,
+        "current_overrides": [
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter_id"],
+                },
+                "value": {"value_type": "number", "value": "10"},
+            }
+        ],
+        "drivers": [
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter_id"],
+                },
+                "low": {"value_type": "number", "value": "1"},
+                "high": {"value_type": "number", "value": "4"},
+            }
+        ],
+    }
+
+
+def test_sensitivity_http_runs_real_persisted_cases(api_context) -> None:
+    context = api_context
+    client = context["client"]
+    prepared = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculation/prepare",
+        json={},
+    )
+    graph_version_id = prepared.json()["graph_version_id"]
+    baseline = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculations",
+        json={
+            "graph_version_id": graph_version_id,
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    )
+    outputs = client.get(
+        f"/api/v1/models/{context['model_version_id']}/calculation/outputs"
+    )
+    scalar = next(
+        item
+        for item in outputs.json()["outputs"]
+        if item["entity_kind"] == "scalar"
+    )
+
+    response = client.post(
+        f"/api/v1/models/{context['model_version_id']}"
+        "/calculation/sensitivity",
+        json=_sensitivity_api_payload(
+            context,
+            graph_version_id,
+            scalar["output_id"],
+        ),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert (
+        payload["comparison_baseline_run_id"]
+        == baseline.json()["calculation_run_id"]
+    )
+    assert payload["selected_output"]["current"]["value"]["value"] == "13"
+    assert payload["drivers"][0]["low_case"]["output"]["value"]["value"] == "4"
+    assert payload["drivers"][0]["high_case"]["output"]["value"]["value"] == "7"
+    assert payload["drivers"][0]["impact"] == "3"
+
+
+def test_sensitivity_http_preserves_structured_domain_failure(
+    api_context,
+) -> None:
+    context = api_context
+    client = context["client"]
+    prepared = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculation/prepare",
+        json={},
+    )
+    outputs = client.get(
+        f"/api/v1/models/{context['model_version_id']}/calculation/outputs"
+    )
+    scalar = next(
+        item
+        for item in outputs.json()["outputs"]
+        if item["entity_kind"] == "scalar"
+    )
+
+    response = client.post(
+        f"/api/v1/models/{context['model_version_id']}"
+        "/calculation/sensitivity",
+        json=_sensitivity_api_payload(
+            context,
+            prepared.json()["graph_version_id"],
+            scalar["output_id"],
+        ),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "CALCULATION_BASELINE_NOT_FOUND",
+        "message": (
+            "A completed zero-override calculation with matching versions "
+            "is required."
+        ),
+        "retryable": False,
+        "resource_id": context["model_version_id"],
+    }
 
 
 def test_raw_cell_request_is_rejected_by_public_schema(api_context) -> None:

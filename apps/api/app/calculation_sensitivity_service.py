@@ -1,0 +1,446 @@
+"""Persisted orchestration for bounded canonical sensitivity cases."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Sequence
+
+from sqlalchemy.orm import Session
+
+from .calculation_integration_service import (
+    CalculationIntegrationError,
+    CalculationIntegrationService,
+)
+from .calculation_rules.phase2_repository import Phase2CalculationRepository
+from .calculation_rules.phase2_types import (
+    CalculationRunPolicy,
+    Phase2CalculationConfiguration,
+    canonical_hash,
+)
+from .schemas import (
+    CalculationInputsResponse,
+    CalculationNumberValue,
+    CalculationOverrideRequest,
+    CalculationOverrideTarget,
+    CalculationProjectedValueItem,
+    CalculationRequest,
+    CalculationRunOutputsResponse,
+    CalculationRunScalarOutputItem,
+    CalculationSensitivityCase,
+    CalculationSensitivityDriverResult,
+    CalculationSensitivityOverrideRequest,
+    CalculationSensitivityRequest,
+    CalculationSensitivityResponse,
+    CalculationSensitivitySelectedOutput,
+    CalculationSensitivityTwoWayCell,
+    CalculationSensitivityTwoWayResult,
+)
+
+
+_IMPACT_UNAVAILABLE_WARNING = (
+    "Impact is unavailable because one or both endpoint outputs are not "
+    "available numeric values."
+)
+
+
+def _target_id(target: CalculationOverrideTarget) -> str:
+    if target.kind == "parameter":
+        return target.parameter_id
+    return target.financial_series_value_id
+
+
+def _deduplicate_warnings(warnings: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(warnings))
+
+
+def _decimal_string(value: Decimal) -> str:
+    if value == 0:
+        return "0"
+    return format(value.normalize(), "f")
+
+
+def _replace_numeric_override(
+    current: Sequence[CalculationSensitivityOverrideRequest],
+    target: CalculationOverrideTarget,
+    value: CalculationNumberValue,
+) -> list[CalculationOverrideRequest]:
+    merged = {
+        override.target.identity: CalculationOverrideRequest(
+            target=override.target,
+            value=override.value,
+        )
+        for override in current
+    }
+    merged[target.identity] = CalculationOverrideRequest(
+        target=target,
+        value=value,
+    )
+    return [
+        merged[identity]
+        for identity in sorted(merged, key=lambda item: (item[0], item[1]))
+    ]
+
+
+def _selected_scalar(
+    projection: CalculationRunOutputsResponse,
+    output_id: str,
+) -> CalculationRunScalarOutputItem:
+    selected = next(
+        (
+            output
+            for output in projection.outputs
+            if output.output_id == output_id
+        ),
+        None,
+    )
+    if selected is None or selected.entity_kind != "scalar":
+        raise CalculationIntegrationError(
+            "INVALID_SENSITIVITY_OUTPUT",
+            "Sensitivity output must be a scalar output in the model.",
+            status_code=422,
+            resource_id=output_id,
+        )
+    return selected
+
+
+class CalculationSensitivityService:
+    def __init__(
+        self,
+        session: Session,
+        calculation_service: CalculationIntegrationService,
+    ) -> None:
+        self._repository = Phase2CalculationRepository(session)
+        self._calculation_service = calculation_service
+        self._configuration = Phase2CalculationConfiguration()
+        self._policy = CalculationRunPolicy()
+
+    def analyze(
+        self,
+        model_version_id: str,
+        request: CalculationSensitivityRequest,
+    ) -> CalculationSensitivityResponse:
+        baseline_run_id = self._preflight(model_version_id, request)
+        current_run = self._calculate(
+            model_version_id,
+            request.graph_version_id,
+            self._sorted_current_overrides(request.current_overrides),
+        )
+        current_projection = self._calculation_service.get_run_outputs(
+            current_run.calculation_run_id
+        )
+        current_output = _selected_scalar(
+            current_projection,
+            request.output_id,
+        )
+        self._require_baseline(
+            current_projection,
+            baseline_run_id,
+            model_version_id,
+        )
+
+        driver_results = []
+        response_warnings = self._output_warnings(current_output.current)
+        for driver in request.drivers:
+            low_case = self._run_case(
+                model_version_id,
+                request,
+                baseline_run_id,
+                driver.target,
+                driver.low,
+            )
+            high_case = self._run_case(
+                model_version_id,
+                request,
+                baseline_run_id,
+                driver.target,
+                driver.high,
+            )
+            impact, warnings = self._impact(
+                low_case.output,
+                high_case.output,
+            )
+            driver_results.append(
+                CalculationSensitivityDriverResult(
+                    target=driver.target,
+                    low_case=low_case,
+                    high_case=high_case,
+                    impact=impact,
+                    warnings=warnings,
+                )
+            )
+            response_warnings.extend(warnings)
+
+        two_way_result = None
+        if request.two_way is not None:
+            cells = []
+            for row_value in request.two_way.row.values:
+                for column_value in request.two_way.column.values:
+                    cell = self._run_two_way_cell(
+                        model_version_id,
+                        request,
+                        baseline_run_id,
+                        row_value,
+                        column_value,
+                    )
+                    cells.append(cell)
+                    response_warnings.extend(cell.warnings)
+            two_way_result = CalculationSensitivityTwoWayResult(
+                row_target=request.two_way.row.target,
+                column_target=request.two_way.column.target,
+                cells=cells,
+            )
+
+        return CalculationSensitivityResponse(
+            model_version_id=model_version_id,
+            graph_version_id=request.graph_version_id,
+            comparison_baseline_run_id=baseline_run_id,
+            current_run_id=current_run.calculation_run_id,
+            selected_output=CalculationSensitivitySelectedOutput(
+                output_id=current_output.output_id,
+                business_role=current_output.business_role,
+                label=current_output.label,
+                unit=current_output.unit,
+                scenario=current_output.scenario,
+                number_format=current_output.number_format,
+                mapping_status=current_output.mapping_status,
+                support_status=current_output.support_status,
+                availability_status=current_output.availability_status,
+                baseline=current_output.baseline,
+                current=current_output.current,
+            ),
+            drivers=driver_results,
+            two_way=two_way_result,
+            warnings=_deduplicate_warnings(response_warnings),
+        )
+
+    def _preflight(
+        self,
+        model_version_id: str,
+        request: CalculationSensitivityRequest,
+    ) -> str:
+        baseline = self._repository.find_completed_zero_override_run(
+            model_version_id,
+            request.graph_version_id,
+            engine_version=self._configuration.engine_version,
+            function_registry_version=(
+                self._configuration.function_registry_version
+            ),
+            semantics_profile=self._configuration.semantics_profile,
+            run_policy_hash=canonical_hash(self._policy.to_payload()),
+        )
+        if baseline is None:
+            raise CalculationIntegrationError(
+                "CALCULATION_BASELINE_NOT_FOUND",
+                "A completed zero-override calculation with matching "
+                "versions is required.",
+                status_code=409,
+                resource_id=model_version_id,
+            )
+
+        outputs = self._calculation_service.list_outputs(model_version_id)
+        output = next(
+            (
+                item
+                for item in outputs.outputs
+                if item.output_id == request.output_id
+            ),
+            None,
+        )
+        if output is None or output.entity_kind != "scalar":
+            raise CalculationIntegrationError(
+                "INVALID_SENSITIVITY_OUTPUT",
+                "Sensitivity output must be a scalar output in the model.",
+                status_code=422,
+                resource_id=request.output_id,
+            )
+
+        inputs = self._all_inputs(model_version_id)
+        by_identity = {
+            (item.target_kind, item.target_id): item for item in inputs
+        }
+        targets = [
+            override.target for override in request.current_overrides
+        ] + [driver.target for driver in request.drivers]
+        if request.two_way is not None:
+            targets.extend(
+                [request.two_way.row.target, request.two_way.column.target]
+            )
+        for target in targets:
+            candidate = by_identity.get(target.identity)
+            if (
+                candidate is None
+                or not candidate.editable
+                or candidate.current_value.value_type != "number"
+            ):
+                raise CalculationIntegrationError(
+                    "INVALID_SENSITIVITY_TARGET",
+                    "Sensitivity target must be an editable numeric canonical "
+                    "input in the model.",
+                    status_code=422,
+                    resource_id=_target_id(target),
+                )
+        return baseline.calculation_run_id
+
+    def _all_inputs(self, model_version_id: str) -> list:
+        inputs = []
+        for target_kind in ("parameter", "financial_series_value"):
+            cursor = None
+            while True:
+                page: CalculationInputsResponse = (
+                    self._calculation_service.list_inputs(
+                        model_version_id,
+                        target_kind=target_kind,
+                        editable_only=False,
+                        limit=500,
+                        cursor=cursor,
+                    )
+                )
+                inputs.extend(page.inputs)
+                if page.next_cursor is None:
+                    break
+                cursor = page.next_cursor
+        return inputs
+
+    @staticmethod
+    def _sorted_current_overrides(
+        current: Sequence[CalculationSensitivityOverrideRequest],
+    ) -> list[CalculationOverrideRequest]:
+        return [
+            CalculationOverrideRequest(
+                target=override.target,
+                value=override.value,
+            )
+            for override in sorted(
+                current,
+                key=lambda item: item.target.identity,
+            )
+        ]
+
+    def _calculate(
+        self,
+        model_version_id: str,
+        graph_version_id: str,
+        overrides: list[CalculationOverrideRequest],
+    ):
+        return self._calculation_service.calculate(
+            model_version_id,
+            CalculationRequest(
+                graph_version_id=graph_version_id,
+                overrides=overrides,
+                idempotency_key=None,
+            ),
+        )
+
+    def _run_case(
+        self,
+        model_version_id: str,
+        request: CalculationSensitivityRequest,
+        baseline_run_id: str,
+        target: CalculationOverrideTarget,
+        input_value: CalculationNumberValue,
+    ) -> CalculationSensitivityCase:
+        run = self._calculate(
+            model_version_id,
+            request.graph_version_id,
+            _replace_numeric_override(
+                request.current_overrides,
+                target,
+                input_value,
+            ),
+        )
+        projection = self._calculation_service.get_run_outputs(
+            run.calculation_run_id
+        )
+        self._require_baseline(
+            projection,
+            baseline_run_id,
+            model_version_id,
+        )
+        output = _selected_scalar(projection, request.output_id).current
+        return CalculationSensitivityCase(
+            input_value=input_value,
+            calculation_run_id=run.calculation_run_id,
+            output=output,
+            warnings=self._output_warnings(output),
+        )
+
+    def _run_two_way_cell(
+        self,
+        model_version_id: str,
+        request: CalculationSensitivityRequest,
+        baseline_run_id: str,
+        row_value: CalculationNumberValue,
+        column_value: CalculationNumberValue,
+    ) -> CalculationSensitivityTwoWayCell:
+        assert request.two_way is not None
+        row_overrides = _replace_numeric_override(
+            request.current_overrides,
+            request.two_way.row.target,
+            row_value,
+        )
+        merged_overrides = _replace_numeric_override(
+            row_overrides,
+            request.two_way.column.target,
+            column_value,
+        )
+        run = self._calculate(
+            model_version_id,
+            request.graph_version_id,
+            merged_overrides,
+        )
+        projection = self._calculation_service.get_run_outputs(
+            run.calculation_run_id
+        )
+        self._require_baseline(
+            projection,
+            baseline_run_id,
+            model_version_id,
+        )
+        output = _selected_scalar(projection, request.output_id).current
+        return CalculationSensitivityTwoWayCell(
+            row_value=row_value,
+            column_value=column_value,
+            calculation_run_id=run.calculation_run_id,
+            output=output,
+            warnings=self._output_warnings(output),
+        )
+
+    @staticmethod
+    def _output_warnings(output: CalculationProjectedValueItem) -> list[str]:
+        warnings = list(output.warnings)
+        if output.availability_status != "available":
+            reason = output.unavailable_reason or "unknown"
+            warnings.append(f"Selected output is unavailable: {reason}.")
+        return _deduplicate_warnings(warnings)
+
+    @staticmethod
+    def _require_baseline(
+        projection: CalculationRunOutputsResponse,
+        expected_run_id: str,
+        model_version_id: str,
+    ) -> None:
+        if projection.comparison_baseline_run_id != expected_run_id:
+            raise CalculationIntegrationError(
+                "CALCULATION_BASELINE_NOT_FOUND",
+                "A completed zero-override calculation with matching "
+                "versions is required.",
+                status_code=409,
+                resource_id=model_version_id,
+            )
+
+    @staticmethod
+    def _impact(
+        low: CalculationProjectedValueItem,
+        high: CalculationProjectedValueItem,
+    ) -> tuple[str | None, list[str]]:
+        low_value = low.value
+        high_value = high.value
+        if (
+            low.availability_status != "available"
+            or high.availability_status != "available"
+            or not isinstance(low_value, CalculationNumberValue)
+            or not isinstance(high_value, CalculationNumberValue)
+        ):
+            return None, [_IMPACT_UNAVAILABLE_WARNING]
+        impact = abs(Decimal(high_value.value) - Decimal(low_value.value))
+        return _decimal_string(impact), []

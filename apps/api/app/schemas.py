@@ -335,6 +335,134 @@ class CalculationRunOutputsResponse(_CalculationDTO):
     outputs: list[CalculationRunOutputItem] = Field(default_factory=list)
 
 
+class CalculationSensitivityOverrideRequest(_CalculationDTO):
+    target: CalculationOverrideTarget
+    value: CalculationNumberValue
+
+
+class CalculationSensitivityDriverRequest(_CalculationDTO):
+    target: CalculationOverrideTarget
+    low: CalculationNumberValue
+    high: CalculationNumberValue
+
+    @model_validator(mode="after")
+    def reject_equal_endpoints(self) -> "CalculationSensitivityDriverRequest":
+        if Decimal(self.low.value) == Decimal(self.high.value):
+            raise ValueError("Driver low and high values must differ")
+        return self
+
+
+class CalculationSensitivityAxisRequest(_CalculationDTO):
+    target: CalculationOverrideTarget
+    values: list[CalculationNumberValue] = Field(min_length=1, max_length=5)
+
+    @model_validator(mode="after")
+    def reject_duplicate_values(self) -> "CalculationSensitivityAxisRequest":
+        values = [Decimal(value.value) for value in self.values]
+        if len(values) != len(set(values)):
+            raise ValueError("Duplicate two-way axis value")
+        return self
+
+
+class CalculationSensitivityTwoWayRequest(_CalculationDTO):
+    row: CalculationSensitivityAxisRequest
+    column: CalculationSensitivityAxisRequest
+
+    @model_validator(mode="after")
+    def reject_same_axis_target(self) -> "CalculationSensitivityTwoWayRequest":
+        if self.row.target.identity == self.column.target.identity:
+            raise ValueError("Two-way axis targets must differ")
+        return self
+
+
+class CalculationSensitivityRequest(_CalculationDTO):
+    graph_version_id: UUIDString
+    output_id: UUIDString
+    current_overrides: list[CalculationSensitivityOverrideRequest] = Field(
+        default_factory=list,
+        max_length=500,
+    )
+    drivers: list[CalculationSensitivityDriverRequest] = Field(
+        min_length=1,
+        max_length=12,
+    )
+    two_way: CalculationSensitivityTwoWayRequest | None = None
+
+    @model_validator(mode="after")
+    def validate_sensitivity_shape(self) -> "CalculationSensitivityRequest":
+        override_targets = [
+            override.target.identity for override in self.current_overrides
+        ]
+        if len(override_targets) != len(set(override_targets)):
+            raise ValueError("Duplicate current override target")
+        driver_targets = [driver.target.identity for driver in self.drivers]
+        if len(driver_targets) != len(set(driver_targets)):
+            raise ValueError("Duplicate one-way driver target")
+        two_way_cases = (
+            len(self.two_way.row.values) * len(self.two_way.column.values)
+            if self.two_way is not None
+            else 0
+        )
+        case_count = 1 + 2 * len(self.drivers) + two_way_cases
+        if case_count > 50:
+            raise ValueError("Sensitivity requests support at most 50 cases")
+        return self
+
+
+class CalculationSensitivitySelectedOutput(_CalculationDTO):
+    output_id: UUIDString
+    business_role: str
+    label: str
+    unit: str | None = None
+    scenario: str | None = None
+    number_format: str | None = None
+    mapping_status: Literal["mapped", "partial", "missing", "static"]
+    support_status: str
+    availability_status: Literal["available", "partial", "unavailable"]
+    baseline: CalculationProjectedValueItem
+    current: CalculationProjectedValueItem
+
+
+class CalculationSensitivityCase(_CalculationDTO):
+    input_value: CalculationNumberValue
+    calculation_run_id: UUIDString
+    output: CalculationProjectedValueItem
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalculationSensitivityDriverResult(_CalculationDTO):
+    target: CalculationOverrideTarget
+    low_case: CalculationSensitivityCase
+    high_case: CalculationSensitivityCase
+    impact: StrictStr | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalculationSensitivityTwoWayCell(_CalculationDTO):
+    row_value: CalculationNumberValue
+    column_value: CalculationNumberValue
+    calculation_run_id: UUIDString
+    output: CalculationProjectedValueItem
+    warnings: list[str] = Field(default_factory=list)
+
+
+class CalculationSensitivityTwoWayResult(_CalculationDTO):
+    row_target: CalculationOverrideTarget
+    column_target: CalculationOverrideTarget
+    cells: list[CalculationSensitivityTwoWayCell]
+
+
+class CalculationSensitivityResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    comparison_baseline_run_id: UUIDString
+    current_run_id: UUIDString
+    selected_output: CalculationSensitivitySelectedOutput
+    drivers: list[CalculationSensitivityDriverResult]
+    two_way: CalculationSensitivityTwoWayResult | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class CalculationRunSummary(_CalculationDTO):
     formula_cells_total: int = 0
     formula_cells_supported: int = 0

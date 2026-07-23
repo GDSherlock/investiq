@@ -113,6 +113,8 @@ export function SensitivityAssumptionPanel({
                 const rangeCapable = sliderSpec.kind === 'range';
                 const onlySelectedDriver =
                   selected && selectedDrivers.size === 1;
+                const driverLimitBlocksSelection =
+                  !selected && driverLimitReached;
                 const inputId = `assumption-${assumption.targetKey}`;
                 const driverId = `driver-${assumption.targetKey}`;
                 const changed =
@@ -200,11 +202,13 @@ export function SensitivityAssumptionPanel({
                         disabled={
                           !rangeCapable ||
                           onlySelectedDriver ||
-                          (!selected && driverLimitReached)
+                          driverLimitBlocksSelection
                         }
                         aria-label={`Include ${assumption.label} as tornado driver`}
                         aria-describedby={
-                          !rangeCapable || onlySelectedDriver
+                          !rangeCapable ||
+                          onlySelectedDriver ||
+                          driverLimitBlocksSelection
                             ? `${driverId}-help`
                             : undefined
                         }
@@ -222,19 +226,23 @@ export function SensitivityAssumptionPanel({
                           ? ' — requires a non-zero value'
                           : onlySelectedDriver
                             ? ' — at least one non-zero driver required'
-                            : !selected && driverLimitReached
+                            : driverLimitBlocksSelection
                               ? ` — ${maxDrivers}-driver limit reached`
                               : ''}
                       </span>
                     </label>
-                    {!rangeCapable || onlySelectedDriver ? (
+                    {!rangeCapable ||
+                    onlySelectedDriver ||
+                    driverLimitBlocksSelection ? (
                       <p
                         id={`${driverId}-help`}
                         className="mt-1 pl-6 text-[11px] text-amber-200"
                       >
                         {!rangeCapable
                           ? 'Enter a non-zero value before selecting this driver.'
-                          : 'At least one non-zero driver required; select another eligible driver before removing this one.'}
+                          : onlySelectedDriver
+                            ? 'At least one non-zero driver required; select another eligible driver before removing this one.'
+                            : `The ${maxDrivers}-driver limit is reached; remove another driver before selecting this one.`}
                       </p>
                     ) : null}
                   </div>

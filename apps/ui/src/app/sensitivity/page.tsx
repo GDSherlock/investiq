@@ -51,6 +51,7 @@ import {
   canRetainSensitivityIdentity,
   deriveSliderSpec,
   formatSensitivityDelta,
+  isSensitivityCatalogIdentityError,
   loadAllEditableNumericParameters,
   retainEligibleSensitivityDrivers,
   resolveSensitivitySelections,
@@ -641,6 +642,9 @@ export default function SensitivityPage() {
     } catch (caught) {
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
         return;
+      }
+      if (isSensitivityCatalogIdentityError(caught)) {
+        activeIdentityRef.current = null;
       }
       setError(
         caught instanceof Error

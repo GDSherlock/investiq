@@ -59,11 +59,13 @@ import {
   canRetainSensitivityIdentity,
   deriveSliderSpec,
   formatSensitivityDelta,
+  isSensitivityCatalogIdentityError,
   loadAllEditableNumericParameters,
   retainEligibleSensitivityDrivers,
   resolveSensitivitySelections,
   restoreSensitivityOutputProjection,
   selectDefaultSensitivityOutput,
+  SensitivityCatalogIdentityError,
   type SensitivityAssumption,
 } from './sensitivity-analysis';
 
@@ -1149,7 +1151,10 @@ test('canonical input pagination rejects stale model or graph pages', async () =
         async () => ({ ...page, model_version_id: 'other-model' }),
         'graph-version',
       ),
-    /requested model/,
+    (caught) =>
+      caught instanceof SensitivityCatalogIdentityError &&
+      caught.identityKind === 'model' &&
+      isSensitivityCatalogIdentityError(caught),
   );
   await assert.rejects(
     () =>
@@ -1158,8 +1163,51 @@ test('canonical input pagination rejects stale model or graph pages', async () =
         async () => ({ ...page, graph_version_id: 'other-graph' }),
         'graph-version',
       ),
-    /requested graph/,
+    (caught) =>
+      caught instanceof SensitivityCatalogIdentityError &&
+      caught.identityKind === 'graph' &&
+      isSensitivityCatalogIdentityError(caught),
   );
+});
+
+test('catalog identity mismatch is distinct from transport and cursor failures', async () => {
+  const networkError = new Error('network unavailable');
+  await assert.rejects(
+    () =>
+      loadAllEditableNumericParameters(
+        'model-version',
+        async () => {
+          throw networkError;
+        },
+        'graph-version',
+      ),
+    (caught) =>
+      caught === networkError &&
+      !isSensitivityCatalogIdentityError(caught),
+  );
+
+  let calls = 0;
+  await assert.rejects(
+    () =>
+      loadAllEditableNumericParameters(
+        'model-version',
+        async () => {
+          calls += 1;
+          return {
+            model_version_id: 'model-version',
+            graph_version_id: 'graph-version',
+            inputs: [],
+            next_cursor: 'repeated-cursor',
+          };
+        },
+        'graph-version',
+      ),
+    (caught) =>
+      caught instanceof Error &&
+      /repeated cursor/.test(caught.message) &&
+      !isSensitivityCatalogIdentityError(caught),
+  );
+  assert.equal(calls, 2);
 });
 
 test('slider ranges use absolute twenty-percent bounds and one-hundred steps', () => {
@@ -2130,6 +2178,10 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   );
   assert.match(
     bootstrapSource,
+    /isSensitivityCatalogIdentityError\(caught\)[\s\S]*activeIdentityRef\.current = null/,
+  );
+  assert.match(
+    bootstrapSource,
     /loadAllEditableNumericParameters\([\s\S]*identity\.graphVersionId/,
   );
   assert.doesNotMatch(bootstrapSource, /runCalculationSensitivity/);
@@ -2209,6 +2261,10 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
   );
   assert.match(panelSource, /non-zero value/i);
   assert.match(panelSource, /at least one non-zero driver required/i);
+  assert.match(
+    panelSource,
+    /aria-describedby=\{[\s\S]*driverLimitBlocksSelection[\s\S]*\$\{driverId\}-help/,
+  );
   assert.match(
     panelSource,
     /const baseSpec = deriveSliderSpec\(assumption\.currentValue\)/,

@@ -108,6 +108,24 @@ export interface SensitivitySelectionInput {
   maxDrivers: number;
 }
 
+export class SensitivityCatalogIdentityError extends Error {
+  readonly identityKind: 'model' | 'graph';
+
+  constructor(identityKind: 'model' | 'graph') {
+    super(
+      `Calculation input page does not match the requested ${identityKind}.`,
+    );
+    this.name = 'SensitivityCatalogIdentityError';
+    this.identityKind = identityKind;
+  }
+}
+
+export function isSensitivityCatalogIdentityError(
+  error: unknown,
+): error is SensitivityCatalogIdentityError {
+  return error instanceof SensitivityCatalogIdentityError;
+}
+
 function parseDecimal(value: string): ParsedDecimal | null {
   const normalized = value.trim();
   if (!Number.isFinite(Number(normalized))) {
@@ -300,17 +318,13 @@ export async function loadAllEditableNumericParameters(
       ...(cursor === undefined ? {} : { cursor }),
     });
     if (page.model_version_id !== modelVersionId) {
-      throw new Error(
-        'Calculation input page does not match the requested model.',
-      );
+      throw new SensitivityCatalogIdentityError('model');
     }
     if (
       expectedGraphVersionId !== undefined &&
       page.graph_version_id !== expectedGraphVersionId
     ) {
-      throw new Error(
-        'Calculation input page does not match the requested graph.',
-      );
+      throw new SensitivityCatalogIdentityError('graph');
     }
     for (const input of page.inputs) {
       if (

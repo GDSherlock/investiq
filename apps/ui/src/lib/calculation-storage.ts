@@ -246,6 +246,24 @@ function clearCalculationArtifactsUnlocked(storage: StorageLike): void {
   clearSensitivityWorkbenchDocuments(storage);
 }
 
+function matchesExpectedCalculationState(
+  storage: StorageLike,
+  expected: PersistedCalculationState,
+): boolean {
+  return (
+    storage.getItem(CALCULATION_STORAGE_KEYS.workbookVersionId) ===
+      expected.workbookVersionId &&
+    storage.getItem(CALCULATION_STORAGE_KEYS.modelVersionId) ===
+      expected.modelVersionId &&
+    storage.getItem(CALCULATION_STORAGE_KEYS.graphVersionId) ===
+      expected.graphVersionId &&
+    storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId) ===
+      expected.baselineRunId &&
+    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId) ===
+      expected.overrideRunId
+  );
+}
+
 export async function clearCalculationArtifacts(
   storage: StorageLike,
   lockManager?: SensitivityWorkbenchLockManager | null,
@@ -294,10 +312,14 @@ export async function persistUploadIdentity(
 export async function persistGraphVersionId(
   storage: StorageLike,
   graphVersionId: string,
+  expectedIdentity: PersistedCalculationState,
   lockManager?: SensitivityWorkbenchLockManager | null,
-): Promise<void> {
-  await withCalculationStorageLock(
+): Promise<boolean> {
+  return withCalculationStorageLock(
     () => {
+      if (!matchesExpectedCalculationState(storage, expectedIdentity)) {
+        return false;
+      }
       const previousGraphVersionId = storage.getItem(
         CALCULATION_STORAGE_KEYS.graphVersionId,
       );
@@ -320,6 +342,7 @@ export async function persistGraphVersionId(
         CALCULATION_STORAGE_KEYS.graphVersionId,
         graphVersionId,
       );
+      return true;
     },
     lockManager,
   );
@@ -329,10 +352,14 @@ export async function persistCalculationRunId(
   storage: StorageLike,
   kind: 'baseline' | 'override',
   runId: string,
+  expectedIdentity: PersistedCalculationState,
   lockManager?: SensitivityWorkbenchLockManager | null,
-): Promise<void> {
-  await withCalculationStorageLock(
+): Promise<boolean> {
+  return withCalculationStorageLock(
     () => {
+      if (!matchesExpectedCalculationState(storage, expectedIdentity)) {
+        return false;
+      }
       const key =
         kind === 'baseline'
           ? CALCULATION_STORAGE_KEYS.baselineRunId
@@ -353,6 +380,7 @@ export async function persistCalculationRunId(
         );
       }
       setStorageItem(storage, key, runId);
+      return true;
     },
     lockManager,
   );
@@ -361,10 +389,14 @@ export async function persistCalculationRunId(
 export async function removePersistedCalculationRunId(
   storage: StorageLike,
   kind: 'baseline' | 'override',
+  expectedIdentity: PersistedCalculationState,
   lockManager?: SensitivityWorkbenchLockManager | null,
-): Promise<void> {
-  await withCalculationStorageLock(
+): Promise<boolean> {
+  return withCalculationStorageLock(
     () => {
+      if (!matchesExpectedCalculationState(storage, expectedIdentity)) {
+        return false;
+      }
       removeStorageItem(
         storage,
         kind === 'baseline'
@@ -378,6 +410,7 @@ export async function removePersistedCalculationRunId(
         );
       }
       clearSensitivityWorkbenchDocuments(storage);
+      return true;
     },
     lockManager,
   );
@@ -891,22 +924,55 @@ export async function reconcileStoredRun(
   run: CalculationRunResponse,
   modelVersionId: string,
   graphVersionId: string,
+  expectedIdentity: PersistedCalculationState,
   lockManager?: SensitivityWorkbenchLockManager | null,
-): Promise<{ isCurrent: boolean; notice: string | null }> {
+): Promise<{
+  isCurrent: boolean;
+  disposition: 'current' | 'removed' | 'conflict';
+  notice: string | null;
+}> {
+  if (!matchesExpectedCalculationState(storage, expectedIdentity)) {
+    return {
+      isCurrent: false,
+      disposition: 'conflict',
+      notice:
+        'Stored calculation identity changed while the run was loading; no persisted state was modified.',
+    };
+  }
+  const expectedRunId =
+    kind === 'baseline'
+      ? expectedIdentity.baselineRunId
+      : expectedIdentity.overrideRunId;
+  if (expectedRunId !== run.calculation_run_id) {
+    return {
+      isCurrent: false,
+      disposition: 'conflict',
+      notice:
+        'The loaded run is no longer the selected persisted run; no persisted state was modified.',
+    };
+  }
   const isCurrent =
     run.model_version_id === modelVersionId &&
     run.graph_version_id === graphVersionId;
   if (isCurrent) {
-    return { isCurrent: true, notice: null };
+    return {
+      isCurrent: true,
+      disposition: 'current',
+      notice: null,
+    };
   }
 
-  await removePersistedCalculationRunId(
+  const removed = await removePersistedCalculationRunId(
     storage,
     kind,
+    expectedIdentity,
     lockManager,
   );
   return {
     isCurrent: false,
-    notice: `Stored ${kind} run belongs to a different model or graph and was cleared.`,
+    disposition: removed ? 'removed' : 'conflict',
+    notice: removed
+      ? `Stored ${kind} run belongs to a different model or graph and was cleared.`
+      : `Stored calculation identity changed while the ${kind} run was loading; no persisted state was modified.`,
   };
 }

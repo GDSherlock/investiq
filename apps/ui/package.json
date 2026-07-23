@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "test_dir=$(mktemp -d /tmp/investiq-ui-calculation-tests.XXXXXX) && trap 'case \"$test_dir\" in /tmp/investiq-ui-calculation-tests.*) rm -r -- \"$test_dir\";; esac' EXIT && tsc -p tsconfig.test.json --outDir \"$test_dir\" && NODE_PATH=./node_modules node --test \"$test_dir/src/lib/calculation-logic.test.js\" \"$test_dir/src/lib/calculation-storage-transaction.test.js\""
+    "test": "test_dir=$(mktemp -d /tmp/investiq-ui-calculation-tests.XXXXXX) && trap 'test_status=$?; case \"$test_dir\" in /tmp/investiq-ui-calculation-tests.*) rm -r -- \"$test_dir\";; esac; exit \"$test_status\"' EXIT && tsc -p tsconfig.test.json --outDir \"$test_dir\" && NODE_PATH=./node_modules node --test \"$test_dir/src/lib/calculation-logic.test.js\" \"$test_dir/src/lib/calculation-storage-transaction.test.js\""
   },
   "dependencies": {
     "next": "^14.2.0",

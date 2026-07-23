@@ -456,19 +456,45 @@ test('persisted run reload suppresses automatic recalculation', () => {
 test('stale run IDs are cleared without mixing model or graph values', async () => {
   const storage = new MemoryStorage();
   storage.setItem(CALCULATION_STORAGE_KEYS.baselineRunId, 'stale-run');
+  const expectedIdentity = readPersistedCalculationState(storage);
 
   const result = await reconcileStoredRun(
     storage,
     'baseline',
-    runResponse({ model_version_id: 'different-model' }),
+    runResponse({
+      calculation_run_id: 'stale-run',
+      model_version_id: 'different-model',
+    }),
     'model-version',
     'graph-version',
+    expectedIdentity,
     immediateLockManager,
   );
 
   assert.equal(result.isCurrent, false);
   assert.equal(result.notice?.includes('different model or graph'), true);
   assert.equal(storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId), null);
+});
+
+test('parallel reload cannot apply a run removed by earlier cleanup', async () => {
+  const storage = new MemoryStorage();
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-version');
+  storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'graph-version');
+  const expectedIdentity = readPersistedCalculationState(storage);
+
+  const result = await reconcileStoredRun(
+    storage,
+    'override',
+    runResponse({ calculation_run_id: 'removed-override-run' }),
+    'model-version',
+    'graph-version',
+    expectedIdentity,
+    immediateLockManager,
+  );
+
+  assert.equal(result.isCurrent, false);
+  assert.equal(result.disposition, 'conflict');
+  assert.match(result.notice ?? '', /no longer the selected persisted run/);
 });
 
 test('calculation API methods use the versioned proxy contract', async () => {
@@ -757,6 +783,42 @@ test('existing run reload uses GET without recalculating', async () => {
   assert.match(
     panelSource,
     /restoreFromStorage[\s\S]*No calculation was submitted/,
+  );
+});
+
+test('calculation panel rejects stale async storage writers before mutation', () => {
+  const panelSource = readFileSync(
+    'src/components/calculation/CalculationPreparationPanel.tsx',
+    'utf8',
+  );
+  const identityGuardIndex = panelSource.indexOf(
+    'if (!identityMatches)',
+  );
+  const graphPersistenceIndex = panelSource.indexOf(
+    'const graphPersisted = await persistGraphVersionId',
+  );
+
+  assert.ok(identityGuardIndex >= 0);
+  assert.ok(graphPersistenceIndex > identityGuardIndex);
+  assert.match(
+    panelSource,
+    /const expectedIdentity = readPersistedCalculationState\([\s\S]*await getCalculationReadiness\(modelVersionId\)[\s\S]*activateReadyCalculation\(\s*response,\s*requestRevision,\s*expectedIdentity,/,
+  );
+  assert.match(
+    panelSource,
+    /const expectedIdentity = readPersistedCalculationState\([\s\S]*await prepareCalculation\(modelVersionId\)[\s\S]*activateReadyCalculation\(\s*response,\s*requestRevision,\s*expectedIdentity,/,
+  );
+  assert.match(
+    panelSource,
+    /persistGraphVersionId\(\s*window\.localStorage,\s*targetGraphVersionId,\s*expectedIdentity,/,
+  );
+  assert.match(
+    panelSource,
+    /expectedIdentity\.baselineRunId !== null \|\|[\s\S]*expectedIdentity\.overrideRunId !== null/,
+  );
+  assert.match(
+    panelSource,
+    /reconciled\.disposition === 'conflict'[\s\S]*setStateNotice\(reconciled\.notice\);[\s\S]*return;/,
   );
 });
 
@@ -1937,6 +1999,7 @@ test('corrupt workbench state is ignored while mutation failures remain observab
       persistGraphVersionId(
         throwingStorage,
         'graph-version',
+        readPersistedCalculationState(throwingStorage),
         immediateLockManager,
       ),
     /blocked/,
@@ -1947,6 +2010,7 @@ test('corrupt workbench state is ignored while mutation failures remain observab
         throwingStorage,
         'baseline',
         'baseline-run',
+        readPersistedCalculationState(throwingStorage),
         immediateLockManager,
       ),
     /blocked/,
@@ -1973,6 +2037,7 @@ test('corrupt workbench state is ignored while mutation failures remain observab
         ignoredWrites,
         'baseline',
         'baseline-run',
+        readPersistedCalculationState(ignoredWrites),
         immediateLockManager,
       ),
     /did not persist/,
@@ -2072,9 +2137,11 @@ test('artifact clearing and graph changes remove the sensitivity workbench docum
 
   storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'old-graph');
   storeDocument();
+  const expectedGraphIdentity = readPersistedCalculationState(storage);
   await persistGraphVersionId(
     storage,
     'new-graph',
+    expectedGraphIdentity,
     immediateLockManager,
   );
   assert.equal(

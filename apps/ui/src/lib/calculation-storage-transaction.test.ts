@@ -6,9 +6,11 @@ import {
   CALCULATION_STORAGE_KEYS,
   SENSITIVITY_WORKBENCH_VERSION,
   persistCalculationRunId,
+  persistGraphVersionId,
   persistSensitivityWorkbenchState,
   readPersistedCalculationState,
   readSensitivityWorkbenchDocument,
+  removePersistedCalculationRunId,
   type SensitivityWorkbenchLockManager,
   type SensitivityWorkbenchDraft,
   type StorageLike,
@@ -255,7 +257,7 @@ test('simultaneous same-run writers serialize and one stale revision conflicts',
   );
 });
 
-test('calculation-page run writers share the workbench lock and invalidate stale sensitivity state', async () => {
+test('calculation-page run writers share the lock and the latest queued selection wins', async () => {
   const storage = new MemoryStorage();
   const locks = new SerialLockManager();
   seedCalculationIdentity(storage);
@@ -293,10 +295,11 @@ test('calculation-page run writers share the workbench lock and invalidate stale
     storage,
     'override',
     'calculation-page-run',
+    currentIdentity,
     locks,
   );
 
-  const [sensitivityResult] = await Promise.all([
+  const [sensitivityResult, calculationResult] = await Promise.all([
     sensitivityWriter,
     calculationPageWriter,
   ]);
@@ -304,6 +307,7 @@ test('calculation-page run writers share the workbench lock and invalidate stale
     status: 'persisted',
     revision: 'revision-2',
   });
+  assert.equal(calculationResult, true);
   assert.equal(locks.maxActive, 1);
   assert.equal(
     storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
@@ -336,10 +340,12 @@ test('reselecting the same baseline clears the override and its sensitivity docu
     'persisted',
   );
 
+  const expectedIdentity = readPersistedCalculationState(storage);
   await persistCalculationRunId(
     storage,
     'baseline',
     'baseline-run',
+    expectedIdentity,
     locks,
   );
 
@@ -354,6 +360,190 @@ test('reselecting the same baseline clears the override and its sensitivity docu
   assert.equal(
     storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
     null,
+  );
+});
+
+test('delayed graph and run writers reject a cross-tab model switch', async () => {
+  const storage = new MemoryStorage();
+  const locks = new SerialLockManager();
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'workbook-a',
+  );
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-a');
+  const delayedGraphIdentity = readPersistedCalculationState(storage);
+
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'workbook-b',
+  );
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-b');
+
+  assert.equal(
+    await persistGraphVersionId(
+      storage,
+      'graph-a',
+      delayedGraphIdentity,
+      locks,
+    ),
+    false,
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.modelVersionId),
+    'model-b',
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.graphVersionId),
+    null,
+  );
+
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'workbook-a',
+  );
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-a');
+  storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'graph-a');
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.baselineRunId,
+    'baseline-a',
+  );
+  const delayedRunIdentity = readPersistedCalculationState(storage);
+
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'workbook-b',
+  );
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-b');
+  storage.removeItem(CALCULATION_STORAGE_KEYS.graphVersionId);
+  storage.removeItem(CALCULATION_STORAGE_KEYS.baselineRunId);
+
+  assert.equal(
+    await persistCalculationRunId(
+      storage,
+      'override',
+      'run-a',
+      delayedRunIdentity,
+      locks,
+    ),
+    false,
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
+    null,
+  );
+});
+
+test('late baseline cannot erase a newer run selection for the same model and graph', async () => {
+  const storage = new MemoryStorage();
+  const locks = new SerialLockManager();
+  seedCalculationIdentity(storage);
+  const sharedExpectedIdentity =
+    readPersistedCalculationState(storage);
+
+  assert.equal(
+    await persistCalculationRunId(
+      storage,
+      'override',
+      'newer-override',
+      sharedExpectedIdentity,
+      locks,
+    ),
+    true,
+  );
+  assert.equal(
+    await persistCalculationRunId(
+      storage,
+      'baseline',
+      'late-baseline',
+      sharedExpectedIdentity,
+      locks,
+    ),
+    false,
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId),
+    'baseline-run',
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
+    'newer-override',
+  );
+});
+
+test('late readiness cannot replace a newer graph for the same model', async () => {
+  const storage = new MemoryStorage();
+  const locks = new SerialLockManager();
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'workbook-a',
+  );
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-a');
+  storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'graph-0');
+  const sharedExpectedIdentity =
+    readPersistedCalculationState(storage);
+
+  assert.equal(
+    await persistGraphVersionId(
+      storage,
+      'graph-new',
+      sharedExpectedIdentity,
+      locks,
+    ),
+    true,
+  );
+  assert.equal(
+    await persistGraphVersionId(
+      storage,
+      'graph-late',
+      sharedExpectedIdentity,
+      locks,
+    ),
+    false,
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.graphVersionId),
+    'graph-new',
+  );
+});
+
+test('late missing-run cleanup cannot erase a newer model selection', async () => {
+  const storage = new MemoryStorage();
+  const locks = new SerialLockManager();
+  seedCalculationIdentity(storage);
+  const delayedCleanupIdentity =
+    readPersistedCalculationState(storage);
+
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'workbook-b',
+  );
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-b');
+  storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'graph-b');
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.baselineRunId,
+    'baseline-b',
+  );
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.overrideRunId,
+    'override-b',
+  );
+
+  assert.equal(
+    await removePersistedCalculationRunId(
+      storage,
+      'baseline',
+      delayedCleanupIdentity,
+      locks,
+    ),
+    false,
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId),
+    'baseline-b',
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
+    'override-b',
   );
 });
 

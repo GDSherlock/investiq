@@ -898,6 +898,7 @@ export async function restoreSensitivityOutputProjection(
       await removePersistedCalculationRunId(
         storage,
         'override',
+        state,
         lockManager,
       );
     }

@@ -22,7 +22,6 @@ import {
   isCalculationReady,
 } from '@/lib/calculation-flow';
 import {
-  clearCalculationArtifacts,
   persistCalculationRunId,
   persistGraphVersionId,
   readPersistedCalculationState,
@@ -217,6 +216,20 @@ export function CalculationPreparationPanel({
       setPhase('running_baseline');
       setError(null);
       try {
+        const expectedIdentity = readPersistedCalculationState(
+          window.localStorage,
+        );
+        if (
+          expectedIdentity.workbookVersionId !== workbookVersionId ||
+          expectedIdentity.modelVersionId !== modelVersionId ||
+          expectedIdentity.graphVersionId !== targetGraphVersionId ||
+          expectedIdentity.baselineRunId !== null ||
+          expectedIdentity.overrideRunId !== null
+        ) {
+          throw new Error(
+            'Stored calculation identity changed before the baseline request.',
+          );
+        }
         const run = await runCalculation(
           modelVersionId,
           buildBaselineRequest(targetGraphVersionId),
@@ -232,11 +245,17 @@ export function CalculationPreparationPanel({
             'Baseline response belongs to a different model or graph.',
           );
         }
-        await persistCalculationRunId(
+        const persisted = await persistCalculationRunId(
           window.localStorage,
           'baseline',
           run.calculation_run_id,
+          expectedIdentity,
         );
+        if (!persisted) {
+          throw new Error(
+            'Stored calculation identity changed while the baseline was running.',
+          );
+        }
         setBaselineRun(run);
         setPhase('ready_for_override');
       } catch (caught) {
@@ -252,16 +271,17 @@ export function CalculationPreparationPanel({
         baselineInFlightRef.current = false;
       }
     },
-    [modelVersionId],
+    [modelVersionId, workbookVersionId],
   );
 
   const restorePersistedRuns = useCallback(
     async (
       targetGraphVersionId: string,
-      baselineRunId: string | null,
-      overrideRunId: string | null,
+      initialIdentity: ReturnType<typeof readPersistedCalculationState>,
       requestRevision: number,
     ) => {
+      const { baselineRunId, overrideRunId } = initialIdentity;
+      const expectedIdentity = initialIdentity;
       const requests: {
         kind: 'baseline' | 'override';
         runId: string;
@@ -294,11 +314,34 @@ export function CalculationPreparationPanel({
               ? result.reason
               : new Error(`Could not reload the stored ${kind} run.`);
           if (caught instanceof CalculationApiError && caught.status === 404) {
-            await removePersistedCalculationRunId(
+            const removed = await removePersistedCalculationRunId(
               window.localStorage,
               kind,
+              expectedIdentity,
             );
-            notices.push(`Stored ${kind} run was not found and was cleared.`);
+            if (removed) {
+              setBaselineRun(
+                kind === 'override' ? restoredBaseline : null,
+              );
+              setOverrideRun(null);
+              setError(null);
+              setStateNotice(
+                `Stored ${kind} run was not found and was cleared. Remaining run results were not applied from the stale reload batch.`,
+              );
+              setPhase('ready_for_override');
+              return;
+            } else {
+              setStateNotice(
+                `Stored calculation identity changed while the ${kind} run was loading; no persisted state was modified.`,
+              );
+              setError(
+                new Error(
+                  'Stored calculation identity changed while persisted runs were loading.',
+                ),
+              );
+              setPhase('failed');
+              return;
+            }
           } else {
             firstError ??= caught;
           }
@@ -311,12 +354,33 @@ export function CalculationPreparationPanel({
           result.value,
           modelVersionId,
           targetGraphVersionId,
+          expectedIdentity,
         );
         if (!reconciled.isCurrent) {
-          if (reconciled.notice) {
-            notices.push(reconciled.notice);
+          if (reconciled.disposition === 'conflict') {
+            setStateNotice(reconciled.notice);
+            setError(
+              new Error(
+                reconciled.notice ??
+                  'Stored calculation identity changed while persisted runs were loading.',
+              ),
+            );
+            setPhase('failed');
+            return;
           }
-          continue;
+          setBaselineRun(
+            kind === 'override' ? restoredBaseline : null,
+          );
+          setOverrideRun(null);
+          setError(null);
+          setStateNotice(
+            `${
+              reconciled.notice ??
+              `Stored ${kind} run was cleared.`
+            } Remaining run results were not applied from the stale reload batch.`,
+          );
+          setPhase('ready_for_override');
+          return;
         }
         if (kind === 'baseline') {
           restoredBaseline = result.value;
@@ -352,6 +416,9 @@ export function CalculationPreparationPanel({
     async (
       response: CalculationReadinessResponse,
       requestRevision: number,
+      expectedIdentity: ReturnType<
+        typeof readPersistedCalculationState
+      >,
     ) => {
       const targetGraphVersionId = response.graph_version_id;
       if (!targetGraphVersionId) {
@@ -360,24 +427,39 @@ export function CalculationPreparationPanel({
         return;
       }
 
-      const persisted = readPersistedCalculationState(window.localStorage);
+      const identityMatches =
+        expectedIdentity.workbookVersionId === workbookVersionId &&
+        expectedIdentity.modelVersionId === modelVersionId;
       const hadPersistedRuns =
-        persisted.baselineRunId !== null || persisted.overrideRunId !== null;
+        identityMatches &&
+        (expectedIdentity.baselineRunId !== null ||
+          expectedIdentity.overrideRunId !== null);
       const graphMatches =
-        persisted.graphVersionId === null ||
-        persisted.graphVersionId === targetGraphVersionId;
+        identityMatches &&
+        (expectedIdentity.graphVersionId === null ||
+          expectedIdentity.graphVersionId === targetGraphVersionId);
 
+      if (!identityMatches) {
+        throw new Error(
+          'Stored calculation identity changed while readiness was loading.',
+        );
+      }
+      const graphPersisted = await persistGraphVersionId(
+        window.localStorage,
+        targetGraphVersionId,
+        expectedIdentity,
+      );
+      if (!graphPersisted) {
+        throw new Error(
+          'Stored calculation identity changed while readiness was loading.',
+        );
+      }
       setGraphVersionId(targetGraphVersionId);
-      if (!graphMatches) {
-        await clearCalculationArtifacts(window.localStorage);
+      if (identityMatches && !graphMatches) {
         setStateNotice(
           'Stored calculation graph differed from current readiness and its run IDs were cleared. No calculation was submitted.',
         );
       }
-      await persistGraphVersionId(
-        window.localStorage,
-        targetGraphVersionId,
-      );
 
       setPhase('loading_inputs');
       const responseInputs = await getCalculationInputs(modelVersionId, {
@@ -402,8 +484,7 @@ export function CalculationPreparationPanel({
       if (hadPersistedRuns && graphMatches) {
         await restorePersistedRuns(
           targetGraphVersionId,
-          persisted.baselineRunId,
-          persisted.overrideRunId,
+          expectedIdentity,
           requestRevision,
         );
         return;
@@ -419,7 +500,7 @@ export function CalculationPreparationPanel({
         setPhase('ready_for_override');
         return;
       }
-      if (shouldAutoRunBaseline(persisted)) {
+      if (shouldAutoRunBaseline(expectedIdentity)) {
         await executeBaseline(targetGraphVersionId, requestRevision);
       }
     },
@@ -427,6 +508,7 @@ export function CalculationPreparationPanel({
       applyDefaultInput,
       executeBaseline,
       modelVersionId,
+      workbookVersionId,
       restoreFromStorage,
       restorePersistedRuns,
     ],
@@ -441,6 +523,9 @@ export function CalculationPreparationPanel({
       setError(null);
       setStateNotice(null);
       try {
+        const expectedIdentity = readPersistedCalculationState(
+          window.localStorage,
+        );
         const response = await getCalculationReadiness(modelVersionId);
         if (
           cancelled ||
@@ -459,7 +544,11 @@ export function CalculationPreparationPanel({
         setReadiness(response);
 
         if (isCalculationReady(response.status)) {
-          await activateReadyCalculation(response, requestRevision);
+          await activateReadyCalculation(
+            response,
+            requestRevision,
+            expectedIdentity,
+          );
           return;
         }
         switch (response.status) {
@@ -507,13 +596,20 @@ export function CalculationPreparationPanel({
     setPhase('preparing');
     setError(null);
     try {
+      const expectedIdentity = readPersistedCalculationState(
+        window.localStorage,
+      );
       const response = await prepareCalculation(modelVersionId);
       if (requestRevision !== identityRevisionRef.current) {
         return;
       }
       setReadiness(response);
       if (isCalculationReady(response.status)) {
-        await activateReadyCalculation(response, requestRevision);
+        await activateReadyCalculation(
+          response,
+          requestRevision,
+          expectedIdentity,
+        );
       } else if (response.status === 'preparing') {
         setPhase('preparing');
       } else {
@@ -574,10 +670,27 @@ export function CalculationPreparationPanel({
       return;
     }
 
-    overrideInFlightRef.current = true;
-    const overrideRevision = ++overrideRequestRevisionRef.current;
     const submittedValue = request.overrides[0].value;
     const baselineForComparison = baselineRun;
+    const expectedIdentity = readPersistedCalculationState(
+      window.localStorage,
+    );
+    if (
+      expectedIdentity.workbookVersionId !== workbookVersionId ||
+      expectedIdentity.modelVersionId !== modelVersionId ||
+      expectedIdentity.graphVersionId !== graphVersionId ||
+      expectedIdentity.baselineRunId !==
+        baselineForComparison.calculation_run_id
+    ) {
+      setError(
+        new Error(
+          'Stored calculation identity changed before the override request.',
+        ),
+      );
+      return;
+    }
+    overrideInFlightRef.current = true;
+    const overrideRevision = ++overrideRequestRevisionRef.current;
     setPhase('running_override');
     setError(null);
     setLastOverrideReceipt(null);
@@ -590,11 +703,17 @@ export function CalculationPreparationPanel({
       ) {
         return;
       }
-      await persistCalculationRunId(
+      const persisted = await persistCalculationRunId(
         window.localStorage,
         'override',
         run.calculation_run_id,
+        expectedIdentity,
       );
+      if (!persisted) {
+        throw new Error(
+          'Stored calculation identity changed while the override was running.',
+        );
+      }
       setOverrideRun(run);
       setLastOverrideReceipt({
         label: selected.label,
@@ -631,6 +750,16 @@ export function CalculationPreparationPanel({
       return;
     }
     const persisted = readPersistedCalculationState(window.localStorage);
+    if (
+      persisted.workbookVersionId !== workbookVersionId ||
+      persisted.modelVersionId !== modelVersionId ||
+      persisted.graphVersionId !== graphVersionId
+    ) {
+      setStateNotice(
+        'Stored calculation identity changed before the run reload; no persisted state was modified.',
+      );
+      return;
+    }
     const runId =
       kind === 'baseline'
         ? persisted.baselineRunId
@@ -648,6 +777,7 @@ export function CalculationPreparationPanel({
         run,
         modelVersionId,
         graphVersionId,
+        persisted,
       );
       if (!reconciled.isCurrent) {
         setStateNotice(reconciled.notice);

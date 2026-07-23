@@ -1,0 +1,1216 @@
+{
+  "acceptance": "two_model_canonical_sensitivity",
+  "cross_model_assertions": {
+    "different_graph_version_ids": true,
+    "different_model_version_ids": true,
+    "different_selected_output_ids": true,
+    "different_selected_output_source_mappings": true,
+    "different_selected_parameter_ids": true,
+    "different_selected_parameter_source_mappings": true,
+    "different_workbook_version_ids": true
+  },
+  "database": {
+    "dialect": "sqlite",
+    "path": "/tmp/investiq-task-6-two-model-acceptance.db",
+    "temporary": true
+  },
+  "models": [
+    {
+      "baseline": {
+        "persisted": true,
+        "reload_matches": true,
+        "run_id": "8662b07b-49db-5d7c-bee5-f6581f3bc29d",
+        "summary": {
+          "blocked_formula_cells": 0,
+          "calculated_formula_cells": 7,
+          "cycle_formula_cells": 2,
+          "dirty_formula_cells": 7,
+          "execution_error_cells": 0,
+          "formula_cells_supported": 9,
+          "formula_cells_total": 10,
+          "graph_edges": 11,
+          "graph_nodes": 10,
+          "grouped_calculation_rules": 1,
+          "reused_formula_cells": 0,
+          "unsupported_formula_cells": 1
+        },
+        "zero_override": true
+      },
+      "canonical_mappings": {
+        "current_override_parameter": {
+          "parameter_id": "e72dbbf7-5a2f-538e-900c-dc513fc52017",
+          "source": {
+            "cell": "A1",
+            "sheet": "Calc"
+          }
+        },
+        "second_driver_parameter": {
+          "parameter_id": "77035ff8-b61d-54e2-beca-f8402921d09d",
+          "source": {
+            "cell": "A2",
+            "sheet": "Inputs"
+          }
+        },
+        "selected_row_parameter": {
+          "parameter_id": "844af7b8-55ea-5f39-aea8-ffb868d50ac1",
+          "source": {
+            "cell": "A1",
+            "sheet": "Inputs"
+          }
+        },
+        "selected_scalar_output": {
+          "formula_cell_id": "e977f716-c42a-5262-b363-29b39fee1699",
+          "output_id": "fa60eae1-7d91-52ec-9da6-5e7511cb8421",
+          "source": {
+            "cell": "B1",
+            "sheet": "Calc"
+          }
+        }
+      },
+      "comparison_baseline_run_id": "8662b07b-49db-5d7c-bee5-f6581f3bc29d",
+      "current": {
+        "run_id": "3aadc199-dc22-5fa2-aed8-39f506a1902a",
+        "selected_output": {
+          "availability_status": "available",
+          "engine_error_code": null,
+          "execution_status": "reused",
+          "unavailable_reason": null,
+          "validation_status": "no_cached_value",
+          "value": {
+            "value": "5",
+            "value_type": "number"
+          },
+          "warnings": [
+            "reused_compatible_value"
+          ]
+        }
+      },
+      "driver_cases": [
+        {
+          "high_output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "7",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "high_run_id": "44f20b8d-e177-5cec-98f7-41bd148b13b9",
+          "impact": "3",
+          "low_output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "4",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "low_run_id": "7ff412b9-cf5f-51d8-84f7-104e22aa7c23",
+          "target": {
+            "kind": "parameter",
+            "parameter_id": "844af7b8-55ea-5f39-aea8-ffb868d50ac1"
+          }
+        },
+        {
+          "high_output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "7",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "high_run_id": "6d5c1fe7-013a-598c-a372-bfb909e24df2",
+          "impact": "3",
+          "low_output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "4",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "low_run_id": "4282252c-9979-5792-b477-e1bfd33f2aff",
+          "target": {
+            "kind": "parameter",
+            "parameter_id": "77035ff8-b61d-54e2-beca-f8402921d09d"
+          }
+        }
+      ],
+      "editable_numeric_inputs": [
+        {
+          "category": null,
+          "current_value": {
+            "value": "3",
+            "value_type": "number"
+          },
+          "editable": true,
+          "label": "First unit price",
+          "non_editable_reason": null,
+          "period": null,
+          "scenario": null,
+          "target_id": "77035ff8-b61d-54e2-beca-f8402921d09d",
+          "target_kind": "parameter",
+          "unit": null
+        },
+        {
+          "category": null,
+          "current_value": {
+            "value": "2",
+            "value_type": "number"
+          },
+          "editable": true,
+          "label": "Volume",
+          "non_editable_reason": null,
+          "period": null,
+          "scenario": null,
+          "target_id": "844af7b8-55ea-5f39-aea8-ffb868d50ac1",
+          "target_kind": "parameter",
+          "unit": null
+        },
+        {
+          "category": null,
+          "current_value": {
+            "value": "2026",
+            "value_type": "number"
+          },
+          "editable": true,
+          "label": "First reporting year",
+          "non_editable_reason": null,
+          "period": null,
+          "scenario": null,
+          "target_id": "e72dbbf7-5a2f-538e-900c-dc513fc52017",
+          "target_kind": "parameter",
+          "unit": null
+        }
+      ],
+      "graph_version_id": "5165b498-6a61-5acc-baea-3b469704d06a",
+      "matrix_cells_row_major": [
+        {
+          "column_value": "2",
+          "index": 0,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "3",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "1",
+          "run_id": "f41b549e-bad0-54db-a3ff-29b4c275a7b8"
+        },
+        {
+          "column_value": "3",
+          "index": 1,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "4",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "1",
+          "run_id": "f4864d0b-faff-5e44-b77c-603553e5f357"
+        },
+        {
+          "column_value": "5",
+          "index": 2,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "6",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "1",
+          "run_id": "05071fd8-7a9b-566d-b19b-36cd2ef05b49"
+        },
+        {
+          "column_value": "2",
+          "index": 3,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "4",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "2",
+          "run_id": "dd241cc5-5f14-53c5-b1d9-68ae0262dd8a"
+        },
+        {
+          "column_value": "3",
+          "index": 4,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "5",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "2",
+          "run_id": "2f5b6b2d-fdc8-5c46-91e2-628a20db2615"
+        },
+        {
+          "column_value": "5",
+          "index": 5,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "7",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "2",
+          "run_id": "4d09dd63-0e34-5bed-bd97-ec29277a980e"
+        },
+        {
+          "column_value": "2",
+          "index": 6,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "6",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "4",
+          "run_id": "602b8598-6b2b-5e3b-8282-d52746765455"
+        },
+        {
+          "column_value": "3",
+          "index": 7,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "7",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "4",
+          "run_id": "313fdc10-0898-5cda-b005-e3cef915e12a"
+        },
+        {
+          "column_value": "5",
+          "index": 8,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "9",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "4",
+          "run_id": "7bda383b-00f9-547c-8686-40c65f955143"
+        }
+      ],
+      "model_version_id": "a54630a4-3678-4763-83f1-e02d725237b1",
+      "name": "first_model",
+      "persisted_reload_checks": [
+        {
+          "comparison_baseline_matches": true,
+          "kind": "current",
+          "persisted": true,
+          "run_id": "3aadc199-dc22-5fa2-aed8-39f506a1902a",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "driver_0_low_case",
+          "persisted": true,
+          "run_id": "7ff412b9-cf5f-51d8-84f7-104e22aa7c23",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "driver_0_high_case",
+          "persisted": true,
+          "run_id": "44f20b8d-e177-5cec-98f7-41bd148b13b9",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "driver_1_low_case",
+          "persisted": true,
+          "run_id": "4282252c-9979-5792-b477-e1bfd33f2aff",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "driver_1_high_case",
+          "persisted": true,
+          "run_id": "6d5c1fe7-013a-598c-a372-bfb909e24df2",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_0",
+          "persisted": true,
+          "run_id": "f41b549e-bad0-54db-a3ff-29b4c275a7b8",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_1",
+          "persisted": true,
+          "run_id": "f4864d0b-faff-5e44-b77c-603553e5f357",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_2",
+          "persisted": true,
+          "run_id": "05071fd8-7a9b-566d-b19b-36cd2ef05b49",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_3",
+          "persisted": true,
+          "run_id": "dd241cc5-5f14-53c5-b1d9-68ae0262dd8a",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_4",
+          "persisted": true,
+          "run_id": "2f5b6b2d-fdc8-5c46-91e2-628a20db2615",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_5",
+          "persisted": true,
+          "run_id": "4d09dd63-0e34-5bed-bd97-ec29277a980e",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_6",
+          "persisted": true,
+          "run_id": "602b8598-6b2b-5e3b-8282-d52746765455",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_7",
+          "persisted": true,
+          "run_id": "313fdc10-0898-5cda-b005-e3cef915e12a",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_8",
+          "persisted": true,
+          "run_id": "7bda383b-00f9-547c-8686-40c65f955143",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        }
+      ],
+      "replay": {
+        "no_run_count_increase": true,
+        "response_equal": true,
+        "run_count_after_first": 15,
+        "run_count_after_replay": 15,
+        "run_count_before_sensitivity": 1,
+        "run_ids_equal": true,
+        "runs_created_by_first_request": 14
+      },
+      "scalar_outputs": [
+        {
+          "business_role": "unclassified",
+          "entity_kind": "scalar",
+          "label": "First circular metric",
+          "mapping_status": "mapped",
+          "output_id": "3a276b2f-748c-5ae2-9f5c-13105479e8a0",
+          "points": [],
+          "scenario": "base",
+          "source": {
+            "cell_address": "B5",
+            "formula_cell_id": "4596719d-215e-5c9f-8516-6ceabcf05cf9",
+            "formula_status": "formula_no_cache",
+            "number_format": "General",
+            "sheet_name": "Calc"
+          },
+          "support_status": "supported",
+          "unit": "USD"
+        },
+        {
+          "business_role": "total_project_cost",
+          "entity_kind": "scalar",
+          "label": "Total project cost",
+          "mapping_status": "mapped",
+          "output_id": "fa60eae1-7d91-52ec-9da6-5e7511cb8421",
+          "points": [],
+          "scenario": "base",
+          "source": {
+            "cell_address": "B1",
+            "formula_cell_id": "e977f716-c42a-5262-b363-29b39fee1699",
+            "formula_status": "formula_no_cache",
+            "number_format": "General",
+            "sheet_name": "Calc"
+          },
+          "support_status": "supported",
+          "unit": "USD"
+        }
+      ],
+      "totals": {
+        "drivers": 2,
+        "editable_numeric_inputs": 3,
+        "matrix_cells": 9,
+        "persisted_reload_checks": 14,
+        "returned_case_ids": 14,
+        "scalar_outputs": 2,
+        "unique_returned_case_ids": 14
+      },
+      "unavailable_output_sample": {
+        "availability_status": "unavailable",
+        "engine_error_code": null,
+        "execution_status": "cycle",
+        "output_id": "3a276b2f-748c-5ae2-9f5c-13105479e8a0",
+        "unavailable_reason": "cycle",
+        "value": null,
+        "warnings": [
+          "cycle"
+        ]
+      },
+      "workbook_version_id": "0c91ff79-059d-4e1e-a09f-2e1cdc9651ea"
+    },
+    {
+      "baseline": {
+        "persisted": true,
+        "reload_matches": true,
+        "run_id": "16b4abc9-84e5-556f-a5e8-fa09e6e82c90",
+        "summary": {
+          "blocked_formula_cells": 0,
+          "calculated_formula_cells": 7,
+          "cycle_formula_cells": 2,
+          "dirty_formula_cells": 7,
+          "execution_error_cells": 0,
+          "formula_cells_supported": 9,
+          "formula_cells_total": 10,
+          "graph_edges": 11,
+          "graph_nodes": 10,
+          "grouped_calculation_rules": 1,
+          "reused_formula_cells": 0,
+          "unsupported_formula_cells": 1
+        },
+        "zero_override": true
+      },
+      "canonical_mappings": {
+        "current_override_parameter": {
+          "parameter_id": "add3232c-33ca-5060-9a66-efa642d023e6",
+          "source": {
+            "cell": "A2",
+            "sheet": "Calc"
+          }
+        },
+        "second_driver_parameter": {
+          "parameter_id": "4c7b7810-29c4-5147-856d-6fa2991cdb04",
+          "source": {
+            "cell": "A1",
+            "sheet": "Inputs"
+          }
+        },
+        "selected_row_parameter": {
+          "parameter_id": "c82a92f3-3ae5-5582-9dd9-18c744d0e435",
+          "source": {
+            "cell": "A2",
+            "sheet": "Inputs"
+          }
+        },
+        "selected_scalar_output": {
+          "formula_cell_id": "b0035c97-701b-5db1-9a66-2c166e4c1563",
+          "output_id": "a34d8508-cf1d-5cfa-9fab-f458482a1381",
+          "source": {
+            "cell": "B2",
+            "sheet": "Calc"
+          }
+        }
+      },
+      "comparison_baseline_run_id": "16b4abc9-84e5-556f-a5e8-fa09e6e82c90",
+      "current": {
+        "run_id": "f19868ef-c393-5016-805e-1163272adf67",
+        "selected_output": {
+          "availability_status": "available",
+          "engine_error_code": null,
+          "execution_status": "reused",
+          "unavailable_reason": null,
+          "validation_status": "no_cached_value",
+          "value": {
+            "value": "54",
+            "value_type": "number"
+          },
+          "warnings": [
+            "reused_compatible_value"
+          ]
+        }
+      },
+      "driver_cases": [
+        {
+          "high_output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "63",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "high_run_id": "03bb022b-32bf-5792-b6ab-5220a6841ae2",
+          "impact": "18",
+          "low_output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "45",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "low_run_id": "ae033910-c863-5755-813d-634cc34c56d3",
+          "target": {
+            "kind": "parameter",
+            "parameter_id": "c82a92f3-3ae5-5582-9dd9-18c744d0e435"
+          }
+        },
+        {
+          "high_output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "60",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "high_run_id": "d53cb522-cdc4-5bd5-a562-3be54cee8632",
+          "impact": "12",
+          "low_output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "48",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "low_run_id": "8713aead-248f-5a72-8b5d-4508bdbd2f8b",
+          "target": {
+            "kind": "parameter",
+            "parameter_id": "4c7b7810-29c4-5147-856d-6fa2991cdb04"
+          }
+        }
+      ],
+      "editable_numeric_inputs": [
+        {
+          "category": null,
+          "current_value": {
+            "value": "7",
+            "value_type": "number"
+          },
+          "editable": true,
+          "label": "Second unit price",
+          "non_editable_reason": null,
+          "period": null,
+          "scenario": null,
+          "target_id": "4c7b7810-29c4-5147-856d-6fa2991cdb04",
+          "target_kind": "parameter",
+          "unit": null
+        },
+        {
+          "category": null,
+          "current_value": {
+            "value": "2027",
+            "value_type": "number"
+          },
+          "editable": true,
+          "label": "Second reporting year",
+          "non_editable_reason": null,
+          "period": null,
+          "scenario": null,
+          "target_id": "add3232c-33ca-5060-9a66-efa642d023e6",
+          "target_kind": "parameter",
+          "unit": null
+        },
+        {
+          "category": null,
+          "current_value": {
+            "value": "11",
+            "value_type": "number"
+          },
+          "editable": true,
+          "label": "Second unit volume",
+          "non_editable_reason": null,
+          "period": null,
+          "scenario": null,
+          "target_id": "c82a92f3-3ae5-5582-9dd9-18c744d0e435",
+          "target_kind": "parameter",
+          "unit": null
+        }
+      ],
+      "graph_version_id": "e42fb513-9f0e-58fa-824f-9143621c519a",
+      "matrix_cells_row_major": [
+        {
+          "column_value": "5",
+          "index": 0,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "39",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "8",
+          "run_id": "fb5fe0fc-1f7f-56fb-b355-615adfbc1355"
+        },
+        {
+          "column_value": "7",
+          "index": 1,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "45",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "8",
+          "run_id": "3436db97-649b-5d1e-8102-6b4191b3a086"
+        },
+        {
+          "column_value": "9",
+          "index": 2,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "51",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "8",
+          "run_id": "4956e1b2-78e5-5ee5-93aa-606f3423fa7d"
+        },
+        {
+          "column_value": "5",
+          "index": 3,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "48",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "11",
+          "run_id": "010e7298-9bd5-5e59-bc0b-76b45dbc3b89"
+        },
+        {
+          "column_value": "7",
+          "index": 4,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "54",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "11",
+          "run_id": "db8285d0-00d7-57bd-afda-293851486d7f"
+        },
+        {
+          "column_value": "9",
+          "index": 5,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "60",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "11",
+          "run_id": "190aa2cc-d213-5c87-907a-de02bb440137"
+        },
+        {
+          "column_value": "5",
+          "index": 6,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "57",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "14",
+          "run_id": "605c53ec-8601-5576-a85d-1b54e02fc9e6"
+        },
+        {
+          "column_value": "7",
+          "index": 7,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "63",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "14",
+          "run_id": "33a410ec-690d-55da-bf9e-4b697fc34bf6"
+        },
+        {
+          "column_value": "9",
+          "index": 8,
+          "output": {
+            "availability_status": "available",
+            "engine_error_code": null,
+            "execution_status": "executed",
+            "unavailable_reason": null,
+            "validation_status": "no_cached_value",
+            "value": {
+              "value": "69",
+              "value_type": "number"
+            },
+            "warnings": []
+          },
+          "row_value": "14",
+          "run_id": "2b02880c-49cc-59c3-a6ca-32614dd4cbc3"
+        }
+      ],
+      "model_version_id": "dd792d12-723d-4f72-8615-8a1fb9c65d0b",
+      "name": "second_model",
+      "persisted_reload_checks": [
+        {
+          "comparison_baseline_matches": true,
+          "kind": "current",
+          "persisted": true,
+          "run_id": "f19868ef-c393-5016-805e-1163272adf67",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "driver_0_low_case",
+          "persisted": true,
+          "run_id": "ae033910-c863-5755-813d-634cc34c56d3",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "driver_0_high_case",
+          "persisted": true,
+          "run_id": "03bb022b-32bf-5792-b6ab-5220a6841ae2",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "driver_1_low_case",
+          "persisted": true,
+          "run_id": "8713aead-248f-5a72-8b5d-4508bdbd2f8b",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "driver_1_high_case",
+          "persisted": true,
+          "run_id": "d53cb522-cdc4-5bd5-a562-3be54cee8632",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_0",
+          "persisted": true,
+          "run_id": "fb5fe0fc-1f7f-56fb-b355-615adfbc1355",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_1",
+          "persisted": true,
+          "run_id": "3436db97-649b-5d1e-8102-6b4191b3a086",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_2",
+          "persisted": true,
+          "run_id": "4956e1b2-78e5-5ee5-93aa-606f3423fa7d",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_3",
+          "persisted": true,
+          "run_id": "010e7298-9bd5-5e59-bc0b-76b45dbc3b89",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_4",
+          "persisted": true,
+          "run_id": "db8285d0-00d7-57bd-afda-293851486d7f",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_5",
+          "persisted": true,
+          "run_id": "190aa2cc-d213-5c87-907a-de02bb440137",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_6",
+          "persisted": true,
+          "run_id": "605c53ec-8601-5576-a85d-1b54e02fc9e6",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_7",
+          "persisted": true,
+          "run_id": "33a410ec-690d-55da-bf9e-4b697fc34bf6",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        },
+        {
+          "comparison_baseline_matches": true,
+          "kind": "matrix_8",
+          "persisted": true,
+          "run_id": "2b02880c-49cc-59c3-a6ca-32614dd4cbc3",
+          "run_reload_matches": true,
+          "selected_output_reload_matches": true,
+          "status": "completed_with_warning"
+        }
+      ],
+      "replay": {
+        "no_run_count_increase": true,
+        "response_equal": true,
+        "run_count_after_first": 30,
+        "run_count_after_replay": 30,
+        "run_count_before_sensitivity": 16,
+        "run_ids_equal": true,
+        "runs_created_by_first_request": 14
+      },
+      "scalar_outputs": [
+        {
+          "business_role": "unclassified",
+          "entity_kind": "scalar",
+          "label": "Second circular metric",
+          "mapping_status": "mapped",
+          "output_id": "497aa25b-0e33-565d-8c87-590f0f1772fe",
+          "points": [],
+          "scenario": "base",
+          "source": {
+            "cell_address": "B5",
+            "formula_cell_id": "ab6b74e4-ff9a-550a-beb9-3326ab02058f",
+            "formula_status": "formula_no_cache",
+            "number_format": "General",
+            "sheet_name": "Calc"
+          },
+          "support_status": "supported",
+          "unit": "USD"
+        },
+        {
+          "business_role": "total_project_cost",
+          "entity_kind": "scalar",
+          "label": "Second model total",
+          "mapping_status": "mapped",
+          "output_id": "a34d8508-cf1d-5cfa-9fab-f458482a1381",
+          "points": [],
+          "scenario": "base",
+          "source": {
+            "cell_address": "B2",
+            "formula_cell_id": "b0035c97-701b-5db1-9a66-2c166e4c1563",
+            "formula_status": "formula_no_cache",
+            "number_format": "General",
+            "sheet_name": "Calc"
+          },
+          "support_status": "supported",
+          "unit": "USD"
+        }
+      ],
+      "totals": {
+        "drivers": 2,
+        "editable_numeric_inputs": 3,
+        "matrix_cells": 9,
+        "persisted_reload_checks": 14,
+        "returned_case_ids": 14,
+        "scalar_outputs": 2,
+        "unique_returned_case_ids": 14
+      },
+      "unavailable_output_sample": {
+        "availability_status": "unavailable",
+        "engine_error_code": null,
+        "execution_status": "cycle",
+        "output_id": "497aa25b-0e33-565d-8c87-590f0f1772fe",
+        "unavailable_reason": "cycle",
+        "value": null,
+        "warnings": [
+          "cycle"
+        ]
+      },
+      "workbook_version_id": "80449463-afc3-4437-b65a-84b9db18ecff"
+    }
+  ],
+  "request_contract_audit": {
+    "all_post_requests_canonical_uuid_only": true,
+    "forbidden_keys_or_labels_observed": false,
+    "forbidden_request_keys": [
+      "cell_address",
+      "label",
+      "sheet_name",
+      "source_cell",
+      "source_sheet"
+    ],
+    "requests": [
+      {
+        "method": "POST",
+        "path_template": "/api/v1/models/a54630a4-3678-4763-83f1-e02d725237b1/calculation/prepare",
+        "payload_keys": []
+      },
+      {
+        "method": "POST",
+        "path_template": "/api/v1/models/a54630a4-3678-4763-83f1-e02d725237b1/calculations",
+        "payload_keys": [
+          "graph_version_id",
+          "idempotency_key",
+          "overrides"
+        ]
+      },
+      {
+        "method": "POST",
+        "path_template": "/api/v1/models/a54630a4-3678-4763-83f1-e02d725237b1/calculation/sensitivity",
+        "payload_keys": [
+          "current_overrides",
+          "drivers",
+          "graph_version_id",
+          "output_id",
+          "two_way"
+        ]
+      },
+      {
+        "method": "POST",
+        "path_template": "/api/v1/models/a54630a4-3678-4763-83f1-e02d725237b1/calculation/sensitivity",
+        "payload_keys": [
+          "current_overrides",
+          "drivers",
+          "graph_version_id",
+          "output_id",
+          "two_way"
+        ]
+      },
+      {
+        "method": "POST",
+        "path_template": "/api/v1/models/dd792d12-723d-4f72-8615-8a1fb9c65d0b/calculation/prepare",
+        "payload_keys": []
+      },
+      {
+        "method": "POST",
+        "path_template": "/api/v1/models/dd792d12-723d-4f72-8615-8a1fb9c65d0b/calculations",
+        "payload_keys": [
+          "graph_version_id",
+          "idempotency_key",
+          "overrides"
+        ]
+      },
+      {
+        "method": "POST",
+        "path_template": "/api/v1/models/dd792d12-723d-4f72-8615-8a1fb9c65d0b/calculation/sensitivity",
+        "payload_keys": [
+          "current_overrides",
+          "drivers",
+          "graph_version_id",
+          "output_id",
+          "two_way"
+        ]
+      },
+      {
+        "method": "POST",
+        "path_template": "/api/v1/models/dd792d12-723d-4f72-8615-8a1fb9c65d0b/calculation/sensitivity",
+        "payload_keys": [
+          "current_overrides",
+          "drivers",
+          "graph_version_id",
+          "output_id",
+          "two_way"
+        ]
+      }
+    ],
+    "requests_audited": 8
+  },
+  "schema_version": 1,
+  "status": "passed",
+  "totals": {
+    "baseline_runs": 2,
+    "drivers": 4,
+    "final_calculation_run_count": 30,
+    "matrix_cells": 18,
+    "models": 2,
+    "persisted_reload_checks": 28,
+    "replays_without_new_runs": 2,
+    "returned_case_ids": 28,
+    "typed_unavailable_output_samples": 2
+  }
+}

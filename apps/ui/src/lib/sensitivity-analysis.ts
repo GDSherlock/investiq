@@ -395,6 +395,97 @@ export function deriveSliderSpec(
   };
 }
 
+function scaledDecimalInteger(
+  decimal: ParsedDecimal,
+  scale: number,
+): bigint {
+  const unsigned = BigInt(
+    decimal.digits.padEnd(
+      decimal.digits.length + scale - decimal.scale,
+      '0',
+    ),
+  );
+  return decimal.sign < 0 ? -unsigned : unsigned;
+}
+
+function absoluteBigInt(value: bigint): bigint {
+  return value < BigInt(0) ? -value : value;
+}
+
+function greatestCommonDivisor(
+  left: bigint,
+  right: bigint,
+): bigint {
+  let dividend = absoluteBigInt(left);
+  let divisor = absoluteBigInt(right);
+  while (divisor !== BigInt(0)) {
+    const remainder = dividend % divisor;
+    dividend = divisor;
+    divisor = remainder;
+  }
+  return dividend;
+}
+
+export function deriveSliderControlStep(
+  slider: { min: string; max: string; step: string },
+  decimalValue: string,
+): string | null {
+  const minimum = parseDecimal(slider.min);
+  const maximum = parseDecimal(slider.max);
+  const suggestedStep = parseDecimal(slider.step);
+  const value = parseDecimal(decimalValue);
+  if (
+    minimum === null ||
+    maximum === null ||
+    suggestedStep === null ||
+    suggestedStep.sign === 0 ||
+    value === null
+  ) {
+    throw new Error('Sensitivity values must be finite numeric strings.');
+  }
+
+  const scale = Math.max(
+    minimum.scale,
+    maximum.scale,
+    suggestedStep.scale,
+    value.scale,
+  );
+  const minimumInteger = scaledDecimalInteger(minimum, scale);
+  const maximumInteger = scaledDecimalInteger(maximum, scale);
+  const valueInteger = scaledDecimalInteger(value, scale);
+  if (
+    valueInteger < minimumInteger ||
+    valueInteger > maximumInteger
+  ) {
+    return null;
+  }
+  const suggestedStepInteger = absoluteBigInt(
+    scaledDecimalInteger(suggestedStep, scale),
+  );
+  const offset = absoluteBigInt(valueInteger - minimumInteger);
+  const exactStepInteger =
+    offset === BigInt(0)
+      ? suggestedStepInteger
+      : greatestCommonDivisor(suggestedStepInteger, offset);
+  if (
+    suggestedStepInteger / exactStepInteger >
+    BigInt(10_000)
+  ) {
+    return null;
+  }
+  const exactStep = parseDecimal(
+    formatDecimal({
+      sign: 1,
+      digits: exactStepInteger.toString(),
+      scale,
+    }),
+  );
+  if (exactStep === null || exactStep.sign === 0) {
+    throw new Error('Sensitivity slider step must be positive.');
+  }
+  return formatDecimal(exactStep);
+}
+
 export function resolveSensitivitySelections({
   assumptions,
   overridesByTarget,

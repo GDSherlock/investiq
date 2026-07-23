@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { createElement } from 'react';
+import TestRenderer, { act } from 'react-test-renderer';
+
+import { SensitivityAssumptionPanel } from '../components/sensitivity/SensitivityAssumptionPanel';
 
 import {
   getCalculationInputs,
@@ -57,6 +61,7 @@ import {
   buildTwoWayMatrix,
   canApplySensitivityResponse,
   canRetainSensitivityIdentity,
+  deriveSliderControlStep,
   deriveSliderSpec,
   formatSensitivityDelta,
   isSensitivityCatalogIdentityError,
@@ -1232,6 +1237,139 @@ test('slider ranges use absolute twenty-percent bounds and one-hundred steps', (
   assert.deepEqual(deriveSliderSpec('0'), { kind: 'number' });
 });
 
+test('range controls preserve persisted overrides by refining the suggested step grid', () => {
+  const yearSlider = deriveSliderSpec('2026');
+  assert.equal(yearSlider.kind, 'range');
+  if (yearSlider.kind !== 'range') {
+    return;
+  }
+  assert.equal(deriveSliderControlStep(yearSlider, '2026'), '8.104');
+  assert.equal(deriveSliderControlStep(yearSlider, '1620.8'), '8.104');
+  assert.equal(deriveSliderControlStep(yearSlider, '2030'), '0.008');
+  assert.equal(deriveSliderControlStep(yearSlider, '2.03e3'), '0.008');
+  assert.equal(deriveSliderControlStep(yearSlider, '3000'), null);
+
+  const priceSlider = deriveSliderSpec('100');
+  assert.equal(priceSlider.kind, 'range');
+  if (priceSlider.kind !== 'range') {
+    return;
+  }
+  assert.equal(deriveSliderControlStep(priceSlider, '99.5'), '0.1');
+  assert.equal(
+    deriveSliderControlStep(priceSlider, '100.000001'),
+    null,
+  );
+
+  const negativeSlider = deriveSliderSpec('-50');
+  assert.equal(negativeSlider.kind, 'range');
+  if (negativeSlider.kind !== 'range') {
+    return;
+  }
+  assert.equal(
+    deriveSliderControlStep(negativeSlider, '-49.9'),
+    '0.1',
+  );
+
+  const fractionalSlider = deriveSliderSpec('0.1');
+  assert.equal(fractionalSlider.kind, 'range');
+  if (fractionalSlider.kind !== 'range') {
+    return;
+  }
+  assert.equal(
+    deriveSliderControlStep(fractionalSlider, '1.005e-1'),
+    '0.0001',
+  );
+
+  const panelSource = readFileSync(
+    'src/components/sensitivity/SensitivityAssumptionPanel.tsx',
+    'utf8',
+  );
+
+  assert.match(
+    panelSource,
+    /const sliderControlStep =[\s\S]*deriveSliderControlStep\(sliderSpec, value\)/,
+  );
+  assert.match(panelSource, /sliderControlStep !== null/);
+  assert.match(panelSource, /step=\{sliderControlStep\}/);
+});
+
+test('fallback number control stays focused through decimal editing and returns to a valid range on blur', () => {
+  const assumption: SensitivityAssumption = {
+    targetKey: 'parameter:11111111-1111-4111-8111-111111111111',
+    target: {
+      kind: 'parameter',
+      parameter_id: '11111111-1111-4111-8111-111111111111',
+    },
+    label: 'Construction cost',
+    category: 'Costs',
+    unit: 'USD',
+    scenario: null,
+    period: null,
+    currentValue: '100',
+  };
+  let changedValue = '';
+  const renderPanel = (value: string) =>
+    createElement(SensitivityAssumptionPanel, {
+      assumptions: [assumption],
+      overridesByTarget: {
+        [assumption.targetKey]: value,
+      },
+      tornadoDriverKeys: [assumption.targetKey],
+      maxDrivers: 12,
+      onValueChange: (_targetKey: string, nextValue: string) => {
+        changedValue = nextValue;
+      },
+      onReset: () => {},
+      onResetAll: () => {},
+      onToggleDriver: () => {},
+    });
+
+  let renderer!: TestRenderer.ReactTestRenderer;
+  act(() => {
+    renderer = TestRenderer.create(renderPanel('100.000001'));
+  });
+  let valueInput = renderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.type, 'number');
+  assert.equal(valueInput.props.step, 'any');
+
+  act(() => {
+    valueInput.props.onFocus();
+    valueInput.props.onChange({ target: { value: '99' } });
+    renderer.update(renderPanel('99'));
+  });
+  assert.equal(changedValue, '99');
+  valueInput = renderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.type, 'number');
+
+  act(() => {
+    valueInput.props.onChange({ target: { value: '99.5' } });
+    renderer.update(renderPanel('99.5'));
+  });
+  valueInput = renderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.type, 'number');
+  assert.equal(valueInput.props.value, '99.5');
+
+  act(() => {
+    valueInput.props.onBlur();
+  });
+  valueInput = renderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.type, 'range');
+  assert.equal(valueInput.props.value, '99.5');
+  assert.equal(valueInput.props.step, '0.1');
+
+  act(() => {
+    renderer.unmount();
+  });
+});
+
 test('sensitivity deltas use percentage points and preserve other output units', () => {
   assert.equal(formatSensitivityDelta(0.01, '%', null), '+1 pp');
   assert.equal(formatSensitivityDelta(-1250, 'USD', null), '-1,250 USD');
@@ -2235,6 +2373,7 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
 
 test('sensitivity review fixes expose retained-state, zero-driver, provenance, and accessible chart affordances', () => {
   const pageSource = readFileSync('src/app/sensitivity/page.tsx', 'utf8');
+  const navSource = readFileSync('src/app/NavBar.tsx', 'utf8');
   const panelSource = readFileSync(
     'src/components/sensitivity/SensitivityAssumptionPanel.tsx',
     'utf8',
@@ -2254,6 +2393,32 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
   assert.match(pageSource, /focus-visible:ring-2/);
   assert.match(pageSource, /memo\(function KpiCard/);
   assert.match(pageSource, /memo\(function SeriesChartCard/);
+  assert.match(
+    pageSource,
+    /kpi\.absoluteChange !== null[\s\S]*\{' \('\}[\s\S]*formatRelativeChange\(kpi\.percentageChange\)[\s\S]*\{'\)'\}/,
+  );
+  assert.match(
+    pageSource,
+    /<section className="min-w-0 overflow-x-auto rounded-lg border border-d-border bg-d-card p-5 shadow-sm">/,
+  );
+  assert.match(
+    pageSource,
+    /<section className="min-w-0 rounded-lg border border-d-border bg-d-card p-5 shadow-sm">[\s\S]*Two-way sensitivity/,
+  );
+  assert.match(
+    pageSource,
+    /const SeriesChartCard[\s\S]*<article className="min-w-0 overflow-hidden rounded-lg border border-d-border bg-d-card p-5 shadow-sm">/,
+  );
+  assert.equal(
+    navSource.match(
+      /bg-d-bg text-white border-t border-d-border overflow-x-auto/g,
+    )?.length,
+    2,
+  );
+  assert.match(
+    navSource,
+    /ROW 1: Brand \+ Project pill[\s\S]*<div className="bg-d-card text-white overflow-x-auto">/,
+  );
   assert.match(panelSource, /useMemo/);
   assert.match(
     panelSource,

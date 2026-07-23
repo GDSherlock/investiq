@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 
 import {
+  deriveSliderControlStep,
   deriveSliderSpec,
   type SensitivityAssumption,
-} from '@/lib/sensitivity-analysis';
+} from '../../lib/sensitivity-analysis';
 
 interface SensitivityAssumptionPanelProps {
   assumptions: SensitivityAssumption[];
@@ -65,6 +66,9 @@ export function SensitivityAssumptionPanel({
     () => categoryGroups(assumptions),
     [assumptions],
   );
+  const [numberEditorTargetKey, setNumberEditorTargetKey] = useState<
+    string | null
+  >(null);
   const driverLimitReached = selectedDrivers.size >= maxDrivers;
   const hasOverrides = Object.keys(overridesByTarget).length > 0;
 
@@ -109,6 +113,14 @@ export function SensitivityAssumptionPanel({
                   baseSpec.kind === 'number'
                     ? deriveSliderSpec(value)
                     : baseSpec;
+                const sliderControlStep =
+                  sliderSpec.kind === 'range'
+                    ? deriveSliderControlStep(sliderSpec, value)
+                    : null;
+                const showRangeInput =
+                  sliderSpec.kind === 'range' &&
+                  sliderControlStep !== null &&
+                  numberEditorTargetKey !== assumption.targetKey;
                 const selected = selectedDrivers.has(assumption.targetKey);
                 const rangeCapable = sliderSpec.kind === 'range';
                 const onlySelectedDriver =
@@ -151,13 +163,13 @@ export function SensitivityAssumptionPanel({
                       </button>
                     </div>
 
-                    {sliderSpec.kind === 'range' ? (
+                    {showRangeInput && sliderControlStep !== null ? (
                       <input
                         id={inputId}
                         type="range"
                         min={sliderSpec.min}
                         max={sliderSpec.max}
-                        step={sliderSpec.step}
+                        step={sliderControlStep}
                         value={value}
                         aria-describedby={`${inputId}-value`}
                         onChange={(event) =>
@@ -172,15 +184,27 @@ export function SensitivityAssumptionPanel({
                       <input
                         id={inputId}
                         type="number"
+                        step="any"
                         inputMode="decimal"
                         value={value}
                         aria-describedby={`${inputId}-value`}
+                        onFocus={() =>
+                          setNumberEditorTargetKey(assumption.targetKey)
+                        }
+                        onBlur={() =>
+                          setNumberEditorTargetKey((currentTargetKey) =>
+                            currentTargetKey === assumption.targetKey
+                              ? null
+                              : currentTargetKey,
+                          )
+                        }
                         onChange={(event) => {
                           const nextValue = event.target.value;
                           if (
                             nextValue !== '' &&
                             Number.isFinite(Number(nextValue))
                           ) {
+                            setNumberEditorTargetKey(assumption.targetKey);
                             onValueChange(
                               assumption.targetKey,
                               nextValue,

@@ -143,7 +143,7 @@ export default function NavBar() {
   return (
     <div className="flex flex-col">
       {/* ═══════ ROW 1: Brand + Project pill ═══════ */}
-      <div className="bg-d-card text-white">
+      <div className="bg-d-card text-white overflow-x-auto">
         <div className="max-w-[1600px] mx-auto px-4 py-2 flex items-center gap-4">
           {/* Logo */}
           <div className="flex items-center gap-2 shrink-0">
@@ -230,7 +230,7 @@ export default function NavBar() {
       </div>
 
       {/* ═══════ ROW 2: Persona selector ═══════ */}
-      <div className="bg-d-bg text-white border-t border-d-border">
+      <div className="bg-d-bg text-white border-t border-d-border overflow-x-auto">
         <div className="max-w-[1600px] mx-auto px-4 py-1.5 flex items-center gap-4">
           <span className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold shrink-0">Viewing as</span>
           <div className="flex items-center gap-2">
@@ -265,7 +265,7 @@ export default function NavBar() {
       </div>
 
       {/* ═══════ ROW 3: Navigation links ═══════ */}
-      <div className="bg-d-bg text-white border-t border-d-border">
+      <div className="bg-d-bg text-white border-t border-d-border overflow-x-auto">
         <div className="max-w-[1600px] mx-auto px-4 py-2 flex items-center gap-6">
           {NAV_LINKS.map(({ href, label, badge, badgeColor }) => {
             const isActive = pathname === href || (href !== '/' && pathname.startsWith(href));

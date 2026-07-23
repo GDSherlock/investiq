@@ -305,7 +305,7 @@ const SeriesChartCard = memo(function SeriesChartCard({
   );
 
   return (
-    <article className="rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
+    <article className="min-w-0 overflow-hidden rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-white">{series.label}</h3>
@@ -1209,7 +1209,7 @@ export default function SensitivityPage() {
           </section>
 
           <div className="grid gap-5 xl:grid-cols-2">
-            <section className="overflow-x-auto rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
+            <section className="min-w-0 overflow-x-auto rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
               <h2 className="text-base font-semibold text-white">
                 Baseline vs current
               </h2>
@@ -1254,9 +1254,13 @@ export default function SensitivityPage() {
                         </td>
                         <td className="py-3 text-right font-mono text-gold-300">
                           {formatAbsoluteChange(kpi)}
-                          <span className="ml-1 text-[10px] text-d-muted">
-                            {formatRelativeChange(kpi.percentageChange)}
-                          </span>
+                          {kpi.absoluteChange !== null ? (
+                            <span className="text-[10px] text-d-muted">
+                              {' ('}
+                              {formatRelativeChange(kpi.percentageChange)}
+                              {')'}
+                            </span>
+                          ) : null}
                         </td>
                       </tr>
                     ))}
@@ -1269,7 +1273,7 @@ export default function SensitivityPage() {
               )}
             </section>
 
-            <section className="rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
+            <section className="min-w-0 rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
               <h2 className="text-base font-semibold text-white">
                 Two-way sensitivity
               </h2>

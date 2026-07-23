@@ -94,6 +94,20 @@ export interface SensitivityResponseGuard {
   outputId: string;
 }
 
+export interface SensitivityIdentity {
+  modelVersionId: string;
+  graphVersionId: string;
+}
+
+export interface SensitivitySelectionInput {
+  assumptions: SensitivityAssumption[];
+  overridesByTarget: Record<string, string>;
+  storedTornadoDriverKeys: string[] | null;
+  storedRowDriverKey: string | null;
+  storedColumnDriverKey: string | null;
+  maxDrivers: number;
+}
+
 function parseDecimal(value: string): ParsedDecimal | null {
   const normalized = value.trim();
   if (!Number.isFinite(Number(normalized))) {
@@ -272,6 +286,7 @@ function projectionUnavailableReason(
 export async function loadAllEditableNumericParameters(
   modelVersionId: string,
   getInputs: typeof getCalculationInputs = getCalculationInputs,
+  expectedGraphVersionId?: string,
 ): Promise<SensitivityAssumption[]> {
   const assumptions: SensitivityAssumption[] = [];
   const seenCursors = new Set<string>();
@@ -284,6 +299,19 @@ export async function loadAllEditableNumericParameters(
       limit: 100,
       ...(cursor === undefined ? {} : { cursor }),
     });
+    if (page.model_version_id !== modelVersionId) {
+      throw new Error(
+        'Calculation input page does not match the requested model.',
+      );
+    }
+    if (
+      expectedGraphVersionId !== undefined &&
+      page.graph_version_id !== expectedGraphVersionId
+    ) {
+      throw new Error(
+        'Calculation input page does not match the requested graph.',
+      );
+    }
     for (const input of page.inputs) {
       if (
         input.target_kind !== 'parameter' ||
@@ -351,6 +379,108 @@ export function deriveSliderSpec(
     max: multiplyDecimal(decimalValue, upperFactor, 5),
     step: multiplyDecimal(absoluteValue, 1, 250),
   };
+}
+
+export function resolveSensitivitySelections({
+  assumptions,
+  overridesByTarget,
+  storedTornadoDriverKeys,
+  storedRowDriverKey,
+  storedColumnDriverKey,
+  maxDrivers,
+}: SensitivitySelectionInput): {
+  tornadoDriverKeys: string[];
+  rowDriverKey: string | null;
+  columnDriverKey: string | null;
+} {
+  const rangeCapableKeys = assumptions
+    .filter(
+      (assumption) =>
+        deriveSliderSpec(
+          currentAssumptionValue(assumption, overridesByTarget),
+        ).kind === 'range',
+    )
+    .map((assumption) => assumption.targetKey);
+  const rangeCapable = new Set(rangeCapableKeys);
+  const storedDriversValid =
+    storedTornadoDriverKeys !== null &&
+    storedTornadoDriverKeys.length > 0 &&
+    storedTornadoDriverKeys.length <= maxDrivers &&
+    new Set(storedTornadoDriverKeys).size ===
+      storedTornadoDriverKeys.length &&
+    storedTornadoDriverKeys.every((targetKey) =>
+      rangeCapable.has(targetKey),
+    );
+  const tornadoDriverKeys = (
+    storedDriversValid
+      ? storedTornadoDriverKeys
+      : rangeCapableKeys.slice(0, maxDrivers)
+  ).slice(0, maxDrivers);
+
+  const rowDriverKey =
+    storedRowDriverKey !== null && rangeCapable.has(storedRowDriverKey)
+      ? storedRowDriverKey
+      : rangeCapableKeys[0] ?? null;
+  const columnDriverKey =
+    storedColumnDriverKey !== null &&
+    storedColumnDriverKey !== rowDriverKey &&
+    rangeCapable.has(storedColumnDriverKey)
+      ? storedColumnDriverKey
+      : rangeCapableKeys.find(
+          (targetKey) => targetKey !== rowDriverKey,
+        ) ?? null;
+
+  return { tornadoDriverKeys, rowDriverKey, columnDriverKey };
+}
+
+export function retainEligibleSensitivityDrivers(
+  assumptions: SensitivityAssumption[],
+  overridesByTarget: Record<string, string>,
+  currentDriverKeys: string[],
+): string[] {
+  const eligibleKeys = assumptions
+    .filter(
+      (assumption) =>
+        deriveSliderSpec(
+          currentAssumptionValue(assumption, overridesByTarget),
+        ).kind === 'range',
+    )
+    .map((assumption) => assumption.targetKey);
+  const eligible = new Set(eligibleKeys);
+  const retained = Array.from(new Set(currentDriverKeys)).filter(
+    (targetKey) => eligible.has(targetKey),
+  );
+  return retained.length > 0 ? retained : eligibleKeys.slice(0, 1);
+}
+
+export function canRetainSensitivityIdentity(
+  activeIdentity: SensitivityIdentity | null,
+  persisted: PersistedCalculationState,
+): boolean {
+  return (
+    activeIdentity !== null &&
+    persisted.modelVersionId === activeIdentity.modelVersionId &&
+    persisted.graphVersionId === activeIdentity.graphVersionId
+  );
+}
+
+export function formatSensitivityDelta(
+  value: number,
+  unit: string | null,
+  numberFormat: string | null,
+): string {
+  const percentage =
+    unit?.trim() === '%' || numberFormat?.includes('%') === true;
+  const displayedValue = percentage ? value * 100 : value;
+  const sign = displayedValue > 0 ? '+' : '';
+  const formatted = displayedValue.toLocaleString('en-US', {
+    maximumFractionDigits: 4,
+    minimumFractionDigits: 0,
+  });
+  if (percentage) {
+    return `${sign}${formatted} pp`;
+  }
+  return `${sign}${formatted}${unit ? ` ${unit}` : ''}`;
 }
 
 export function selectDefaultSensitivityOutput(

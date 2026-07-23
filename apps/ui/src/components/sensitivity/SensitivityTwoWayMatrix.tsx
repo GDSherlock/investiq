@@ -38,7 +38,7 @@ export function SensitivityTwoWayMatrix({
     }
     const normalized =
       maximum === minimum ? 0.5 : (value - minimum) / (maximum - minimum);
-    return `rgba(197, 160, 89, ${0.16 + normalized * 0.64})`;
+    return `rgba(197, 160, 89, ${0.06 + normalized * 0.18})`;
   };
 
   return (
@@ -100,7 +100,21 @@ export function SensitivityTwoWayMatrix({
                       cell.columnValue,
                     )}: ${value}. ${metadata}${reason}`}
                   >
-                    {cell.numericValue === null ? 'Unavailable' : value}
+                    <span>
+                      {cell.numericValue === null ? 'Unavailable' : value}
+                    </span>
+                    <details className="mt-1 text-[10px] font-sans text-slate-200">
+                      <summary className="cursor-pointer list-none underline decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400">
+                        Case details
+                      </summary>
+                      <p className="mt-1 whitespace-normal text-left">
+                        {metadata}
+                        {reason}
+                        {cell.warnings.length > 0
+                          ? `; ${cell.warnings.join('; ')}`
+                          : ''}
+                      </p>
+                    </details>
                   </td>
                 );
               })}

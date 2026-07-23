@@ -1,7 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   CartesianGrid,
   Legend,
@@ -29,6 +36,7 @@ import type {
 } from '@/lib/calculation-api-types';
 import {
   SENSITIVITY_WORKBENCH_VERSION,
+  createGuardedSensitivityStorage,
   persistSensitivityRunSelection,
   persistSensitivityWorkbenchDocument,
   readPersistedCalculationState,
@@ -40,8 +48,12 @@ import {
   buildTornadoRows,
   buildTwoWayMatrix,
   canApplySensitivityResponse,
+  canRetainSensitivityIdentity,
   deriveSliderSpec,
+  formatSensitivityDelta,
   loadAllEditableNumericParameters,
+  retainEligibleSensitivityDrivers,
+  resolveSensitivitySelections,
   restoreSensitivityOutputProjection,
   selectDefaultSensitivityOutput,
   type SensitivityAssumption,
@@ -186,7 +198,48 @@ function finiteDecimal(value: string): boolean {
   return value.trim() !== '' && Number.isFinite(Number(value));
 }
 
-function KpiCard({ kpi }: { kpi: SensitivityKpi }) {
+function pruneInactiveSensitivitySelections(
+  workbench: WorkbenchState,
+): WorkbenchState {
+  const rangeCapableKeys = new Set(
+    workbench.assumptions
+      .filter(
+        (assumption) =>
+          deriveSliderSpec(
+            currentAssumptionValue(
+              assumption,
+              workbench.overridesByTarget,
+            ),
+          ).kind === 'range',
+      )
+      .map((assumption) => assumption.targetKey),
+  );
+  const rowDriverKey =
+    workbench.rowDriverKey !== null &&
+    rangeCapableKeys.has(workbench.rowDriverKey)
+      ? workbench.rowDriverKey
+      : null;
+  const columnDriverKey =
+    workbench.columnDriverKey !== null &&
+    workbench.columnDriverKey !== rowDriverKey &&
+    rangeCapableKeys.has(workbench.columnDriverKey)
+      ? workbench.columnDriverKey
+      : null;
+  const tornadoDriverKeys = retainEligibleSensitivityDrivers(
+    workbench.assumptions,
+    workbench.overridesByTarget,
+    workbench.tornadoDriverKeys,
+  );
+  return {
+    ...workbench,
+    tornadoDriverKeys,
+    rowDriverKey,
+    columnDriverKey,
+    analysis: tornadoDriverKeys.length === 0 ? null : workbench.analysis,
+  };
+}
+
+const KpiCard = memo(function KpiCard({ kpi }: { kpi: SensitivityKpi }) {
   const available = kpi.current.availabilityStatus === 'available';
   return (
     <article className="rounded-lg border border-d-border bg-d-card p-4 shadow-sm">
@@ -234,9 +287,13 @@ function KpiCard({ kpi }: { kpi: SensitivityKpi }) {
       )}
     </article>
   );
-}
+});
 
-function SeriesChartCard({ series }: { series: SensitivitySeries }) {
+const SeriesChartCard = memo(function SeriesChartCard({
+  series,
+}: {
+  series: SensitivitySeries;
+}) {
   const data = series.points.map((point) => ({
     period: point.period ?? `Period ${point.periodIndex + 1}`,
     baseline: point.baseline.numericValue,
@@ -270,53 +327,91 @@ function SeriesChartCard({ series }: { series: SensitivitySeries }) {
       </div>
 
       {chartable ? (
-        <div className="mt-4 h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart
-              data={data}
-              margin={{ top: 8, right: 12, bottom: 8, left: 0 }}
-            >
-              <CartesianGrid stroke="rgba(148,163,184,0.12)" />
-              <XAxis
-                dataKey="period"
-                stroke="#94a3b8"
-                tick={{ fontSize: 11 }}
-              />
-              <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} width={56} />
-              <Tooltip
-                contentStyle={{
-                  background: '#111827',
-                  border: '1px solid #334155',
-                  borderRadius: 6,
-                }}
-                labelStyle={{ color: '#e2e8f0' }}
-              />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="baseline"
-                name="Baseline"
-                stroke="#94a3b8"
-                strokeDasharray="5 4"
-                strokeWidth={2}
-                connectNulls={false}
-              />
-              <Line
-                type="monotone"
-                dataKey="current"
-                name="Current"
-                stroke="#f4c430"
-                strokeWidth={2.5}
-                connectNulls={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+        <div className="mt-4">
+          <div
+            className="h-64"
+            role="img"
+            aria-label={`${series.label} time-series chart comparing baseline and current values across ${series.points.length} periods`}
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={data}
+                margin={{ top: 8, right: 12, bottom: 8, left: 0 }}
+              >
+                <CartesianGrid stroke="rgba(148,163,184,0.12)" />
+                <XAxis
+                  dataKey="period"
+                  stroke="#94a3b8"
+                  tick={{ fontSize: 11 }}
+                />
+                <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} width={56} />
+                <Tooltip
+                  contentStyle={{
+                    background: '#111827',
+                    border: '1px solid #334155',
+                    borderRadius: 6,
+                  }}
+                  labelStyle={{ color: '#e2e8f0' }}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="baseline"
+                  name="Baseline"
+                  stroke="#94a3b8"
+                  strokeDasharray="5 4"
+                  strokeWidth={2}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="current"
+                  name="Current"
+                  stroke="#f4c430"
+                  strokeWidth={2.5}
+                  connectNulls={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <ul className="sr-only">
+            {series.points.map((point) => (
+              <li key={point.financialSeriesValueId}>
+                {point.period ?? `Period ${point.periodIndex + 1}`}: baseline{' '}
+                {formatProjectedValue(
+                  point.baseline,
+                  series.unit,
+                  point.numberFormat,
+                )}
+                ; current{' '}
+                {formatProjectedValue(
+                  point.current,
+                  series.unit,
+                  point.numberFormat,
+                )}
+                .
+              </li>
+            ))}
+          </ul>
         </div>
       ) : (
         <p className="mt-4 rounded border border-amber-800/40 bg-amber-900/10 p-4 text-sm text-amber-200">
           This canonical series is unavailable. No substitute value is shown.
         </p>
       )}
+
+      {series.unavailableCurrentReasons.length > 0 ? (
+        <div className="mt-3 rounded border border-amber-800/40 bg-amber-900/10 p-3">
+          <p className="text-xs font-medium text-amber-200">
+            Unavailable current-period reasons
+          </p>
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-100">
+            {series.unavailableCurrentReasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <p className="mt-3 border-t border-d-border pt-3 text-xs text-d-muted">
         Changed periods:{' '}
@@ -329,7 +424,7 @@ function SeriesChartCard({ series }: { series: SensitivitySeries }) {
       </p>
     </article>
   );
-}
+});
 
 export default function SensitivityPage() {
   const [workbench, setWorkbench] =
@@ -345,21 +440,39 @@ export default function SensitivityPage() {
   const activeIdentityRef = useRef<ActiveIdentity | null>(null);
   const workbenchSnapshotRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
 
+  function invalidatePersistedIdentity() {
+    activeIdentityRef.current = null;
+    setRecalculating(false);
+    setError(
+      new Error(
+        'The persisted model or run selection changed. Refresh before editing this workbench.',
+      ),
+    );
+  }
+
   async function bootstrapWorkbench() {
     const bootstrapRevision = ++bootstrapRevisionRef.current;
+    const previousActiveIdentity = activeIdentityRef.current;
     requestRevisionRef.current += 1;
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    activeIdentityRef.current = null;
     setLoading(true);
     setRecalculating(false);
     setError(null);
     setEmptyReason(null);
 
     const persisted = readPersistedCalculationState(window.localStorage);
+    const canRetainPreviousIdentity = canRetainSensitivityIdentity(
+      previousActiveIdentity,
+      persisted,
+    );
+    if (!canRetainPreviousIdentity) {
+      activeIdentityRef.current = null;
+    }
     if (persisted.modelVersionId === null) {
+      activeIdentityRef.current = null;
       if (bootstrapRevision === bootstrapRevisionRef.current) {
         setWorkbench(() => EMPTY_WORKBENCH);
         workbenchSnapshotRef.current = EMPTY_WORKBENCH;
@@ -369,6 +482,7 @@ export default function SensitivityPage() {
       return;
     }
     if (persisted.graphVersionId === null) {
+      activeIdentityRef.current = null;
       if (bootstrapRevision === bootstrapRevisionRef.current) {
         setWorkbench(() => EMPTY_WORKBENCH);
         workbenchSnapshotRef.current = EMPTY_WORKBENCH;
@@ -378,6 +492,7 @@ export default function SensitivityPage() {
       return;
     }
     if (persisted.baselineRunId === null) {
+      activeIdentityRef.current = null;
       if (bootstrapRevision === bootstrapRevisionRef.current) {
         setWorkbench(() => EMPTY_WORKBENCH);
         workbenchSnapshotRef.current = EMPTY_WORKBENCH;
@@ -391,53 +506,43 @@ export default function SensitivityPage() {
       modelVersionId: persisted.modelVersionId,
       graphVersionId: persisted.graphVersionId,
     };
-    const bootstrapStorage = {
-      getItem(key: string) {
-        return window.localStorage.getItem(key);
-      },
-      removeItem(key: string) {
-        const current = readPersistedCalculationState(window.localStorage);
-        if (
-          bootstrapRevision === bootstrapRevisionRef.current &&
-          current.modelVersionId === identity.modelVersionId &&
-          current.graphVersionId === identity.graphVersionId
-        ) {
-          window.localStorage.removeItem(key);
-        }
-      },
-      setItem(key: string, value: string) {
-        const current = readPersistedCalculationState(window.localStorage);
-        if (
-          bootstrapRevision === bootstrapRevisionRef.current &&
-          current.modelVersionId === identity.modelVersionId &&
-          current.graphVersionId === identity.graphVersionId
-        ) {
-          window.localStorage.setItem(key, value);
-        }
-      },
-    };
+    const bootstrapStorage = createGuardedSensitivityStorage(
+      window.localStorage,
+      persisted,
+      () => bootstrapRevision === bootstrapRevisionRef.current,
+    );
 
     try {
       const readiness = await getCalculationReadiness(identity.modelVersionId);
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
         return;
       }
+      if (!bootstrapStorage.matchesCurrent()) {
+        invalidatePersistedIdentity();
+        return;
+      }
       if (
         readiness.model_version_id !== identity.modelVersionId ||
-        readiness.graph_version_id !== identity.graphVersionId
+        readiness.graph_version_id !== identity.graphVersionId ||
+        !['ready', 'ready_with_warning'].includes(readiness.status)
       ) {
+        activeIdentityRef.current = null;
         throw new Error(
-          'Stored model and calculation graph no longer match readiness.',
+          'Stored model and calculation graph no longer match calculation readiness.',
         );
       }
 
       const storedDocument = readSensitivityWorkbenchDocument(
-        window.localStorage,
+        bootstrapStorage,
         identity.modelVersionId,
         identity.graphVersionId,
       );
       const [assumptions, outputs] = await Promise.all([
-        loadAllEditableNumericParameters(identity.modelVersionId),
+        loadAllEditableNumericParameters(
+          identity.modelVersionId,
+          undefined,
+          identity.graphVersionId,
+        ),
         restoreSensitivityOutputProjection(
           bootstrapStorage,
           persisted,
@@ -446,15 +551,28 @@ export default function SensitivityPage() {
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
         return;
       }
+      if (!bootstrapStorage.matchesCurrent()) {
+        invalidatePersistedIdentity();
+        return;
+      }
+      const restoredPersisted = readPersistedCalculationState(
+        window.localStorage,
+      );
       if (outputs === null) {
+        activeIdentityRef.current = null;
         setEmptyReason('outputs');
         return;
       }
       if (
         outputs.model_version_id !== identity.modelVersionId ||
         outputs.graph_version_id !== identity.graphVersionId ||
-        outputs.comparison_baseline_run_id !== persisted.baselineRunId
+        outputs.comparison_baseline_run_id !==
+          restoredPersisted.baselineRunId ||
+        outputs.calculation_run_id !==
+          (restoredPersisted.overrideRunId ??
+            restoredPersisted.baselineRunId)
       ) {
+        activeIdentityRef.current = null;
         throw new Error(
           'Persisted output projection does not match the active model, graph, and baseline.',
         );
@@ -489,47 +607,20 @@ export default function SensitivityPage() {
           ? storedDocument.selectedOutputId
           : selectDefaultSensitivityOutput(outputView.kpis);
 
-      const validStoredDrivers =
-        storedDocument?.tornadoDriverKeys.filter((targetKey) =>
-          assumptionByKey.has(targetKey),
-        ) ?? null;
-      const storedDriversAreValid =
-        storedDocument !== null &&
-        validStoredDrivers !== null &&
-        validStoredDrivers.length === storedDocument.tornadoDriverKeys.length;
-      const defaultDrivers = assumptions
-        .filter(
-          (assumption) =>
-            deriveSliderSpec(
-              currentAssumptionValue(assumption, overridesByTarget),
-            ).kind === 'range',
-        )
-        .slice(0, MAX_TORNADO_DRIVERS)
-        .map((assumption) => assumption.targetKey);
-      const tornadoDriverKeys = (
-        storedDriversAreValid ? validStoredDrivers : defaultDrivers
-      ).slice(0, MAX_TORNADO_DRIVERS);
-
-      const validAxisKeys = assumptions
-        .filter(
-          (assumption) =>
-            deriveSliderSpec(
-              currentAssumptionValue(assumption, overridesByTarget),
-            ).kind === 'range',
-        )
-        .map((assumption) => assumption.targetKey);
-      const rowDriverKey =
-        storedDocument?.rowDriverKey &&
-        assumptionByKey.has(storedDocument.rowDriverKey)
-          ? storedDocument.rowDriverKey
-          : validAxisKeys[0] ?? null;
-      const columnDriverKey =
-        storedDocument?.columnDriverKey &&
-        storedDocument.columnDriverKey !== rowDriverKey &&
-        assumptionByKey.has(storedDocument.columnDriverKey)
-          ? storedDocument.columnDriverKey
-          : validAxisKeys.find((targetKey) => targetKey !== rowDriverKey) ??
-            null;
+      const {
+        tornadoDriverKeys,
+        rowDriverKey,
+        columnDriverKey,
+      } = resolveSensitivitySelections({
+        assumptions,
+        overridesByTarget,
+        storedTornadoDriverKeys:
+          storedDocument?.tornadoDriverKeys ?? null,
+        storedRowDriverKey: storedDocument?.rowDriverKey ?? null,
+        storedColumnDriverKey:
+          storedDocument?.columnDriverKey ?? null,
+        maxDrivers: MAX_TORNADO_DRIVERS,
+      });
 
       const nextWorkbench: WorkbenchState = {
         assumptions,
@@ -565,6 +656,7 @@ export default function SensitivityPage() {
 
   function scheduleAnalysis(nextWorkbench: WorkbenchState) {
     const identity = activeIdentityRef.current;
+    const persisted = readPersistedCalculationState(window.localStorage);
     const revision = ++requestRevisionRef.current;
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
@@ -580,17 +672,31 @@ export default function SensitivityPage() {
       setRecalculating(false);
       return;
     }
+    if (
+      persisted.modelVersionId !== identity.modelVersionId ||
+      persisted.graphVersionId !== identity.graphVersionId ||
+      persisted.baselineRunId === null
+    ) {
+      invalidatePersistedIdentity();
+      return;
+    }
 
     setRecalculating(true);
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
-      void executeAnalysis(revision, identity, nextWorkbench);
+      void executeAnalysis(
+        revision,
+        identity,
+        persisted,
+        nextWorkbench,
+      );
     }, SENSITIVITY_DEBOUNCE_MS);
   }
 
   async function executeAnalysis(
     revision: number,
     identity: ActiveIdentity,
+    persisted: ReturnType<typeof readPersistedCalculationState>,
     requestWorkbench: WorkbenchState,
   ) {
     const stillCurrent = () => {
@@ -601,6 +707,11 @@ export default function SensitivityPage() {
         activeIdentity.graphVersionId === identity.graphVersionId
       );
     };
+    const guardedStorage = createGuardedSensitivityStorage(
+      window.localStorage,
+      persisted,
+      stillCurrent,
+    );
 
     try {
       const request = buildSensitivityRequest({
@@ -614,8 +725,12 @@ export default function SensitivityPage() {
       });
       if (request.drivers.length === 0) {
         throw new Error(
-          'Select at least one non-zero canonical assumption as a driver.',
+          'At least one non-zero tornado driver is required.',
         );
+      }
+      if (!guardedStorage.matchesCurrent()) {
+        invalidatePersistedIdentity();
+        return;
       }
 
       const analysis = await runCalculationSensitivity(
@@ -630,14 +745,25 @@ export default function SensitivityPage() {
           graphVersionId: identity.graphVersionId,
           outputId: request.output_id,
         }) ||
+        analysis.comparison_baseline_run_id !== persisted.baselineRunId ||
         !stillCurrent()
       ) {
         return;
       }
+      if (!guardedStorage.matchesCurrent()) {
+        invalidatePersistedIdentity();
+        return;
+      }
 
       const outputs = await getCalculationRunOutputs(analysis.current_run_id);
+      if (!stillCurrent()) {
+        return;
+      }
+      if (!guardedStorage.matchesCurrent()) {
+        invalidatePersistedIdentity();
+        return;
+      }
       if (
-        !stillCurrent() ||
         outputs.calculation_run_id !== analysis.current_run_id ||
         outputs.model_version_id !== analysis.model_version_id ||
         outputs.graph_version_id !== analysis.graph_version_id ||
@@ -662,12 +788,20 @@ export default function SensitivityPage() {
         analysis,
         outputs,
       };
+      if (!guardedStorage.matchesCurrent()) {
+        invalidatePersistedIdentity();
+        return;
+      }
       workbenchSnapshotRef.current = appliedWorkbench;
       setWorkbench(() => appliedWorkbench);
-      persistSensitivityRunSelection(window.localStorage, analysis);
-      persistSensitivityWorkbenchDocument(window.localStorage, document);
+      persistSensitivityRunSelection(guardedStorage, analysis);
+      persistSensitivityWorkbenchDocument(guardedStorage, document);
     } catch (caught) {
       if (!stillCurrent()) {
+        return;
+      }
+      if (!guardedStorage.matchesCurrent()) {
+        invalidatePersistedIdentity();
         return;
       }
       setError(
@@ -685,7 +819,9 @@ export default function SensitivityPage() {
   function applyUserUpdate(
     update: (current: WorkbenchState) => WorkbenchState,
   ) {
-    const nextWorkbench = update(workbenchSnapshotRef.current);
+    const nextWorkbench = pruneInactiveSensitivitySelections(
+      update(workbenchSnapshotRef.current),
+    );
     workbenchSnapshotRef.current = nextWorkbench;
     setWorkbench(() => nextWorkbench);
     scheduleAnalysis(nextWorkbench);
@@ -734,6 +870,77 @@ export default function SensitivityPage() {
         ? buildTwoWayMatrix(workbench.analysis, assumptionsByTarget)
         : null,
     [assumptionsByTarget, workbench.analysis],
+  );
+  const availableNumericKpis = useMemo(
+    () =>
+      outputView?.kpis.filter(
+        (kpi) =>
+          kpi.current.availabilityStatus === 'available' &&
+          kpi.current.numericValue !== null,
+      ) ?? [],
+    [outputView],
+  );
+  const selectedKpi =
+    availableNumericKpis.find(
+      (kpi) => kpi.outputId === workbench.selectedOutputId,
+    ) ?? null;
+  const analyzedOutput = workbench.analysis?.selected_output ?? null;
+  const analyzedOutputLabel =
+    analyzedOutput?.label ?? selectedKpi?.label ?? 'Output';
+  const analyzedOutputUnit =
+    analyzedOutput?.unit ?? selectedKpi?.unit ?? null;
+  const analyzedNumberFormat =
+    analyzedOutput?.number_format ?? selectedKpi?.numberFormat ?? null;
+  const analysisMatchesSelectedOutput =
+    analyzedOutput?.output_id === workbench.selectedOutputId;
+  const driverSelectionPending =
+    workbench.tornadoDriverKeys.length === 0;
+  const rangeCapableAssumptions = useMemo(
+    () =>
+      workbench.assumptions.filter(
+        (assumption) =>
+          deriveSliderSpec(
+            currentAssumptionValue(
+              assumption,
+              workbench.overridesByTarget,
+            ),
+          ).kind === 'range',
+      ),
+    [workbench.assumptions, workbench.overridesByTarget],
+  );
+  const formatAxisValue = useCallback(
+    (targetKey: string, value: string): string => {
+      const assumption = assumptionsByTarget.get(targetKey);
+      const numericValue = Number(value);
+      if (!Number.isFinite(numericValue)) {
+        return 'Unavailable';
+      }
+      if (assumption?.unit?.trim() === '%') {
+        return `${formatNumber(numericValue * 100)}%`;
+      }
+      return assumption?.unit
+        ? `${formatNumber(numericValue)} ${assumption.unit}`
+        : formatNumber(numericValue);
+    },
+    [assumptionsByTarget],
+  );
+  const formatAnalyzedOutputValue = useCallback(
+    (value: number | null) =>
+      formatNumericOutput(
+        value,
+        analyzedOutputUnit,
+        analyzedNumberFormat,
+      ),
+    [analyzedNumberFormat, analyzedOutputUnit],
+  );
+  const formatAnalyzedOutputDelta = useCallback(
+    (value: number) =>
+      formatSensitivityDelta(
+        value,
+        analyzedOutputUnit,
+        analyzedNumberFormat,
+      ),
+    [analyzedNumberFormat, analyzedOutputUnit],
   );
 
   if (loading) {
@@ -790,35 +997,6 @@ export default function SensitivityPage() {
     );
   }
 
-  const availableNumericKpis = outputView.kpis.filter(
-    (kpi) =>
-      kpi.current.availabilityStatus === 'available' &&
-      kpi.current.numericValue !== null,
-  );
-  const selectedKpi =
-    availableNumericKpis.find(
-      (kpi) => kpi.outputId === workbench.selectedOutputId,
-    ) ?? null;
-  const analyzedOutput = workbench.analysis?.selected_output ?? null;
-  const analyzedOutputLabel = analyzedOutput?.label ?? selectedKpi?.label ?? 'Output';
-  const analyzedOutputUnit = analyzedOutput?.unit ?? selectedKpi?.unit ?? null;
-  const analyzedNumberFormat =
-    analyzedOutput?.number_format ?? selectedKpi?.numberFormat ?? null;
-
-  const formatAxisValue = (targetKey: string, value: string): string => {
-    const assumption = assumptionsByTarget.get(targetKey);
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) {
-      return 'Unavailable';
-    }
-    if (assumption?.unit?.trim() === '%') {
-      return `${formatNumber(numericValue * 100)}%`;
-    }
-    return assumption?.unit
-      ? `${formatNumber(numericValue)} ${assumption.unit}`
-      : formatNumber(numericValue);
-  };
-
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -837,12 +1015,16 @@ export default function SensitivityPage() {
           <span
             aria-live="polite"
             className={`rounded px-3 py-1 text-xs font-medium ${
-              recalculating
+              recalculating || error !== null || driverSelectionPending
                 ? 'bg-amber-900/30 text-amber-200'
                 : 'bg-green-900/30 text-green-300'
             }`}
           >
-            {recalculating ? 'Recalculating…' : 'Persisted results'}
+            {recalculating
+              ? 'Recalculating…'
+              : error !== null || driverSelectionPending
+                ? 'Last successful result retained'
+                : 'Persisted results'}
           </span>
           <button
             type="button"
@@ -863,7 +1045,24 @@ export default function SensitivityPage() {
         </div>
       ) : null}
 
-      <div className="grid items-start gap-5 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+      {driverSelectionPending ? (
+        <div
+          role="status"
+          className="rounded border border-amber-800/60 bg-amber-900/15 p-3 text-sm text-amber-100"
+        >
+          Tornado analysis is pending a non-zero driver. Enter a non-zero
+          assumption value to enable recalculation; the displayed outputs are
+          the last successful persisted result.
+        </div>
+      ) : null}
+
+      <fieldset
+        disabled={activeIdentityRef.current === null}
+        className="grid min-w-0 items-start gap-5 disabled:cursor-not-allowed lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]"
+      >
+        <legend className="sr-only">
+          Canonical sensitivity controls and results
+        </legend>
         <SensitivityAssumptionPanel
           assumptions={workbench.assumptions}
           overridesByTarget={workbench.overridesByTarget}
@@ -898,6 +1097,20 @@ export default function SensitivityPage() {
             applyUserUpdate((current) => {
               const driverKeys = new Set(current.tornadoDriverKeys);
               if (selected) {
+                const assumption = current.assumptions.find(
+                  (candidate) => candidate.targetKey === targetKey,
+                );
+                if (
+                  assumption === undefined ||
+                  deriveSliderSpec(
+                    currentAssumptionValue(
+                      assumption,
+                      current.overridesByTarget,
+                    ),
+                  ).kind !== 'range'
+                ) {
+                  return current;
+                }
                 if (driverKeys.size >= MAX_TORNADO_DRIVERS) {
                   return current;
                 }
@@ -956,7 +1169,7 @@ export default function SensitivityPage() {
                       selectedOutputId: event.target.value || null,
                     }))
                   }
-                  className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus:border-gold-400 focus:outline-none"
+                  className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus-visible:border-gold-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
                 >
                   {availableNumericKpis.map((kpi) => (
                     <option key={kpi.outputId} value={kpi.outputId}>
@@ -966,17 +1179,27 @@ export default function SensitivityPage() {
                 </select>
               </label>
             </div>
+            {workbench.analysis !== null &&
+            !analysisMatchesSelectedOutput ? (
+              <p
+                role="status"
+                className="mt-4 rounded border border-amber-800/50 bg-amber-900/10 p-3 text-xs text-amber-100"
+              >
+                Showing the last successful analysis for{' '}
+                <span className="font-semibold">{analyzedOutputLabel}</span>.
+                The selected output{' '}
+                <span className="font-semibold">
+                  {selectedKpi?.label ?? 'is unavailable'}
+                </span>{' '}
+                has not replaced it.
+              </p>
+            ) : null}
             <div className="mt-4">
               <SensitivityTornadoChart
                 rows={tornadoRows}
                 outputLabel={analyzedOutputLabel}
-                formatValue={(value) =>
-                  formatNumericOutput(
-                    value,
-                    analyzedOutputUnit,
-                    analyzedNumberFormat,
-                  )
-                }
+                formatValue={formatAnalyzedOutputValue}
+                formatDelta={formatAnalyzedOutputDelta}
               />
             </div>
           </section>
@@ -1060,10 +1283,10 @@ export default function SensitivityPage() {
                         rowDriverKey: event.target.value || null,
                       }))
                     }
-                    className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus:border-gold-400 focus:outline-none"
+                    className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus-visible:border-gold-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
                   >
                     <option value="">None</option>
-                    {workbench.assumptions.map((assumption) => (
+                    {rangeCapableAssumptions.map((assumption) => (
                       <option
                         key={assumption.targetKey}
                         value={assumption.targetKey}
@@ -1083,10 +1306,10 @@ export default function SensitivityPage() {
                         columnDriverKey: event.target.value || null,
                       }))
                     }
-                    className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus:border-gold-400 focus:outline-none"
+                    className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus-visible:border-gold-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
                   >
                     <option value="">None</option>
-                    {workbench.assumptions.map((assumption) => (
+                    {rangeCapableAssumptions.map((assumption) => (
                       <option
                         key={assumption.targetKey}
                         value={assumption.targetKey}
@@ -1102,19 +1325,13 @@ export default function SensitivityPage() {
                   matrix={matrix}
                   outputLabel={analyzedOutputLabel}
                   formatAxisValue={formatAxisValue}
-                  formatOutputValue={(value) =>
-                    formatNumericOutput(
-                      value,
-                      analyzedOutputUnit,
-                      analyzedNumberFormat,
-                    )
-                  }
+                  formatOutputValue={formatAnalyzedOutputValue}
                 />
               </div>
             </section>
           </div>
         </div>
-      </div>
+      </fieldset>
 
       <section>
         <div className="mb-3">

@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+
 import {
   deriveSliderSpec,
   type SensitivityAssumption,
@@ -55,7 +57,14 @@ export function SensitivityAssumptionPanel({
   onResetAll,
   onToggleDriver,
 }: SensitivityAssumptionPanelProps) {
-  const selectedDrivers = new Set(tornadoDriverKeys);
+  const selectedDrivers = useMemo(
+    () => new Set(tornadoDriverKeys),
+    [tornadoDriverKeys],
+  );
+  const groupedAssumptions = useMemo(
+    () => categoryGroups(assumptions),
+    [assumptions],
+  );
   const driverLimitReached = selectedDrivers.size >= maxDrivers;
   const hasOverrides = Object.keys(overridesByTarget).length > 0;
 
@@ -78,14 +87,14 @@ export function SensitivityAssumptionPanel({
         </button>
       </div>
 
-      <div className="max-h-[calc(100vh-12rem)] space-y-5 overflow-y-auto p-4">
+      <div className="space-y-5 p-4 lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto">
         {assumptions.length === 0 ? (
           <p className="rounded border border-amber-800/50 bg-amber-900/10 p-3 text-sm text-amber-200">
             This model has no editable numeric canonical parameters.
           </p>
         ) : null}
 
-        {categoryGroups(assumptions).map((group) => (
+        {groupedAssumptions.map((group) => (
           <section key={group.category}>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gold-300">
               {group.category}
@@ -101,6 +110,9 @@ export function SensitivityAssumptionPanel({
                     ? deriveSliderSpec(value)
                     : baseSpec;
                 const selected = selectedDrivers.has(assumption.targetKey);
+                const rangeCapable = sliderSpec.kind === 'range';
+                const onlySelectedDriver =
+                  selected && selectedDrivers.size === 1;
                 const inputId = `assumption-${assumption.targetKey}`;
                 const driverId = `driver-${assumption.targetKey}`;
                 const changed =
@@ -185,7 +197,17 @@ export function SensitivityAssumptionPanel({
                         id={driverId}
                         type="checkbox"
                         checked={selected}
-                        disabled={!selected && driverLimitReached}
+                        disabled={
+                          !rangeCapable ||
+                          onlySelectedDriver ||
+                          (!selected && driverLimitReached)
+                        }
+                        aria-label={`Include ${assumption.label} as tornado driver`}
+                        aria-describedby={
+                          !rangeCapable || onlySelectedDriver
+                            ? `${driverId}-help`
+                            : undefined
+                        }
                         onChange={(event) =>
                           onToggleDriver(
                             assumption.targetKey,
@@ -196,11 +218,25 @@ export function SensitivityAssumptionPanel({
                       />
                       <span>
                         Include as tornado driver
-                        {!selected && driverLimitReached
-                          ? ` — ${maxDrivers}-driver limit reached`
-                          : ''}
+                        {!rangeCapable
+                          ? ' — requires a non-zero value'
+                          : onlySelectedDriver
+                            ? ' — at least one non-zero driver required'
+                            : !selected && driverLimitReached
+                              ? ` — ${maxDrivers}-driver limit reached`
+                              : ''}
                       </span>
                     </label>
+                    {!rangeCapable || onlySelectedDriver ? (
+                      <p
+                        id={`${driverId}-help`}
+                        className="mt-1 pl-6 text-[11px] text-amber-200"
+                      >
+                        {!rangeCapable
+                          ? 'Enter a non-zero value before selecting this driver.'
+                          : 'At least one non-zero driver required; select another eligible driver before removing this one.'}
+                      </p>
+                    ) : null}
                   </div>
                 );
               })}

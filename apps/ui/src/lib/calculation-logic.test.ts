@@ -31,6 +31,8 @@ import {
   CALCULATION_STORAGE_KEYS,
   SENSITIVITY_WORKBENCH_VERSION,
   clearCalculationArtifacts,
+  createGuardedSensitivityStorage,
+  matchesPersistedSensitivityIdentity,
   persistGraphVersionId,
   persistSensitivityRunSelection,
   persistSensitivityWorkbenchDocument,
@@ -54,8 +56,12 @@ import {
   buildTornadoRows,
   buildTwoWayMatrix,
   canApplySensitivityResponse,
+  canRetainSensitivityIdentity,
   deriveSliderSpec,
+  formatSensitivityDelta,
   loadAllEditableNumericParameters,
+  retainEligibleSensitivityDrivers,
+  resolveSensitivitySelections,
   restoreSensitivityOutputProjection,
   selectDefaultSensitivityOutput,
   type SensitivityAssumption,
@@ -1096,6 +1102,7 @@ test('editable numeric parameter loading follows every cursor and returns stable
   const assumptions = await loadAllEditableNumericParameters(
     'model-version',
     getInputs,
+    'graph-version',
   );
 
   assert.deepEqual(cursors, [undefined, 'next-page']);
@@ -1127,6 +1134,34 @@ test('editable numeric parameter loading follows every cursor and returns stable
   );
 });
 
+test('canonical input pagination rejects stale model or graph pages', async () => {
+  const page = {
+    model_version_id: 'model-version',
+    graph_version_id: 'graph-version',
+    inputs: [],
+    next_cursor: null,
+  };
+
+  await assert.rejects(
+    () =>
+      loadAllEditableNumericParameters(
+        'model-version',
+        async () => ({ ...page, model_version_id: 'other-model' }),
+        'graph-version',
+      ),
+    /requested model/,
+  );
+  await assert.rejects(
+    () =>
+      loadAllEditableNumericParameters(
+        'model-version',
+        async () => ({ ...page, graph_version_id: 'other-graph' }),
+        'graph-version',
+      ),
+    /requested graph/,
+  );
+});
+
 test('slider ranges use absolute twenty-percent bounds and one-hundred steps', () => {
   assert.deepEqual(deriveSliderSpec('100'), {
     kind: 'range',
@@ -1147,6 +1182,12 @@ test('slider ranges use absolute twenty-percent bounds and one-hundred steps', (
     step: '0.0004',
   });
   assert.deepEqual(deriveSliderSpec('0'), { kind: 'number' });
+});
+
+test('sensitivity deltas use percentage points and preserve other output units', () => {
+  assert.equal(formatSensitivityDelta(0.01, '%', null), '+1 pp');
+  assert.equal(formatSensitivityDelta(-1250, 'USD', null), '-1,250 USD');
+  assert.equal(formatSensitivityDelta(2.5, null, null), '+2.5');
 });
 
 test('default output prioritizes available project IRR, equity IRR, NPV, then display order', () => {
@@ -1305,6 +1346,89 @@ test('two-way request is omitted for missing, equal, or zero-valued axes', () =>
       columnDriverKey: 'parameter:one',
     }).two_way,
     null,
+  );
+});
+
+test('stored driver and axis selections require current non-zero effective values', () => {
+  const assumptions = [
+    numericAssumption('zero', '0'),
+    numericAssumption('one', '1'),
+    numericAssumption('two', '2'),
+  ];
+  assert.deepEqual(
+    resolveSensitivitySelections({
+      assumptions,
+      overridesByTarget: {},
+      storedTornadoDriverKeys: ['parameter:zero'],
+      storedRowDriverKey: 'parameter:zero',
+      storedColumnDriverKey: 'parameter:zero',
+      maxDrivers: 12,
+    }),
+    {
+      tornadoDriverKeys: ['parameter:one', 'parameter:two'],
+      rowDriverKey: 'parameter:one',
+      columnDriverKey: 'parameter:two',
+    },
+  );
+
+  assert.deepEqual(
+    resolveSensitivitySelections({
+      assumptions,
+      overridesByTarget: {},
+      storedTornadoDriverKeys: [],
+      storedRowDriverKey: 'parameter:one',
+      storedColumnDriverKey: 'parameter:two',
+      maxDrivers: 12,
+    }).tornadoDriverKeys,
+    ['parameter:one', 'parameter:two'],
+  );
+
+  assert.deepEqual(
+    resolveSensitivitySelections({
+      assumptions,
+      overridesByTarget: { 'parameter:zero': '3' },
+      storedTornadoDriverKeys: ['parameter:zero'],
+      storedRowDriverKey: 'parameter:zero',
+      storedColumnDriverKey: 'parameter:two',
+      maxDrivers: 12,
+    }),
+    {
+      tornadoDriverKeys: ['parameter:zero'],
+      rowDriverKey: 'parameter:zero',
+      columnDriverKey: 'parameter:two',
+    },
+  );
+});
+
+test('interactive driver selection retains one deterministic eligible non-zero target', () => {
+  const assumptions = [
+    numericAssumption('zero', '0'),
+    numericAssumption('one', '1'),
+    numericAssumption('two', '2'),
+  ];
+  assert.deepEqual(
+    retainEligibleSensitivityDrivers(
+      assumptions,
+      {},
+      ['parameter:zero'],
+    ),
+    ['parameter:one'],
+  );
+  assert.deepEqual(
+    retainEligibleSensitivityDrivers(
+      assumptions,
+      { 'parameter:zero': '3' },
+      [],
+    ),
+    ['parameter:zero'],
+  );
+  assert.deepEqual(
+    retainEligibleSensitivityDrivers(
+      [numericAssumption('zero', '0')],
+      {},
+      ['parameter:zero'],
+    ),
+    [],
   );
 });
 
@@ -1509,6 +1633,45 @@ test('sensitivity run selection uses only explicit comparison baseline and curre
   );
 });
 
+test('guarded sensitivity storage rejects cross-tab identity changes but accepts its own run update', () => {
+  const storage = new MemoryStorage();
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-version');
+  storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'graph-version');
+  storage.setItem(CALCULATION_STORAGE_KEYS.baselineRunId, 'baseline-run');
+  storage.setItem(CALCULATION_STORAGE_KEYS.overrideRunId, 'old-run');
+  const expected = readPersistedCalculationState(storage);
+  const guarded = createGuardedSensitivityStorage(storage, expected);
+
+  assert.equal(matchesPersistedSensitivityIdentity(storage, expected), true);
+  guarded.setItem(CALCULATION_STORAGE_KEYS.overrideRunId, 'new-run');
+  guarded.setItem(
+    CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+    '{"selection":"new-run"}',
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
+    'new-run',
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
+    '{"selection":"new-run"}',
+  );
+  assert.equal(guarded.matchesCurrent(), true);
+
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'other-model');
+  assert.equal(guarded.matchesCurrent(), false);
+  guarded.setItem(CALCULATION_STORAGE_KEYS.overrideRunId, 'stale-write');
+  guarded.removeItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench);
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
+    'new-run',
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
+    '{"selection":"new-run"}',
+  );
+});
+
 test('GET-only sensitivity restore clears a structured missing override then loads baseline', async () => {
   const storage = new MemoryStorage();
   storage.setItem(CALCULATION_STORAGE_KEYS.baselineRunId, 'baseline-run');
@@ -1623,6 +1786,37 @@ test('revision/model/graph/output guard rejects stale sensitivity responses', ()
     }),
     false,
   );
+});
+
+test('transient refresh may retain only the matching active model and graph identity', () => {
+  const persisted = {
+    workbookVersionId: null,
+    modelVersionId: 'model-version',
+    graphVersionId: 'graph-version',
+    baselineRunId: 'baseline-run',
+    overrideRunId: null,
+  };
+  assert.equal(
+    canRetainSensitivityIdentity(
+      {
+        modelVersionId: 'model-version',
+        graphVersionId: 'graph-version',
+      },
+      persisted,
+    ),
+    true,
+  );
+  assert.equal(
+    canRetainSensitivityIdentity(
+      {
+        modelVersionId: 'other-model',
+        graphVersionId: 'graph-version',
+      },
+      persisted,
+    ),
+    false,
+  );
+  assert.equal(canRetainSensitivityIdentity(null, persisted), false);
 });
 
 test('output adapter retains unclassified outputs and compares against the explicit baseline', () => {
@@ -1924,11 +2118,19 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   assert.match(bootstrapSource, /const bootstrapStorage/);
   assert.match(
     bootstrapSource,
-    /bootstrapRevision === bootstrapRevisionRef\.current[\s\S]*current\.modelVersionId === identity\.modelVersionId[\s\S]*current\.graphVersionId === identity\.graphVersionId/,
+    /createGuardedSensitivityStorage\([\s\S]*bootstrapRevision === bootstrapRevisionRef\.current/,
   );
   assert.match(
     bootstrapSource,
     /restoreSensitivityOutputProjection\(\s*bootstrapStorage,/,
+  );
+  assert.match(
+    bootstrapSource,
+    /readSensitivityWorkbenchDocument\(\s*bootstrapStorage,/,
+  );
+  assert.match(
+    bootstrapSource,
+    /loadAllEditableNumericParameters\([\s\S]*identity\.graphVersionId/,
   );
   assert.doesNotMatch(bootstrapSource, /runCalculationSensitivity/);
   assert.doesNotMatch(bootstrapSource, /method:\s*['"]POST['"]/);
@@ -1968,6 +2170,59 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   assert.match(pageSource, /SENSITIVITY_DEBOUNCE_MS\s*=\s*400/);
   assert.match(pageSource, /requestRevisionRef\.current/);
   assert.match(pageSource, /clearTimeout/);
+  assert.match(pageSource, /matchesCurrent\(\)/);
+  assert.match(
+    pageSource,
+    /nextWorkbench\.tornadoDriverKeys\.length\s*===\s*0/,
+  );
+  assert.match(
+    pageSource,
+    /request\.drivers\.length\s*===\s*0/,
+  );
+});
+
+test('sensitivity review fixes expose retained-state, zero-driver, provenance, and accessible chart affordances', () => {
+  const pageSource = readFileSync('src/app/sensitivity/page.tsx', 'utf8');
+  const panelSource = readFileSync(
+    'src/components/sensitivity/SensitivityAssumptionPanel.tsx',
+    'utf8',
+  );
+  const tornadoSource = readFileSync(
+    'src/components/sensitivity/SensitivityTornadoChart.tsx',
+    'utf8',
+  );
+  const matrixSource = readFileSync(
+    'src/components/sensitivity/SensitivityTwoWayMatrix.tsx',
+    'utf8',
+  );
+
+  assert.match(pageSource, /Last successful result retained/);
+  assert.match(pageSource, /unavailableCurrentReasons/);
+  assert.match(pageSource, /time-series chart/i);
+  assert.match(pageSource, /focus-visible:ring-2/);
+  assert.match(pageSource, /memo\(function KpiCard/);
+  assert.match(pageSource, /memo\(function SeriesChartCard/);
+  assert.match(panelSource, /useMemo/);
+  assert.match(
+    panelSource,
+    /Include \$\{assumption\.label\} as tornado driver/,
+  );
+  assert.match(panelSource, /non-zero value/i);
+  assert.match(panelSource, /at least one non-zero driver required/i);
+  assert.match(
+    panelSource,
+    /const baseSpec = deriveSliderSpec\(assumption\.currentValue\)/,
+  );
+  assert.match(
+    panelSource,
+    /baseSpec\.kind === 'number'[\s\S]*deriveSliderSpec\(value\)[\s\S]*: baseSpec/,
+  );
+  assert.match(panelSource, /lg:max-h/);
+  assert.doesNotMatch(panelSource, /className="max-h/);
+  assert.match(tornadoSource, /Case provenance/);
+  assert.match(tornadoSource, /formatDelta/);
+  assert.match(matrixSource, /Case details/);
+  assert.doesNotMatch(matrixSource, /normalized \* 0\.64/);
 });
 
 test('only the newest sensitivity response may apply when requests resolve out of order', async () => {

@@ -41,6 +41,18 @@ export interface PersistedCalculationState {
   overrideRunId: string | null;
 }
 
+export type PersistedSensitivityIdentity = Pick<
+  PersistedCalculationState,
+  | 'modelVersionId'
+  | 'graphVersionId'
+  | 'baselineRunId'
+  | 'overrideRunId'
+>;
+
+export interface GuardedSensitivityStorage extends StorageLike {
+  matchesCurrent(): boolean;
+}
+
 export interface RestorableCalculationIdentity {
   modelVersionId: string;
   workbookVersionId: string;
@@ -230,6 +242,73 @@ export function readPersistedCalculationState(
       storage,
       CALCULATION_STORAGE_KEYS.overrideRunId,
     ),
+  };
+}
+
+export function matchesPersistedSensitivityIdentity(
+  storage: StorageLike,
+  expected: PersistedSensitivityIdentity,
+): boolean {
+  const current = readPersistedCalculationState(storage);
+  return (
+    current.modelVersionId === expected.modelVersionId &&
+    current.graphVersionId === expected.graphVersionId &&
+    current.baselineRunId === expected.baselineRunId &&
+    current.overrideRunId === expected.overrideRunId
+  );
+}
+
+export function createGuardedSensitivityStorage(
+  storage: StorageLike,
+  initialExpected: PersistedSensitivityIdentity,
+  contextIsCurrent: () => boolean = () => true,
+): GuardedSensitivityStorage {
+  const expected = { ...initialExpected };
+  const matchesCurrent = () =>
+    contextIsCurrent() &&
+    matchesPersistedSensitivityIdentity(storage, expected);
+
+  const updateExpectedRunSelection = (
+    key: string,
+    value: string | null,
+  ) => {
+    if (key === CALCULATION_STORAGE_KEYS.baselineRunId) {
+      expected.baselineRunId = value;
+    } else if (key === CALCULATION_STORAGE_KEYS.overrideRunId) {
+      expected.overrideRunId = value;
+    }
+  };
+
+  return {
+    matchesCurrent,
+    getItem(key: string) {
+      if (!matchesCurrent()) {
+        return null;
+      }
+      return safeGetItem(storage, key);
+    },
+    removeItem(key: string) {
+      if (!matchesCurrent()) {
+        return;
+      }
+      try {
+        storage.removeItem(key);
+        updateExpectedRunSelection(key, null);
+      } catch {
+        // Storage may be unavailable or disabled.
+      }
+    },
+    setItem(key: string, value: string) {
+      if (!matchesCurrent()) {
+        return;
+      }
+      try {
+        storage.setItem(key, value);
+        updateExpectedRunSelection(key, value);
+      } catch {
+        // Storage may be unavailable, disabled, or full.
+      }
+    },
   };
 }
 

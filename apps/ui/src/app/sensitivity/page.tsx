@@ -1,828 +1,1148 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import { getModel } from '@/lib/api';
-import { useScenario } from '../ScenarioContext';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+
 import FloatingAssistant from '../FloatingAssistant';
+import { SensitivityAssumptionPanel } from '@/components/sensitivity/SensitivityAssumptionPanel';
+import { SensitivityTornadoChart } from '@/components/sensitivity/SensitivityTornadoChart';
+import { SensitivityTwoWayMatrix } from '@/components/sensitivity/SensitivityTwoWayMatrix';
+import {
+  getCalculationReadiness,
+  getCalculationRunOutputs,
+  runCalculationSensitivity,
+} from '@/lib/api';
+import type {
+  CalculationRunOutputsResponse,
+  CalculationSensitivityResponse,
+  CalculationTypedValue,
+} from '@/lib/calculation-api-types';
+import {
+  SENSITIVITY_WORKBENCH_VERSION,
+  persistSensitivityRunSelection,
+  persistSensitivityWorkbenchDocument,
+  readPersistedCalculationState,
+  readSensitivityWorkbenchDocument,
+  type SensitivityWorkbenchDocument,
+} from '@/lib/calculation-storage';
+import {
+  buildSensitivityRequest,
+  buildTornadoRows,
+  buildTwoWayMatrix,
+  canApplySensitivityResponse,
+  deriveSliderSpec,
+  loadAllEditableNumericParameters,
+  restoreSensitivityOutputProjection,
+  selectDefaultSensitivityOutput,
+  type SensitivityAssumption,
+} from '@/lib/sensitivity-analysis';
+import {
+  buildSensitivityOutputView,
+  type SensitivityKpi,
+  type SensitivityProjectedValue,
+  type SensitivitySeries,
+} from '@/lib/sensitivity-output-adapter';
 
-/* ═══════════════════════════════════════════
-   Types
-   ═══════════════════════════════════════════ */
+const MAX_TORNADO_DRIVERS = 12;
+const SENSITIVITY_DEBOUNCE_MS = 400;
 
-interface SensVariable {
-  id: string;
-  name: string;
-  points: [number, number][];   // [[stress%, irr_decimal], …]
-  display: DisplayMeta;
-  category: 'revenue' | 'cost' | 'neutral';
+interface WorkbenchState {
+  assumptions: SensitivityAssumption[];
+  overridesByTarget: Record<string, string>;
+  tornadoDriverKeys: string[];
+  selectedOutputId: string | null;
+  rowDriverKey: string | null;
+  columnDriverKey: string | null;
+  outputs: CalculationRunOutputsResponse | null;
+  analysis: CalculationSensitivityResponse | null;
 }
 
-interface DisplayMeta {
-  type: 'actual' | 'stress';
-  baseValue: number;
-  prefix: string;
-  suffix: string;
-  decimals: number;
+interface ActiveIdentity {
+  modelVersionId: string;
+  graphVersionId: string;
 }
 
-interface SensModel {
-  baseIrr: number;       // decimal (e.g. 0.123)
-  baseNpv: number;
-  basePayback: number;
-  baseDscr: number;
-  baseEquityX: number;
-  variables: SensVariable[];
-  twoWay: any;
+type EmptyReason = 'model' | 'graph' | 'baseline' | 'outputs' | null;
+
+const EMPTY_WORKBENCH: WorkbenchState = {
+  assumptions: [],
+  overridesByTarget: {},
+  tornadoDriverKeys: [],
+  selectedOutputId: null,
+  rowDriverKey: null,
+  columnDriverKey: null,
+  outputs: null,
+  analysis: null,
+};
+
+function isPercentage(
+  unit: string | null,
+  numberFormat: string | null,
+): boolean {
+  return unit?.trim() === '%' || numberFormat?.includes('%') === true;
 }
 
-interface TornadoRow {
-  name: string;
-  low: number;   // IRR %
-  high: number;  // IRR %
-  impact: number;
+function formatNumber(value: number, maximumFractionDigits = 4): string {
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits,
+    minimumFractionDigits: 0,
+  });
 }
 
-/* ═══════════════════════════════════════════
-   Constants
-   ═══════════════════════════════════════════ */
-
-const REVENUE_LABELS = new Set([
-  'Throughput fee ($/MMBtu)', 'Utilisation rate', 'Gas demand growth',
-]);
-const COST_LABELS = new Set([
-  'Carbon tax ($/tonne)', 'Capex overrun', 'Opex inflation rate',
-]);
-
-/* ═══════════════════════════════════════════
-   Interpolation (matches Python script)
-   ═══════════════════════════════════════════ */
-
-function interp(points: [number, number][], x: number): number {
-  const pts = [...points].sort((a, b) => a[0] - b[0]);
-  if (x <= pts[0][0]) return pts[0][1];
-  if (x >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [x0, y0] = pts[i];
-    const [x1, y1] = pts[i + 1];
-    if (x >= x0 && x <= x1) {
-      const t = x1 !== x0 ? (x - x0) / (x1 - x0) : 0;
-      return y0 + t * (y1 - y0);
-    }
+function formatNumericOutput(
+  value: number | null,
+  unit: string | null,
+  numberFormat: string | null,
+): string {
+  if (value === null || !Number.isFinite(value)) {
+    return 'Unavailable';
   }
-  return pts[pts.length - 1][1];
-}
-
-function varEffect(v: SensVariable, stress: number, baseIrr: number): number {
-  return interp(v.points, stress) - baseIrr;
-}
-
-/* ═══════════════════════════════════════════
-   Display helpers
-   ═══════════════════════════════════════════ */
-
-function renderValue(v: SensVariable, stress: number): string {
-  const d = v.display;
-  if (d.type === 'actual') {
-    const actual = d.baseValue * (1 + stress / 100);
-    return `${d.prefix}${actual.toFixed(d.decimals)}${d.suffix}`;
+  if (isPercentage(unit, numberFormat)) {
+    return `${formatNumber(value * 100)}%`;
   }
-  return `${stress > 0 ? '+' : ''}${stress.toFixed(0)}%`;
+  return unit ? `${formatNumber(value)} ${unit}` : formatNumber(value);
 }
 
-function fmtIrr(v: number, dec = 2): string {
-  return v.toLocaleString(undefined, { minimumFractionDigits: dec, maximumFractionDigits: dec });
+function formatTypedValue(
+  value: CalculationTypedValue,
+  unit: string | null,
+  numberFormat: string | null,
+): string {
+  switch (value.value_type) {
+    case 'number':
+      return formatNumericOutput(Number(value.value), unit, numberFormat);
+    case 'boolean':
+      return value.value ? 'True' : 'False';
+    case 'blank':
+      return 'Blank';
+    case 'date_serial':
+      return value.iso_evidence ?? value.value;
+    case 'error':
+      return value.error_code;
+    default:
+      return value.value;
+  }
 }
 
-function slug(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+function formatProjectedValue(
+  projected: SensitivityProjectedValue,
+  unit: string | null,
+  numberFormat: string | null,
+): string {
+  if (
+    projected.availabilityStatus !== 'available' ||
+    projected.typedValue === null
+  ) {
+    return 'Unavailable';
+  }
+  return formatTypedValue(projected.typedValue, unit, numberFormat);
 }
 
-/* ═══════════════════════════════════════════
-   Build model from parsed JSON
-   ═══════════════════════════════════════════ */
+function formatAbsoluteChange(kpi: SensitivityKpi): string {
+  if (kpi.absoluteChange === null) {
+    return 'Unavailable';
+  }
+  const sign = kpi.absoluteChange > 0 ? '+' : '';
+  if (isPercentage(kpi.unit, kpi.numberFormat)) {
+    return `${sign}${formatNumber(kpi.absoluteChange * 100)} pp`;
+  }
+  return `${sign}${formatNumber(kpi.absoluteChange)}`;
+}
 
-function findAssumption(assumptions: any[], keywords: string[], prefer?: string): number | null {
-  const lower = (s: string) => (s || '').toLowerCase();
-  const matches = assumptions.filter((a: any) =>
-    keywords.some(kw => lower(a.name).includes(kw))
+function formatRelativeChange(change: number | null): string {
+  if (change === null) {
+    return '—';
+  }
+  const sign = change > 0 ? '+' : '';
+  return `${sign}${formatNumber(change)}%`;
+}
+
+function unavailableReason(kpi: SensitivityKpi): string {
+  return (
+    kpi.current.unavailableReason ??
+    kpi.baseline.unavailableReason ??
+    kpi.supportStatus
   );
-  if (matches.length === 0) return null;
-  if (prefer) {
-    const pref = matches.find((a: any) => lower(a.name).includes(prefer));
-    if (pref) return parseFloat(pref.value);
-  }
-  return parseFloat(matches[0].value);
 }
 
-function guessDisplayMeta(sensLabel: string, assumptions: any[]): DisplayMeta {
-  const nml = sensLabel.toLowerCase();
-
-  if (nml.includes('wacc')) {
-    const v = findAssumption(assumptions, ['wacc']);
-    if (v != null && !isNaN(v)) {
-      const bv = Math.abs(v) <= 1 ? v * 100 : v;
-      return { type: 'actual', baseValue: bv, prefix: '', suffix: '%', decimals: 1 };
-    }
-  }
-  if (nml.includes('utilisation')) {
-    const v = findAssumption(assumptions, ['utilisation'], 'steady');
-    if (v != null && !isNaN(v)) {
-      const bv = Math.abs(v) <= 1 ? v * 100 : v;
-      return { type: 'actual', baseValue: bv, prefix: '', suffix: '%', decimals: 0 };
-    }
-  }
-  if (nml.includes('debt ratio')) {
-    const v = findAssumption(assumptions, ['debt ratio']);
-    if (v != null && !isNaN(v)) {
-      const bv = Math.abs(v) <= 1 ? v * 100 : v;
-      return { type: 'actual', baseValue: bv, prefix: '', suffix: '%', decimals: 0 };
-    }
-  }
-  if (nml.includes('opex inflation')) {
-    const v = findAssumption(assumptions, ['opex inflation']);
-    if (v != null && !isNaN(v)) {
-      const bv = Math.abs(v) <= 1 ? v * 100 : v;
-      return { type: 'actual', baseValue: bv, prefix: '', suffix: '%', decimals: 1 };
-    }
-  }
-  if (nml.includes('carbon tax') || nml.includes('carbon credit')) {
-    const v = findAssumption(assumptions, ['carbon tax', 'carbon credit']);
-    if (v != null && !isNaN(v)) return { type: 'actual', baseValue: v, prefix: '$', suffix: '', decimals: 0 };
-  }
-  if (nml.includes('throughput fee')) {
-    const v = findAssumption(assumptions, ['regasification fee', 'throughput fee']);
-    if (v != null && !isNaN(v)) return { type: 'actual', baseValue: v, prefix: '$', suffix: '', decimals: 2 };
-  }
-  if (nml.includes('demand growth') || nml.includes('gas demand')) {
-    const v = findAssumption(assumptions, ['revenue growth', 'gas demand']);
-    if (v != null && !isNaN(v)) {
-      const bv = Math.abs(v) <= 1 ? v * 100 : v;
-      return { type: 'actual', baseValue: bv, prefix: '', suffix: '%', decimals: 1 };
-    }
-  }
-  if (nml.includes('capex overrun') || nml.includes('capex contingency')) {
-    const v = findAssumption(assumptions, ['capex contingency', 'capex overrun']);
-    if (v != null && !isNaN(v)) {
-      const bv = Math.abs(v) <= 1 ? v * 100 : v;
-      return { type: 'actual', baseValue: bv, prefix: '', suffix: '%', decimals: 0 };
-    }
-  }
-  return { type: 'stress', baseValue: 0, prefix: '', suffix: '%', decimals: 0 };
+function currentAssumptionValue(
+  assumption: SensitivityAssumption,
+  overridesByTarget: Record<string, string>,
+): string {
+  return overridesByTarget[assumption.targetKey] ?? assumption.currentValue;
 }
 
-function buildSensModel(parsedJson: any, scenarioKey: string): SensModel | null {
-  const sensitivity = parsedJson?.sensitivity || {};
-  const oneWay: any[] = sensitivity.one_way || [];
-  const assumptions: any[] = parsedJson?.assumptions || [];
-  const returns = parsedJson?.returns || {};
-  const metrics: any[] = returns.metrics || [];
-  const twoWay = sensitivity.two_way || {};
-
-  if (oneWay.length === 0) return null;
-
-  let baseIrr = 0.123, baseNpv = 145, basePayback = 9.2, baseDscr = 1.45, baseEquityX = 2.4;
-  for (const m of metrics) {
-    const val = m[scenarioKey] ?? m.base_case;
-    if (val == null) continue;
-    const fval = parseFloat(String(val));
-    if (isNaN(fval)) continue;
-    switch (m.metric) {
-      case 'Project IRR (unlevered)': baseIrr = fval; break;
-      case 'NPV @ WACC (USD M)': baseNpv = fval; break;
-      case 'Payback period (years)': basePayback = fval; break;
-      case 'DSCR — average': baseDscr = fval; break;
-      case 'Equity multiple (MoM)': baseEquityX = fval; break;
-    }
-  }
-
-  const variables: SensVariable[] = [];
-  for (const item of oneWay) {
-    const name: string = item.assumption;
-    const points: [number, number][] = [
-      [-20, parseFloat(item.stress_minus_20 ?? baseIrr)],
-      [-10, parseFloat(item.stress_minus_10 ?? baseIrr)],
-      [0, parseFloat(item.base_case ?? baseIrr)],
-      [10, parseFloat(item.upside_plus_10 ?? baseIrr)],
-      [20, parseFloat(item.upside_plus_20 ?? baseIrr)],
-    ];
-
-    const display = guessDisplayMeta(name, assumptions);
-    let category: 'revenue' | 'cost' | 'neutral' = 'neutral';
-    if (REVENUE_LABELS.has(name)) category = 'revenue';
-    else if (COST_LABELS.has(name)) category = 'cost';
-
-    variables.push({ id: slug(name), name, points, display, category });
-  }
-
-  return { baseIrr, baseNpv, basePayback, baseDscr, baseEquityX, variables, twoWay };
+function finiteDecimal(value: string): boolean {
+  return value.trim() !== '' && Number.isFinite(Number(value));
 }
 
-/* ═══════════════════════════════════════════
-   SVG Tornado Chart (matches Python script)
-   ═══════════════════════════════════════════ */
+function KpiCard({ kpi }: { kpi: SensitivityKpi }) {
+  const available = kpi.current.availabilityStatus === 'available';
+  return (
+    <article className="rounded-lg border border-d-border bg-d-card p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-d-muted">
+            {kpi.label}
+          </p>
+          {kpi.scenario ? (
+            <p className="mt-0.5 text-[10px] text-d-muted">{kpi.scenario}</p>
+          ) : null}
+        </div>
+        <span
+          className={`rounded px-2 py-0.5 text-[10px] font-medium ${
+            available
+              ? 'bg-green-900/30 text-green-300'
+              : 'bg-amber-900/30 text-amber-300'
+          }`}
+        >
+          {available ? 'Available' : 'Unavailable'}
+        </span>
+      </div>
+      <p
+        className={`mt-3 text-2xl font-bold ${
+          available ? 'text-gold-400' : 'text-d-muted'
+        }`}
+      >
+        {formatProjectedValue(kpi.current, kpi.unit, kpi.numberFormat)}
+      </p>
+      {available ? (
+        <p className="mt-2 text-xs text-d-muted">
+          Baseline{' '}
+          <span className="font-mono text-slate-200">
+            {formatProjectedValue(kpi.baseline, kpi.unit, kpi.numberFormat)}
+          </span>{' '}
+          · Δ{' '}
+          <span className="font-mono text-gold-300">
+            {formatAbsoluteChange(kpi)}
+          </span>
+        </p>
+      ) : (
+        <p className="mt-2 break-words font-mono text-[11px] text-amber-200">
+          {unavailableReason(kpi)}
+        </p>
+      )}
+    </article>
+  );
+}
 
-function TornadoChart({ rows, currentIrr }: { rows: TornadoRow[]; currentIrr: number }) {
-  const W = 720, H = Math.max(240, rows.length * 52 + 40);
-  /* Reserve 130px on the right for the two percentage readings so bars never overlap */
-  const m = { t: 18, r: 130, b: 22, l: 185 };
-  const plotX0 = m.l, plotX1 = W - m.r;
-  const plotY0 = m.t, plotY1 = H - m.b;
-  const n = rows.length;
-  const rowH = n > 0 ? (plotY1 - plotY0) / n : 40;
-  const center = (plotX0 + plotX1) / 2;
-
-  const maxAbs = Math.max(...rows.map(r => Math.max(Math.abs(r.low - currentIrr), Math.abs(r.high - currentIrr))), 0.5);
-  const scale = (plotX1 - plotX0) / 2 / maxAbs;
-
-  const ticks: number[] = [];
-  for (let t = -maxAbs; t <= maxAbs + 0.001; t += maxAbs / 4) ticks.push(t);
+function SeriesChartCard({ series }: { series: SensitivitySeries }) {
+  const data = series.points.map((point) => ({
+    period: point.period ?? `Period ${point.periodIndex + 1}`,
+    baseline: point.baseline.numericValue,
+    current: point.current.numericValue,
+  }));
+  const chartable = data.some(
+    (point) => point.baseline !== null || point.current !== null,
+  );
 
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="overflow-visible">
-      {/* Grid lines */}
-      {ticks.map((tv, i) => {
-        const x = center + tv * scale;
-        return <line key={i} x1={x} y1={plotY0} x2={x} y2={plotY1} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />;
-      })}
-      {/* Center baseline */}
-      <line x1={center} y1={plotY0} x2={center} y2={plotY1} stroke="rgba(255,255,255,0.2)" strokeWidth="1.2" />
+    <article className="rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-white">{series.label}</h3>
+          <p className="mt-1 text-xs text-d-muted">
+            {series.businessRole} · {series.unit ?? 'Unitless'} ·{' '}
+            {series.points.length} periods
+          </p>
+        </div>
+        <span
+          className={`rounded px-2 py-1 text-[10px] font-medium ${
+            series.availabilityStatus === 'available'
+              ? 'bg-green-900/30 text-green-300'
+              : series.availabilityStatus === 'partial'
+                ? 'bg-amber-900/30 text-amber-300'
+                : 'bg-red-900/30 text-red-300'
+          }`}
+        >
+          {series.availabilityStatus}
+        </span>
+      </div>
 
-      {rows.map((r, i) => {
-        const y = plotY0 + i * rowH + rowH / 2;
-        const bh = Math.min(22, rowH * 0.56);
+      {chartable ? (
+        <div className="mt-4 h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart
+              data={data}
+              margin={{ top: 8, right: 12, bottom: 8, left: 0 }}
+            >
+              <CartesianGrid stroke="rgba(148,163,184,0.12)" />
+              <XAxis
+                dataKey="period"
+                stroke="#94a3b8"
+                tick={{ fontSize: 11 }}
+              />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 11 }} width={56} />
+              <Tooltip
+                contentStyle={{
+                  background: '#111827',
+                  border: '1px solid #334155',
+                  borderRadius: 6,
+                }}
+                labelStyle={{ color: '#e2e8f0' }}
+              />
+              <Legend />
+              <Line
+                type="monotone"
+                dataKey="baseline"
+                name="Baseline"
+                stroke="#94a3b8"
+                strokeDasharray="5 4"
+                strokeWidth={2}
+                connectNulls={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="current"
+                name="Current"
+                stroke="#f4c430"
+                strokeWidth={2.5}
+                connectNulls={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <p className="mt-4 rounded border border-amber-800/40 bg-amber-900/10 p-4 text-sm text-amber-200">
+          This canonical series is unavailable. No substitute value is shown.
+        </p>
+      )}
 
-        /* Position each endpoint relative to center (currentIrr) */
-        const xLow = center + (r.low - currentIrr) * scale;
-        const xHigh = center + (r.high - currentIrr) * scale;
-
-        /* Draw two independent bars from center to each endpoint.
-           Color by POSITION: left of center = red (downside), right = green (upside).
-           This automatically handles revenue vs cost variables correctly. */
-        const lowOnLeft = xLow <= center;
-        const highOnLeft = xHigh <= center;
-
-        /* Readings in the reserved right margin */
-        const readingX0 = plotX1 + 10;
-        const readingX1 = plotX1 + 72;
-        const lowerVal = Math.min(r.low, r.high);
-        const higherVal = Math.max(r.low, r.high);
-
-        return (
-          <g key={i}>
-            <text x={plotX0 - 12} y={y + 5} textAnchor="end" fill="#94a3b8" fontSize="13" fontFamily="inherit">
-              {r.name}
-            </text>
-            {/* Bar for stress -20% endpoint */}
-            <rect
-              x={lowOnLeft ? xLow : center}
-              y={y - bh / 2}
-              width={Math.max(Math.abs(xLow - center), 0)}
-              height={bh} rx="3"
-              fill={lowOnLeft ? '#f87171' : '#4ade80'}
-              opacity="0.85"
-            />
-            {/* Bar for stress +20% endpoint */}
-            <rect
-              x={highOnLeft ? xHigh : center}
-              y={y - bh / 2}
-              width={Math.max(Math.abs(xHigh - center), 0)}
-              height={bh} rx="3"
-              fill={highOnLeft ? '#f87171' : '#4ade80'}
-              opacity="0.85"
-            />
-            {/* Readings: lower IRR in red, higher IRR in green */}
-            <text x={readingX0} y={y + 4} textAnchor="start" fill="#f87171" fontSize="12" fontFamily="monospace">
-              {fmtIrr(lowerVal)}%
-            </text>
-            <text x={readingX1} y={y + 4} textAnchor="start" fill="#4ade80" fontSize="12" fontFamily="monospace">
-              {fmtIrr(higherVal)}%
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+      <p className="mt-3 border-t border-d-border pt-3 text-xs text-d-muted">
+        Changed periods:{' '}
+        <span className="font-semibold text-slate-200">
+          {series.changedPointCount}
+        </span>
+        {series.unavailableCurrentPointCount > 0
+          ? ` · ${series.unavailableCurrentPointCount} unavailable`
+          : ''}
+      </p>
+    </article>
   );
 }
-
-/* ═══════════════════════════════════════════
-   Main Component
-   ═══════════════════════════════════════════ */
 
 export default function SensitivityPage() {
-  const [modelId, setModelId] = useState('');
-  const [model, setModel] = useState<any>(null);
+  const [workbench, setWorkbench] =
+    useState<WorkbenchState>(EMPTY_WORKBENCH);
   const [loading, setLoading] = useState(true);
-  const { scenario } = useScenario();
+  const [recalculating, setRecalculating] = useState(false);
+  const [emptyReason, setEmptyReason] = useState<EmptyReason>(null);
+  const [error, setError] = useState<Error | null>(null);
 
-  /* Slider state: variable id → stress value (-20 to +20) */
-  const [sliderState, setSliderState] = useState<Record<string, number>>({});
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestRevisionRef = useRef(0);
+  const bootstrapRevisionRef = useRef(0);
+  const activeIdentityRef = useRef<ActiveIdentity | null>(null);
+  const workbenchSnapshotRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
 
-  /* Build sensitivity model from loaded model */
-  const sensModel = useMemo(() => {
-    if (!model) return null;
-    return buildSensModel(model.parsed_json, scenario);
-  }, [model, scenario]);
-
-  /* Init sliders when model / scenario changes */
-  useEffect(() => {
-    if (sensModel) {
-      const init: Record<string, number> = {};
-      for (const v of sensModel.variables) init[v.id] = 0;
-      setSliderState(init);
+  async function bootstrapWorkbench() {
+    const bootstrapRevision = ++bootstrapRevisionRef.current;
+    requestRevisionRef.current += 1;
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
-  }, [sensModel]);
+    activeIdentityRef.current = null;
+    setLoading(true);
+    setRecalculating(false);
+    setError(null);
+    setEmptyReason(null);
 
-  /* Load model */
-  const loadModel = useCallback(async (id: string) => {
+    const persisted = readPersistedCalculationState(window.localStorage);
+    if (persisted.modelVersionId === null) {
+      if (bootstrapRevision === bootstrapRevisionRef.current) {
+        setWorkbench(() => EMPTY_WORKBENCH);
+        workbenchSnapshotRef.current = EMPTY_WORKBENCH;
+        setEmptyReason('model');
+        setLoading(false);
+      }
+      return;
+    }
+    if (persisted.graphVersionId === null) {
+      if (bootstrapRevision === bootstrapRevisionRef.current) {
+        setWorkbench(() => EMPTY_WORKBENCH);
+        workbenchSnapshotRef.current = EMPTY_WORKBENCH;
+        setEmptyReason('graph');
+        setLoading(false);
+      }
+      return;
+    }
+    if (persisted.baselineRunId === null) {
+      if (bootstrapRevision === bootstrapRevisionRef.current) {
+        setWorkbench(() => EMPTY_WORKBENCH);
+        workbenchSnapshotRef.current = EMPTY_WORKBENCH;
+        setEmptyReason('baseline');
+        setLoading(false);
+      }
+      return;
+    }
+
+    const identity: ActiveIdentity = {
+      modelVersionId: persisted.modelVersionId,
+      graphVersionId: persisted.graphVersionId,
+    };
+    const bootstrapStorage = {
+      getItem(key: string) {
+        return window.localStorage.getItem(key);
+      },
+      removeItem(key: string) {
+        const current = readPersistedCalculationState(window.localStorage);
+        if (
+          bootstrapRevision === bootstrapRevisionRef.current &&
+          current.modelVersionId === identity.modelVersionId &&
+          current.graphVersionId === identity.graphVersionId
+        ) {
+          window.localStorage.removeItem(key);
+        }
+      },
+      setItem(key: string, value: string) {
+        const current = readPersistedCalculationState(window.localStorage);
+        if (
+          bootstrapRevision === bootstrapRevisionRef.current &&
+          current.modelVersionId === identity.modelVersionId &&
+          current.graphVersionId === identity.graphVersionId
+        ) {
+          window.localStorage.setItem(key, value);
+        }
+      },
+    };
+
     try {
-      const m = await getModel(id);
-      setModel(m);
-    } catch (e) { console.error(e); }
-    setLoading(false);
+      const readiness = await getCalculationReadiness(identity.modelVersionId);
+      if (bootstrapRevision !== bootstrapRevisionRef.current) {
+        return;
+      }
+      if (
+        readiness.model_version_id !== identity.modelVersionId ||
+        readiness.graph_version_id !== identity.graphVersionId
+      ) {
+        throw new Error(
+          'Stored model and calculation graph no longer match readiness.',
+        );
+      }
+
+      const storedDocument = readSensitivityWorkbenchDocument(
+        window.localStorage,
+        identity.modelVersionId,
+        identity.graphVersionId,
+      );
+      const [assumptions, outputs] = await Promise.all([
+        loadAllEditableNumericParameters(identity.modelVersionId),
+        restoreSensitivityOutputProjection(
+          bootstrapStorage,
+          persisted,
+        ),
+      ]);
+      if (bootstrapRevision !== bootstrapRevisionRef.current) {
+        return;
+      }
+      if (outputs === null) {
+        setEmptyReason('outputs');
+        return;
+      }
+      if (
+        outputs.model_version_id !== identity.modelVersionId ||
+        outputs.graph_version_id !== identity.graphVersionId ||
+        outputs.comparison_baseline_run_id !== persisted.baselineRunId
+      ) {
+        throw new Error(
+          'Persisted output projection does not match the active model, graph, and baseline.',
+        );
+      }
+
+      const assumptionByKey = new Map(
+        assumptions.map((assumption) => [
+          assumption.targetKey,
+          assumption,
+        ]),
+      );
+      const overridesByTarget = Object.fromEntries(
+        Object.entries(storedDocument?.overridesByTarget ?? {}).filter(
+          ([targetKey, value]) =>
+            assumptionByKey.has(targetKey) && finiteDecimal(value),
+        ),
+      );
+      const outputView = buildSensitivityOutputView(outputs);
+      const availableOutputIds = new Set(
+        outputView.kpis
+          .filter(
+            (kpi) =>
+              kpi.current.availabilityStatus === 'available' &&
+              kpi.current.numericValue !== null,
+          )
+          .map((kpi) => kpi.outputId),
+      );
+      const selectedOutputId =
+        storedDocument?.selectedOutputId !== null &&
+        storedDocument?.selectedOutputId !== undefined &&
+        availableOutputIds.has(storedDocument.selectedOutputId)
+          ? storedDocument.selectedOutputId
+          : selectDefaultSensitivityOutput(outputView.kpis);
+
+      const validStoredDrivers =
+        storedDocument?.tornadoDriverKeys.filter((targetKey) =>
+          assumptionByKey.has(targetKey),
+        ) ?? null;
+      const storedDriversAreValid =
+        storedDocument !== null &&
+        validStoredDrivers !== null &&
+        validStoredDrivers.length === storedDocument.tornadoDriverKeys.length;
+      const defaultDrivers = assumptions
+        .filter(
+          (assumption) =>
+            deriveSliderSpec(
+              currentAssumptionValue(assumption, overridesByTarget),
+            ).kind === 'range',
+        )
+        .slice(0, MAX_TORNADO_DRIVERS)
+        .map((assumption) => assumption.targetKey);
+      const tornadoDriverKeys = (
+        storedDriversAreValid ? validStoredDrivers : defaultDrivers
+      ).slice(0, MAX_TORNADO_DRIVERS);
+
+      const validAxisKeys = assumptions
+        .filter(
+          (assumption) =>
+            deriveSliderSpec(
+              currentAssumptionValue(assumption, overridesByTarget),
+            ).kind === 'range',
+        )
+        .map((assumption) => assumption.targetKey);
+      const rowDriverKey =
+        storedDocument?.rowDriverKey &&
+        assumptionByKey.has(storedDocument.rowDriverKey)
+          ? storedDocument.rowDriverKey
+          : validAxisKeys[0] ?? null;
+      const columnDriverKey =
+        storedDocument?.columnDriverKey &&
+        storedDocument.columnDriverKey !== rowDriverKey &&
+        assumptionByKey.has(storedDocument.columnDriverKey)
+          ? storedDocument.columnDriverKey
+          : validAxisKeys.find((targetKey) => targetKey !== rowDriverKey) ??
+            null;
+
+      const nextWorkbench: WorkbenchState = {
+        assumptions,
+        overridesByTarget,
+        tornadoDriverKeys,
+        selectedOutputId,
+        rowDriverKey,
+        columnDriverKey,
+        outputs,
+        analysis: null,
+      };
+      if (bootstrapRevision !== bootstrapRevisionRef.current) {
+        return;
+      }
+      activeIdentityRef.current = identity;
+      workbenchSnapshotRef.current = nextWorkbench;
+      setWorkbench(() => nextWorkbench);
+    } catch (caught) {
+      if (bootstrapRevision !== bootstrapRevisionRef.current) {
+        return;
+      }
+      setError(
+        caught instanceof Error
+          ? caught
+          : new Error('Could not load the sensitivity workbench.'),
+      );
+    } finally {
+      if (bootstrapRevision === bootstrapRevisionRef.current) {
+        setLoading(false);
+      }
+    }
+  }
+
+  function scheduleAnalysis(nextWorkbench: WorkbenchState) {
+    const identity = activeIdentityRef.current;
+    const revision = ++requestRevisionRef.current;
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setError(null);
+
+    if (
+      identity === null ||
+      nextWorkbench.selectedOutputId === null ||
+      nextWorkbench.tornadoDriverKeys.length === 0
+    ) {
+      setRecalculating(false);
+      return;
+    }
+
+    setRecalculating(true);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      void executeAnalysis(revision, identity, nextWorkbench);
+    }, SENSITIVITY_DEBOUNCE_MS);
+  }
+
+  async function executeAnalysis(
+    revision: number,
+    identity: ActiveIdentity,
+    requestWorkbench: WorkbenchState,
+  ) {
+    const stillCurrent = () => {
+      const activeIdentity = activeIdentityRef.current;
+      return (
+        revision === requestRevisionRef.current &&
+        activeIdentity?.modelVersionId === identity.modelVersionId &&
+        activeIdentity.graphVersionId === identity.graphVersionId
+      );
+    };
+
+    try {
+      const request = buildSensitivityRequest({
+        graphVersionId: identity.graphVersionId,
+        outputId: requestWorkbench.selectedOutputId as string,
+        assumptions: requestWorkbench.assumptions,
+        overridesByTarget: requestWorkbench.overridesByTarget,
+        tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
+        rowDriverKey: requestWorkbench.rowDriverKey,
+        columnDriverKey: requestWorkbench.columnDriverKey,
+      });
+      if (request.drivers.length === 0) {
+        throw new Error(
+          'Select at least one non-zero canonical assumption as a driver.',
+        );
+      }
+
+      const analysis = await runCalculationSensitivity(
+        identity.modelVersionId,
+        request,
+      );
+      if (
+        !canApplySensitivityResponse(analysis, {
+          requestRevision: revision,
+          currentRevision: requestRevisionRef.current,
+          modelVersionId: identity.modelVersionId,
+          graphVersionId: identity.graphVersionId,
+          outputId: request.output_id,
+        }) ||
+        !stillCurrent()
+      ) {
+        return;
+      }
+
+      const outputs = await getCalculationRunOutputs(analysis.current_run_id);
+      if (
+        !stillCurrent() ||
+        outputs.calculation_run_id !== analysis.current_run_id ||
+        outputs.model_version_id !== analysis.model_version_id ||
+        outputs.graph_version_id !== analysis.graph_version_id ||
+        outputs.comparison_baseline_run_id !==
+          analysis.comparison_baseline_run_id
+      ) {
+        return;
+      }
+
+      const document: SensitivityWorkbenchDocument = {
+        version: SENSITIVITY_WORKBENCH_VERSION,
+        modelVersionId: identity.modelVersionId,
+        graphVersionId: identity.graphVersionId,
+        overridesByTarget: requestWorkbench.overridesByTarget,
+        tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
+        selectedOutputId: requestWorkbench.selectedOutputId,
+        rowDriverKey: requestWorkbench.rowDriverKey,
+        columnDriverKey: requestWorkbench.columnDriverKey,
+      };
+      const appliedWorkbench: WorkbenchState = {
+        ...requestWorkbench,
+        analysis,
+        outputs,
+      };
+      workbenchSnapshotRef.current = appliedWorkbench;
+      setWorkbench(() => appliedWorkbench);
+      persistSensitivityRunSelection(window.localStorage, analysis);
+      persistSensitivityWorkbenchDocument(window.localStorage, document);
+    } catch (caught) {
+      if (!stillCurrent()) {
+        return;
+      }
+      setError(
+        caught instanceof Error
+          ? caught
+          : new Error('Sensitivity analysis failed.'),
+      );
+    } finally {
+      if (stillCurrent()) {
+        setRecalculating(false);
+      }
+    }
+  }
+
+  function applyUserUpdate(
+    update: (current: WorkbenchState) => WorkbenchState,
+  ) {
+    const nextWorkbench = update(workbenchSnapshotRef.current);
+    workbenchSnapshotRef.current = nextWorkbench;
+    setWorkbench(() => nextWorkbench);
+    scheduleAnalysis(nextWorkbench);
+  }
+
+  useEffect(() => {
+    void bootstrapWorkbench();
+    return () => {
+      bootstrapRevisionRef.current += 1;
+      requestRevisionRef.current += 1;
+      activeIdentityRef.current = null;
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
   }, []);
 
-  useEffect(() => {
-    const id = localStorage.getItem('investiq_model_id');
-    if (!id) { setLoading(false); return; }
-    setModelId(id);
-    loadModel(id);
-  }, [loadModel]);
-
-  /* Re-fetch on model change */
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        const id = localStorage.getItem('investiq_model_id');
-        if (id && id !== modelId) { setModelId(id); setLoading(true); loadModel(id); }
-      }
-    };
-    const handleFocus = () => {
-      const id = localStorage.getItem('investiq_model_id');
-      if (id && id !== modelId) { setModelId(id); setLoading(true); loadModel(id); }
-    };
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'investiq_model_id' && e.newValue && e.newValue !== modelId) {
-        setModelId(e.newValue); setLoading(true); loadModel(e.newValue);
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('storage', handleStorage);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('storage', handleStorage);
-    };
-  }, [modelId, loadModel]);
-
-  /* ═══════════════════════════════════════════
-     Client-side computation (reactive to sliders)
-     ═══════════════════════════════════════════ */
-
-  const computed = useMemo(() => {
-    if (!sensModel) return null;
-    const { baseIrr, baseNpv, basePayback, baseDscr, baseEquityX, variables, twoWay } = sensModel;
-
-    /* Additive IRR delta (same approach as Python script) */
-    let totalIrrDelta = 0;
-    const perVarDelta: Record<string, number> = {};
-    for (const v of variables) {
-      const stress = sliderState[v.id] ?? 0;
-      const effect = varEffect(v, stress, baseIrr);
-      totalIrrDelta += effect;
-      perVarDelta[v.id] = effect;
-    }
-    const currentIrr = baseIrr + totalIrrDelta;
-
-    /* NPV scales proportionally with IRR delta */
-    const npvSensitivity = baseIrr !== 0 ? baseNpv / (baseIrr * 100) : 12;
-    const currentNpv = baseNpv + totalIrrDelta * 100 * npvSensitivity;
-
-    /* Payback inversely related */
-    const irrRatio = baseIrr !== 0 ? currentIrr / baseIrr : 1;
-    const currentPayback = irrRatio > 0 ? basePayback / irrRatio : basePayback;
-
-    /* DSCR: revenue assumptions raise it, cost assumptions lower it */
-    let dscrDelta = 0;
-    for (const v of variables) {
-      const stress = sliderState[v.id] ?? 0;
-      const pctChange = stress / 100;
-      if (v.category === 'revenue') dscrDelta += baseDscr * pctChange * 0.4;
-      else if (v.category === 'cost') dscrDelta -= baseDscr * pctChange * 0.2;
-    }
-    const currentDscr = baseDscr + dscrDelta;
-
-    /* Equity multiple scales with IRR ratio */
-    const currentEquityX = irrRatio > 0 ? baseEquityX * irrRatio : baseEquityX;
-
-    /* Tornado: for each variable, compute ±20% impact from current state
-       (same logic as Python script: remove current variable's effect,
-        add its ±20% effect, keep other slider effects) */
-    const tornado: TornadoRow[] = variables.map(v => {
-      const otherDelta = totalIrrDelta - (perVarDelta[v.id] || 0);
-      const low = (interp(v.points, -20) + otherDelta) * 100;
-      const high = (interp(v.points, 20) + otherDelta) * 100;
-      return {
-        name: v.name,
-        low,
-        high,
-        impact: Math.abs(high - low),
-      };
-    }).sort((a, b) => b.impact - a.impact);
-
-    /* Two-way table — shift all values by combined IRR delta */
-    let twoWayShifted = twoWay;
-    if (twoWay?.data) {
-      const shiftedData = twoWay.data.map((row: any) => ({
-        wacc: row.wacc,
-        values: (row.values || []).map((v: any) =>
-          v != null ? parseFloat(v) + totalIrrDelta : null
-        ),
-      }));
-      twoWayShifted = { ...twoWay, data: shiftedData };
-    }
-
-    return {
-      currentIrr: currentIrr * 100,
-      currentNpv: Math.round(currentNpv),
-      currentPayback: Math.round(currentPayback * 10) / 10,
-      currentDscr: Math.round(currentDscr * 100) / 100,
-      currentEquityX: Math.round(currentEquityX * 100) / 100,
-      baseIrr: baseIrr * 100,
-      baseNpv: Math.round(baseNpv),
-      basePayback: Math.round(basePayback * 10) / 10,
-      baseDscr: Math.round(baseDscr * 100) / 100,
-      baseEquityX: Math.round(baseEquityX * 100) / 100,
-      tornado,
-      twoWay: twoWayShifted,
-    };
-  }, [sensModel, sliderState]);
-
-  /* Handlers */
-  const handleSlider = (id: string, value: number) => {
-    setSliderState(prev => ({ ...prev, [id]: value }));
-  };
-
-  const resetSliders = () => {
-    if (!sensModel) return;
-    const init: Record<string, number> = {};
-    for (const v of sensModel.variables) init[v.id] = 0;
-    setSliderState(init);
-  };
-
-  const isChanged = Object.values(sliderState).some(v => v !== 0);
-
-  /* ═══════════════════════════════════════════
-     Derived display values
-     ═══════════════════════════════════════════ */
-
-  const parsed = model?.parsed_json || {};
-  const assumptions: any[] = parsed.assumptions || [];
-
-  const sidebarAssumptions = useMemo(() => {
-    return assumptions.map((a: any) => {
-      const v = a.value;
-      const n = typeof v === 'number' ? v : parseFloat(v);
-      let formatted: string;
-      if (isNaN(n)) formatted = String(v);
-      else if (a.unit === '%' || (n > 0 && n < 1)) formatted = `${(n * 100).toFixed(1)}%`;
-      else if (a.unit === '$/MMBtu' || a.unit === '$') formatted = `$${n}`;
-      else formatted = String(n);
-      return { label: a.name, value: formatted };
-    }).slice(0, 12);
-  }, [assumptions]);
-
-  const deltaStr = (cur: number | null | undefined, base: number | null | undefined): string => {
-    if (cur == null || base == null) return '+0';
-    const d = cur - base;
-    if (Math.abs(d) < 0.05) return '+0';
-    return `${d >= 0 ? '+' : ''}${d.toFixed(1)}`;
-  };
-
-  /* ═══════════════════════════════════════════
-     Loading / empty states
-     ═══════════════════════════════════════════ */
-
-  if (loading) return <div className="flex items-center justify-center h-64 text-d-muted">Loading model...</div>;
-  if (!model) return (
-    <div className="text-center py-12">
-      <p className="text-slate-300 mb-2">No model loaded. Upload a model first.</p>
-      <Link href="/" className="text-gold-400 hover:underline">Go to Upload</Link>
-    </div>
+  const outputView = useMemo(
+    () =>
+      workbench.outputs
+        ? buildSensitivityOutputView(workbench.outputs)
+        : null,
+    [workbench.outputs],
+  );
+  const assumptionsByTarget = useMemo(
+    () =>
+      new Map(
+        workbench.assumptions.map((assumption) => [
+          assumption.targetKey,
+          assumption,
+        ]),
+      ),
+    [workbench.assumptions],
+  );
+  const tornadoRows = useMemo(
+    () =>
+      workbench.analysis
+        ? buildTornadoRows(workbench.analysis, assumptionsByTarget)
+        : [],
+    [assumptionsByTarget, workbench.analysis],
+  );
+  const matrix = useMemo(
+    () =>
+      workbench.analysis
+        ? buildTwoWayMatrix(workbench.analysis, assumptionsByTarget)
+        : null,
+    [assumptionsByTarget, workbench.analysis],
   );
 
-  const cover = model.parsed_json?.cover ?? {};
-  const c = computed;
-  const vars = sensModel?.variables ?? [];
+  if (loading) {
+    return (
+      <div className="flex h-64 items-center justify-center text-d-muted">
+        Loading canonical sensitivity workbench…
+      </div>
+    );
+  }
 
-  /* ═══════════════════════════════════════════
-     Render
-     ═══════════════════════════════════════════ */
+  if (emptyReason !== null) {
+    const explanation = {
+      model: 'No canonical calculation model is stored in this browser session.',
+      graph: 'The stored model does not have a prepared calculation graph.',
+      baseline:
+        'A persisted zero-override baseline calculation is required before analysis.',
+      outputs:
+        'The stored baseline has no matching persisted output projection.',
+    }[emptyReason];
+    return (
+      <div className="mx-auto max-w-2xl rounded-lg border border-d-border bg-d-card p-8 text-center">
+        <h1 className="text-xl font-semibold text-white">
+          Sensitivity workbench is not ready
+        </h1>
+        <p className="mt-3 text-sm text-d-muted">{explanation}</p>
+        <p className="mt-2 text-sm text-d-muted">
+          Reloading this page never creates a baseline automatically.
+        </p>
+        <Link
+          href="/"
+          className="mt-5 inline-block rounded bg-gold-500 px-4 py-2 text-sm font-semibold text-white hover:bg-gold-600"
+        >
+          Go to calculation flow
+        </Link>
+      </div>
+    );
+  }
+
+  if (outputView === null) {
+    return (
+      <div className="mx-auto max-w-2xl rounded-lg border border-red-700/60 bg-red-900/20 p-6 text-red-200">
+        <h1 className="text-lg font-semibold">Workbench could not load</h1>
+        <p className="mt-2 text-sm">
+          {error?.message ?? 'No persisted output projection was returned.'}
+        </p>
+        <button
+          type="button"
+          onClick={() => void bootstrapWorkbench()}
+          className="mt-4 rounded border border-red-400/50 px-4 py-2 text-sm hover:bg-red-900/30"
+        >
+          Retry GET-only refresh
+        </button>
+      </div>
+    );
+  }
+
+  const availableNumericKpis = outputView.kpis.filter(
+    (kpi) =>
+      kpi.current.availabilityStatus === 'available' &&
+      kpi.current.numericValue !== null,
+  );
+  const selectedKpi =
+    availableNumericKpis.find(
+      (kpi) => kpi.outputId === workbench.selectedOutputId,
+    ) ?? null;
+  const analyzedOutput = workbench.analysis?.selected_output ?? null;
+  const analyzedOutputLabel = analyzedOutput?.label ?? selectedKpi?.label ?? 'Output';
+  const analyzedOutputUnit = analyzedOutput?.unit ?? selectedKpi?.unit ?? null;
+  const analyzedNumberFormat =
+    analyzedOutput?.number_format ?? selectedKpi?.numberFormat ?? null;
+
+  const formatAxisValue = (targetKey: string, value: string): string => {
+    const assumption = assumptionsByTarget.get(targetKey);
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+      return 'Unavailable';
+    }
+    if (assumption?.unit?.trim() === '%') {
+      return `${formatNumber(numericValue * 100)}%`;
+    }
+    return assumption?.unit
+      ? `${formatNumber(numericValue)} ${assumption.unit}`
+      : formatNumber(numericValue);
+  };
 
   return (
-    <div className="flex gap-4">
-      {/* ── Left Sidebar ── */}
-      <div className="w-56 flex-shrink-0 space-y-4">
-        {/* Decision Confidence */}
-        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
-          <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium mb-2">Decision Confidence</div>
-          <div className="flex items-center gap-2">
-            <div className="text-3xl font-bold text-white">
-              {c ? `${fmtIrr(c.currentIrr, 1)}%` : '—'}
-            </div>
-            <span className={`w-2.5 h-2.5 rounded-full ${c && c.currentIrr >= 10 ? 'bg-green-500' : 'bg-red-500'}`} />
-          </div>
-          <div className={`text-xs mt-1 ${c && c.currentIrr >= 10 ? 'text-green-400' : 'text-red-400'}`}>
-            {c && c.currentIrr >= 10 ? '▲ Above hurdle — Investable' : '▼ Below hurdle — Caution'}
-          </div>
-          <div className="mt-3 space-y-1">
-            <div className="flex items-center gap-2 text-xs">
-              <span className={`w-2 h-2 rounded-full ${c && c.currentIrr >= 10 ? 'bg-green-500' : 'bg-red-500'}`} />
-              <span className="text-slate-300">IRR vs hurdle</span>
-              <span className="ml-auto font-semibold">{c ? `${fmtIrr(c.currentIrr, 1)}%` : '—'}</span>
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className={`w-2 h-2 rounded-full ${c && c.currentDscr >= 1.2 ? 'bg-green-500' : 'bg-red-500'}`} />
-              <span className="text-slate-300">DSCR covenant</span>
-              <span className="ml-auto font-semibold">{c ? `${c.currentDscr}x` : '—'}</span>
-            </div>
-          </div>
+    <div className="space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">
+            Sensitivity Analysis
+          </h1>
+          <p className="mt-1 text-sm text-d-muted">
+            Real deterministic cases from canonical assumptions and outputs
+          </p>
+          <p className="mt-2 break-all font-mono text-[11px] text-d-muted">
+            run_id: {outputView.calculationRunId}
+          </p>
         </div>
-
-        {/* Live Model KPIs */}
-        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
-          <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium mb-2">Live Model KPIs</div>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="bg-d-bg rounded p-2">
-              <div className="text-[10px] text-d-muted">IRR</div>
-              <div className="text-lg font-bold text-gold-400">{c ? `${fmtIrr(c.currentIrr, 1)}%` : '—'}</div>
-            </div>
-            <div className="bg-d-bg rounded p-2">
-              <div className="text-[10px] text-d-muted">NPV</div>
-              <div className="text-lg font-bold text-gold-400">{c ? `$${c.currentNpv}M` : '—'}</div>
-            </div>
-            <div className="bg-d-bg rounded p-2">
-              <div className="text-[10px] text-d-muted">PAYBACK</div>
-              <div className="text-lg font-bold text-white">{c ? `${c.currentPayback}yr` : '—'}</div>
-            </div>
-            <div className="bg-d-bg rounded p-2">
-              <div className="text-[10px] text-d-muted">DSCR</div>
-              <div className="text-lg font-bold text-white">{c ? `${c.currentDscr}x` : '—'}</div>
-            </div>
-          </div>
+        <div className="flex items-center gap-3">
+          <span
+            aria-live="polite"
+            className={`rounded px-3 py-1 text-xs font-medium ${
+              recalculating
+                ? 'bg-amber-900/30 text-amber-200'
+                : 'bg-green-900/30 text-green-300'
+            }`}
+          >
+            {recalculating ? 'Recalculating…' : 'Persisted results'}
+          </span>
+          <button
+            type="button"
+            onClick={() => void bootstrapWorkbench()}
+            className="rounded border border-d-border px-3 py-1.5 text-xs text-white hover:border-gold-400 hover:bg-d-hover"
+          >
+            Refresh with GETs
+          </button>
         </div>
+      </header>
 
-        {/* Assumptions */}
-        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
-          <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium mb-2">Assumptions</div>
-          <div className="space-y-1.5">
-            {sidebarAssumptions.map((a: { label: string; value: string }) => (
-              <div key={a.label} className="flex justify-between text-xs">
-                <span className="text-d-muted">{a.label}</span>
-                <span className="font-mono font-semibold text-white">{a.value}</span>
+      {error ? (
+        <div
+          role="alert"
+          className="rounded border border-red-700/60 bg-red-900/20 p-3 text-sm text-red-200"
+        >
+          {error.message}
+        </div>
+      ) : null}
+
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+        <SensitivityAssumptionPanel
+          assumptions={workbench.assumptions}
+          overridesByTarget={workbench.overridesByTarget}
+          tornadoDriverKeys={workbench.tornadoDriverKeys}
+          maxDrivers={MAX_TORNADO_DRIVERS}
+          onValueChange={(targetKey, value) => {
+            if (!finiteDecimal(value)) {
+              return;
+            }
+            applyUserUpdate((current) => ({
+              ...current,
+              overridesByTarget: {
+                ...current.overridesByTarget,
+                [targetKey]: value,
+              },
+            }));
+          }}
+          onReset={(targetKey) =>
+            applyUserUpdate((current) => {
+              const nextOverrides = { ...current.overridesByTarget };
+              delete nextOverrides[targetKey];
+              return { ...current, overridesByTarget: nextOverrides };
+            })
+          }
+          onResetAll={() =>
+            applyUserUpdate((current) => ({
+              ...current,
+              overridesByTarget: {},
+            }))
+          }
+          onToggleDriver={(targetKey, selected) =>
+            applyUserUpdate((current) => {
+              const driverKeys = new Set(current.tornadoDriverKeys);
+              if (selected) {
+                if (driverKeys.size >= MAX_TORNADO_DRIVERS) {
+                  return current;
+                }
+                driverKeys.add(targetKey);
+              } else {
+                driverKeys.delete(targetKey);
+              }
+              return {
+                ...current,
+                tornadoDriverKeys: Array.from(driverKeys),
+              };
+            })
+          }
+        />
+
+        <div className="min-w-0 space-y-5">
+          <section>
+            <div className="mb-3">
+              <h2 className="text-base font-semibold text-white">
+                Current canonical outputs
+              </h2>
+              <p className="mt-1 text-xs text-d-muted">
+                Every scalar output returned by the persisted current run
+              </p>
+            </div>
+            {outputView.kpis.length > 0 ? (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {outputView.kpis.map((kpi) => (
+                  <KpiCard key={kpi.outputId} kpi={kpi} />
+                ))}
               </div>
+            ) : (
+              <p className="rounded-lg border border-d-border bg-d-card p-5 text-sm text-d-muted">
+                No canonical scalar output was returned for this model.
+              </p>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold text-white">
+                  One-way driver impact
+                </h2>
+                <p className="mt-1 text-xs text-d-muted">
+                  Signed low/high deltas around the persisted current case
+                </p>
+              </div>
+              <label className="w-full text-xs text-d-muted sm:w-72">
+                Selected canonical output
+                <select
+                  value={workbench.selectedOutputId ?? ''}
+                  onChange={(event) =>
+                    applyUserUpdate((current) => ({
+                      ...current,
+                      selectedOutputId: event.target.value || null,
+                    }))
+                  }
+                  className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus:border-gold-400 focus:outline-none"
+                >
+                  {availableNumericKpis.map((kpi) => (
+                    <option key={kpi.outputId} value={kpi.outputId}>
+                      {kpi.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-4">
+              <SensitivityTornadoChart
+                rows={tornadoRows}
+                outputLabel={analyzedOutputLabel}
+                formatValue={(value) =>
+                  formatNumericOutput(
+                    value,
+                    analyzedOutputUnit,
+                    analyzedNumberFormat,
+                  )
+                }
+              />
+            </div>
+          </section>
+
+          <div className="grid gap-5 xl:grid-cols-2">
+            <section className="overflow-x-auto rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
+              <h2 className="text-base font-semibold text-white">
+                Baseline vs current
+              </h2>
+              <p className="mt-1 text-xs text-d-muted">
+                Scalar comparison against the explicit zero-override run
+              </p>
+              {outputView.kpis.length > 0 ? (
+                <table className="mt-4 w-full min-w-[34rem] text-sm">
+                  <thead>
+                    <tr className="border-b border-d-border text-xs uppercase tracking-wide text-d-muted">
+                      <th className="pb-2 text-left font-medium">Output</th>
+                      <th className="pb-2 text-right font-medium">Baseline</th>
+                      <th className="pb-2 text-right font-medium">Current</th>
+                      <th className="pb-2 text-right font-medium">Δ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {outputView.kpis.map((kpi) => (
+                      <tr
+                        key={kpi.outputId}
+                        className="border-b border-d-border"
+                      >
+                        <th
+                          scope="row"
+                          className="py-3 text-left font-medium text-white"
+                        >
+                          {kpi.label}
+                        </th>
+                        <td className="py-3 text-right font-mono text-slate-300">
+                          {formatProjectedValue(
+                            kpi.baseline,
+                            kpi.unit,
+                            kpi.numberFormat,
+                          )}
+                        </td>
+                        <td className="py-3 text-right font-mono text-white">
+                          {formatProjectedValue(
+                            kpi.current,
+                            kpi.unit,
+                            kpi.numberFormat,
+                          )}
+                        </td>
+                        <td className="py-3 text-right font-mono text-gold-300">
+                          {formatAbsoluteChange(kpi)}
+                          <span className="ml-1 text-[10px] text-d-muted">
+                            {formatRelativeChange(kpi.percentageChange)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="mt-4 text-sm text-d-muted">
+                  No scalar outputs to compare.
+                </p>
+              )}
+            </section>
+
+            <section className="rounded-lg border border-d-border bg-d-card p-5 shadow-sm">
+              <h2 className="text-base font-semibold text-white">
+                Two-way sensitivity
+              </h2>
+              <p className="mt-1 text-xs text-d-muted">
+                Actual Cartesian engine cases for two canonical assumptions
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label className="text-xs text-d-muted">
+                  Row assumption
+                  <select
+                    value={workbench.rowDriverKey ?? ''}
+                    onChange={(event) =>
+                      applyUserUpdate((current) => ({
+                        ...current,
+                        rowDriverKey: event.target.value || null,
+                      }))
+                    }
+                    className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus:border-gold-400 focus:outline-none"
+                  >
+                    <option value="">None</option>
+                    {workbench.assumptions.map((assumption) => (
+                      <option
+                        key={assumption.targetKey}
+                        value={assumption.targetKey}
+                      >
+                        {assumption.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs text-d-muted">
+                  Column assumption
+                  <select
+                    value={workbench.columnDriverKey ?? ''}
+                    onChange={(event) =>
+                      applyUserUpdate((current) => ({
+                        ...current,
+                        columnDriverKey: event.target.value || null,
+                      }))
+                    }
+                    className="mt-1 w-full rounded border border-d-border bg-d-bg px-3 py-2 text-sm text-white focus:border-gold-400 focus:outline-none"
+                  >
+                    <option value="">None</option>
+                    {workbench.assumptions.map((assumption) => (
+                      <option
+                        key={assumption.targetKey}
+                        value={assumption.targetKey}
+                      >
+                        {assumption.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="mt-4">
+                <SensitivityTwoWayMatrix
+                  matrix={matrix}
+                  outputLabel={analyzedOutputLabel}
+                  formatAxisValue={formatAxisValue}
+                  formatOutputValue={(value) =>
+                    formatNumericOutput(
+                      value,
+                      analyzedOutputUnit,
+                      analyzedNumberFormat,
+                    )
+                  }
+                />
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      <section>
+        <div className="mb-3">
+          <h2 className="text-base font-semibold text-white">
+            Canonical time-series outputs
+          </h2>
+          <p className="mt-1 text-xs text-d-muted">
+            Every returned series is shown dynamically, including unclassified
+            model outputs.
+          </p>
+        </div>
+        {outputView.series.length > 0 ? (
+          <div className="grid gap-4 xl:grid-cols-2">
+            {outputView.series.map((series) => (
+              <SeriesChartCard key={series.outputId} series={series} />
             ))}
           </div>
-        </div>
-      </div>
+        ) : (
+          <p className="rounded-lg border border-d-border bg-d-card p-5 text-sm text-d-muted">
+            No canonical time-series output was returned for this model.
+          </p>
+        )}
+      </section>
 
-      {/* ── Main Content ── */}
-      <div className="flex-1 space-y-4">
-
-        {/* ── Header bar ── */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-white">Sensitivity Analysis</h1>
-            <p className="text-sm text-d-muted">
-              {cover.Project || model.original_filename}
-              {c ? ` · Base IRR ${fmtIrr(c.baseIrr, 1)}% · Current scenario IRR ${fmtIrr(c.currentIrr, 2)}%` : ''}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            {isChanged && (
-              <button onClick={resetSliders} className="text-xs text-d-muted hover:text-white border border-d-border px-3 py-1 rounded">
-                Reset to Base
-              </button>
-            )}
-            <span className={`text-xs px-2 py-1 rounded font-medium ${isChanged ? 'bg-amber-900/30 text-amber-400' : 'bg-green-900/30 text-green-400'}`}>
-              {isChanged ? 'Scenario Modified' : 'Base Case'}
-            </span>
-          </div>
-        </div>
-
-        {/* ── KPI Cards Row ── */}
-        <div className="grid grid-cols-5 gap-3">
-          {c && [
-            { label: 'IRR', value: `${fmtIrr(c.currentIrr, 1)}%`, base: c.baseIrr, cur: c.currentIrr, color: 'text-gold-400' },
-            { label: 'NPV', value: `$${c.currentNpv}M`, base: c.baseNpv, cur: c.currentNpv, color: 'text-gold-400' },
-            { label: 'Payback', value: `${c.currentPayback} yrs`, base: c.basePayback, cur: c.currentPayback, color: 'text-gold-400' },
-            { label: 'DSCR', value: `${c.currentDscr}x`, base: c.baseDscr, cur: c.currentDscr, color: 'text-gold-400' },
-            { label: 'Equity ×', value: `${c.currentEquityX}x`, base: c.baseEquityX, cur: c.currentEquityX, color: 'text-gold-400' },
-          ].map((kpi) => {
-            const d = deltaStr(kpi.cur, kpi.base);
-            return (
-              <div key={kpi.label} className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
-                <div className="text-xs text-d-muted uppercase tracking-wide font-medium">{kpi.label}</div>
-                <div className={`text-2xl font-bold mt-1 ${kpi.color}`}>{kpi.value}</div>
-                <div className="text-xs text-d-muted mt-1">
-                  vs base: <span className={d.startsWith('+') && d !== '+0' ? 'text-green-400' : d.startsWith('-') ? 'text-red-400' : 'text-d-muted'}>{d}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* ── 2×2 Grid ── */}
-        <div className="grid grid-cols-2 gap-4">
-
-          {/* ── TOP LEFT: Assumption Sliders (stress-based, matching Python script) ── */}
-          <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-sm font-semibold text-white">Assumption sliders</h2>
-                <p className="text-xs text-d-muted">Drag to simulate — the tornado chart updates live</p>
-              </div>
-            </div>
-            <div className="space-y-4">
-              {vars.map((v) => {
-                const stress = sliderState[v.id] ?? 0;
-                const changed = stress !== 0;
-                return (
-                  <div key={v.id}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-44 shrink-0">
-                        <div className="text-sm font-semibold text-slate-200 truncate" title={v.name}>{v.name}</div>
-                        <div className="text-[10px] text-d-muted mt-0.5">
-                          Current stress: <span className={changed ? 'text-gold-400' : ''}>{stress > 0 ? '+' : ''}{stress}%</span>
-                        </div>
-                      </div>
-                      <input
-                        type="range"
-                        min={-20}
-                        max={20}
-                        step={1}
-                        value={stress}
-                        onChange={e => handleSlider(v.id, parseInt(e.target.value))}
-                        className="flex-1 h-1.5 accent-gold-500 cursor-pointer"
-                      />
-                      <div className={`w-20 text-center text-xs font-mono font-bold rounded-lg px-2 py-1.5 ${
-                        changed ? 'bg-gold-500 text-white' : 'bg-d-bg text-white border border-d-border'
-                      }`}>
-                        {renderValue(v, stress)}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ── TOP RIGHT: IRR Tornado Chart (SVG, matching Python script) ── */}
-          <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-sm font-semibold text-white">IRR tornado chart</h2>
-              <div className="text-[10px] text-d-muted bg-d-bg px-2 py-0.5 rounded border border-d-border">±20% stress</div>
-            </div>
-            <p className="text-[10px] text-d-muted mb-3 uppercase tracking-wider font-medium">Ranked by impact</p>
-            {c && c.tornado.length > 0 ? (
-              <>
-                <TornadoChart rows={c.tornado} currentIrr={c.currentIrr} />
-                <div className="flex gap-4 mt-3 text-[11px] text-d-muted">
-                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: '#f87171' }} /> downside</span>
-                  <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: '#4ade80' }} /> upside</span>
-                </div>
-                <div className="text-[10px] text-d-muted mt-2">
-                  Method: piecewise-linear interpolation on five one-way sensitivity points; project IRR approximated additively from all slider selections.
-                </div>
-              </>
-            ) : (
-              <div className="text-center py-8 text-d-muted text-xs">No sensitivity data available.</div>
-            )}
-          </div>
-
-          {/* ── BOTTOM LEFT: Scenario Comparison ── */}
-          <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-white">Scenario comparison</h2>
-              <span className="text-[10px] text-d-muted">base vs current</span>
-            </div>
-            {c ? (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-xs text-d-muted uppercase tracking-wider">
-                    <th className="text-left pb-2 font-medium">Metric</th>
-                    <th className="text-right pb-2 font-medium">Base</th>
-                    <th className="text-right pb-2 font-medium">Scenario</th>
-                    <th className="text-right pb-2 font-medium">Δ</th>
-                  </tr>
-                </thead>
-                <tbody className="text-sm">
-                  {[
-                    { metric: 'IRR', base: c.baseIrr, cur: c.currentIrr, suffix: '%' },
-                    { metric: 'NPV ($M)', base: c.baseNpv, cur: c.currentNpv, prefix: '$' },
-                    { metric: 'Payback (yr)', base: c.basePayback, cur: c.currentPayback },
-                    { metric: 'DSCR (avg)', base: c.baseDscr, cur: c.currentDscr, suffix: 'x' },
-                    { metric: 'Equity ×', base: c.baseEquityX, cur: c.currentEquityX, suffix: 'x' },
-                  ].map((row) => {
-                    const d = row.cur - row.base;
-                    const dStr = Math.abs(d) < 0.05 ? '+0' : `${d >= 0 ? '+' : ''}${d.toFixed(1)}`;
-                    return (
-                      <tr key={row.metric} className="border-b border-d-border">
-                        <td className="py-2.5 font-medium text-white">{row.metric}</td>
-                        <td className="py-2.5 text-right text-d-muted">{fmtTableVal(row.base, row.prefix, row.suffix)}</td>
-                        <td className="py-2.5 text-right font-semibold text-white">{fmtTableVal(row.cur, row.prefix, row.suffix)}</td>
-                        <td className={`py-2.5 text-right font-medium ${d > 0.05 ? 'text-green-400' : d < -0.05 ? 'text-red-400' : 'text-d-muted'}`}>{dStr}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            ) : (
-              <div className="text-center py-8 text-d-muted text-xs">No data available.</div>
-            )}
-          </div>
-
-          {/* ── BOTTOM RIGHT: Two-Way Table ── */}
-          <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5 overflow-x-auto">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-white">WACC × Throughput two-way table</h2>
-              <span className="text-[10px] text-d-muted bg-d-bg px-2 py-0.5 rounded">IRR %</span>
-            </div>
-            {c?.twoWay?.data && c.twoWay.data.length > 0 ? (
-              <table className="w-full text-xs">
-                <thead>
-                  <tr>
-                    <th className="p-1.5 text-left text-d-muted font-medium border-b">WACC / Fee</th>
-                    {(c.twoWay.columns && c.twoWay.columns.length > 0
-                      ? c.twoWay.columns
-                      : c.twoWay.data[0]?.values?.map((_: any, i: number) => `Col ${i + 1}`)
-                    ).map((col: any, i: number) => (
-                      <th key={i} className="p-1.5 text-right text-d-muted font-medium border-b">{col}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {c.twoWay.data.map((row: any, i: number) => (
-                    <tr key={i} className="border-b border-d-border">
-                      <td className="p-1.5 font-medium text-slate-300">{row.wacc}</td>
-                      {(row.values || []).map((v: any, j: number) => {
-                        const val = typeof v === 'number' ? v : parseFloat(v);
-                        const pctVal = Math.abs(val) < 1 ? val * 100 : val;
-                        const baseIrrPct = c?.currentIrr ?? 12.3;
-                        const isBase = Math.abs(pctVal - baseIrrPct) < 0.15;
-                        return (
-                          <td key={j} className={`p-1.5 text-right font-mono ${
-                            isBase ? 'ring-2 ring-gold-500 ring-inset font-bold bg-d-hover' :
-                            pctVal >= 10 ? 'text-green-400' : pctVal < 0 ? 'text-red-400' : 'text-amber-400'
-                          }`}>
-                            {isNaN(pctVal) ? '—' : `${pctVal.toFixed(1)}%`}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="text-center py-8 text-d-muted text-xs">
-                Two-way sensitivity data not available in model.
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── Current Assumptions (reflects slider positions) ── */}
-        <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-5">
-          <h2 className="text-sm font-semibold text-white mb-3">Current Assumptions</h2>
-          <div className="grid grid-cols-4 gap-x-8 gap-y-1 text-xs">
-            {vars.map((v) => {
-              const stress = sliderState[v.id] ?? 0;
-              const changed = stress !== 0;
-              return (
-                <div key={v.id} className="flex justify-between py-1 border-b border-d-border">
-                  <span className="text-d-muted">{v.name}</span>
-                  <span className={`font-mono font-semibold ${changed ? 'text-gold-400' : 'text-white'}`}>
-                    {renderValue(v, stress)}
-                    {changed && <span className="text-d-muted ml-1 text-[10px]">({stress > 0 ? '+' : ''}{stress}%)</span>}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      <FloatingAssistant tabKey="sensitivity" pageContext="Sensitivity analysis with interactive tornado chart, two-way heat map, and real-time scenario sliders" />
+      <FloatingAssistant
+        tabKey="sensitivity"
+        pageContext="Canonical sensitivity workbench with persisted output comparisons, deterministic one-way cases, a two-way matrix, and dynamic time series"
+      />
     </div>
   );
-}
-
-/* ── Formatting helpers ── */
-function fmtTableVal(v: any, prefix?: string, suffix?: string): string {
-  if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) return '—';
-  const num = typeof v === 'string' ? parseFloat(v) : v;
-  if (isNaN(num)) return String(v);
-  const formatted = Number.isInteger(num) ? String(num) : num.toFixed(1);
-  return `${prefix || ''}${formatted}${suffix || ''}`;
 }

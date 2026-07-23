@@ -1848,3 +1848,164 @@ test('two-way matrix preserves explicit axis order, run IDs, and unavailable cel
     ],
   );
 });
+
+test('sensitivity workbench composes canonical APIs and dynamic components without legacy mappings', () => {
+  const pageSource = readFileSync('src/app/sensitivity/page.tsx', 'utf8');
+  const componentSources = [
+    'SensitivityAssumptionPanel.tsx',
+    'SensitivityTornadoChart.tsx',
+    'SensitivityTwoWayMatrix.tsx',
+  ].map((fileName) => {
+    try {
+      return readFileSync(`src/components/sensitivity/${fileName}`, 'utf8');
+    } catch {
+      return '';
+    }
+  });
+  const allSource = [pageSource, ...componentSources].join('\n');
+
+  for (const requiredSource of [
+    'SensitivityAssumptionPanel',
+    'SensitivityTornadoChart',
+    'SensitivityTwoWayMatrix',
+    'getCalculationReadiness',
+    'getCalculationRunOutputs',
+    'runCalculationSensitivity',
+    'loadAllEditableNumericParameters',
+    'restoreSensitivityOutputProjection',
+    'comparison_baseline_run_id',
+    'selectedOutputId',
+    'tornadoDriverKeys',
+    'MAX_TORNADO_DRIVERS = 12',
+  ]) {
+    assert.ok(
+      pageSource.includes(requiredSource),
+      `expected sensitivity page to include ${requiredSource}`,
+    );
+  }
+  assert.ok(allSource.includes('Reset all'), 'reset-all control must exist');
+
+  for (const forbiddenSource of [
+    'getModel',
+    'parsed_json',
+    'sheet_name',
+    'cell_address',
+    'baseIrr',
+    'interp(',
+    'LNG',
+    'throughput',
+    'WACC',
+    '12.3',
+  ]) {
+    assert.equal(
+      allSource.includes(forbiddenSource),
+      false,
+      `sensitivity workbench must not include ${forbiddenSource}`,
+    );
+  }
+  assert.doesNotMatch(allSource, /scenarios\/.*sensitivity/);
+  assert.doesNotMatch(allSource, /new\s+(Map|Set)\s*\(\s*\[[\s\S]*IRR/i);
+});
+
+test('sensitivity bootstrap is GET-only and output reload follows a guarded sensitivity response', () => {
+  const pageSource = readFileSync('src/app/sensitivity/page.tsx', 'utf8');
+  const bootstrapStart = pageSource.indexOf('async function bootstrapWorkbench');
+  const schedulerStart = pageSource.indexOf('function scheduleAnalysis');
+
+  assert.ok(bootstrapStart >= 0, 'bootstrap function must be explicit');
+  assert.ok(
+    schedulerStart > bootstrapStart,
+    'user scheduler must remain separate from bootstrap',
+  );
+  const bootstrapSource = pageSource.slice(bootstrapStart, schedulerStart);
+  assert.match(bootstrapSource, /getCalculationReadiness/);
+  assert.match(bootstrapSource, /loadAllEditableNumericParameters/);
+  assert.match(bootstrapSource, /restoreSensitivityOutputProjection/);
+  assert.match(bootstrapSource, /const bootstrapStorage/);
+  assert.match(
+    bootstrapSource,
+    /bootstrapRevision === bootstrapRevisionRef\.current[\s\S]*current\.modelVersionId === identity\.modelVersionId[\s\S]*current\.graphVersionId === identity\.graphVersionId/,
+  );
+  assert.match(
+    bootstrapSource,
+    /restoreSensitivityOutputProjection\(\s*bootstrapStorage,/,
+  );
+  assert.doesNotMatch(bootstrapSource, /runCalculationSensitivity/);
+  assert.doesNotMatch(bootstrapSource, /method:\s*['"]POST['"]/);
+
+  const postIndex = pageSource.indexOf('await runCalculationSensitivity(');
+  const responseGuardIndex = pageSource.indexOf(
+    'canApplySensitivityResponse(',
+    postIndex,
+  );
+  const outputGetIndex = pageSource.indexOf(
+    'getCalculationRunOutputs(analysis.current_run_id)',
+    responseGuardIndex,
+  );
+  const outputIdentityIndex = pageSource.indexOf(
+    'outputs.calculation_run_id !== analysis.current_run_id',
+    outputGetIndex,
+  );
+  const persistenceIndex = pageSource.indexOf(
+    'persistSensitivityRunSelection(',
+    outputIdentityIndex,
+  );
+
+  assert.ok(postIndex >= 0, 'analysis POST must exist');
+  assert.ok(responseGuardIndex > postIndex, 'POST response must be guarded');
+  assert.ok(
+    outputGetIndex > responseGuardIndex,
+    'current outputs must load only after a guarded sensitivity response',
+  );
+  assert.ok(
+    outputIdentityIndex > outputGetIndex,
+    'output reload must verify the explicit current run identity',
+  );
+  assert.ok(
+    persistenceIndex > outputIdentityIndex,
+    'storage writes must follow both guarded successes',
+  );
+  assert.match(pageSource, /SENSITIVITY_DEBOUNCE_MS\s*=\s*400/);
+  assert.match(pageSource, /requestRevisionRef\.current/);
+  assert.match(pageSource, /clearTimeout/);
+});
+
+test('only the newest sensitivity response may apply when requests resolve out of order', async () => {
+  const applied: string[] = [];
+  let currentRevision = 0;
+
+  const settle = async (
+    response: CalculationSensitivityResponse,
+    revision: number,
+    delay: number,
+  ) => {
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (
+      canApplySensitivityResponse(response, {
+        requestRevision: revision,
+        currentRevision,
+        modelVersionId: 'model-version',
+        graphVersionId: 'graph-version',
+        outputId: 'project-irr-output',
+      })
+    ) {
+      applied.push(response.current_run_id);
+    }
+  };
+
+  currentRevision = 1;
+  const older = settle(
+    sensitivityResponse({ current_run_id: 'older-run' }),
+    1,
+    10,
+  );
+  currentRevision = 2;
+  const newer = settle(
+    sensitivityResponse({ current_run_id: 'newer-run' }),
+    2,
+    0,
+  );
+
+  await Promise.all([older, newer]);
+  assert.deepEqual(applied, ['newer-run']);
+});

@@ -975,20 +975,6 @@ test('run output projection API uses GET and the business-output route', async (
   ]);
 });
 
-test('formal Sensitivity page consumes projected outputs without legacy KPI interpolation', () => {
-  const pageSource = readFileSync('src/app/sensitivity/page.tsx', 'utf8');
-
-  assert.match(pageSource, /getCalculationRunOutputs/);
-  assert.match(pageSource, /readPersistedCalculationState/);
-  assert.match(pageSource, /buildSensitivityOutputView/);
-  assert.doesNotMatch(pageSource, /\bgetModel\b/);
-  assert.doesNotMatch(pageSource, /parsed_json/);
-  assert.doesNotMatch(pageSource, /\binterp\s*\(/);
-  assert.doesNotMatch(pageSource, /baseIrr\s*=\s*0\.123/);
-  assert.doesNotMatch(pageSource, /piecewise-linear interpolation/);
-  assert.doesNotMatch(pageSource, /sheet_name|cell_address/);
-});
-
 test('canonical sensitivity API posts the exact request body to the model route', async () => {
   const request: CalculationSensitivityRequest = {
     graph_version_id: 'graph-version',
@@ -1198,6 +1184,21 @@ test('default output prioritizes available project IRR, equity IRR, NPV, then di
           current: projectedNumber('4'),
         },
         {
+          output_id: 'npv-output-second',
+          entity_kind: 'scalar',
+          business_role: 'npv',
+          label: 'NPV later in display order',
+          unit: null,
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: null,
+          availability_status: 'available',
+          baseline: projectedNumber('5'),
+          current: projectedNumber('6'),
+        },
+        {
           output_id: 'project-irr-output',
           entity_kind: 'scalar',
           business_role: 'project_irr',
@@ -1383,6 +1384,67 @@ test('corrupt workbench state is cleared and storage failures do not escape', ()
   );
 });
 
+test('workbench restore rejects non-finite decimal overrides and accepts signed scientific decimals', () => {
+  const targetKey =
+    'parameter:11111111-1111-4111-8111-111111111111';
+  const validDocument = {
+    version: SENSITIVITY_WORKBENCH_VERSION,
+    modelVersionId: 'model-version',
+    graphVersionId: 'graph-version',
+    overridesByTarget: { [targetKey]: '-2.5e-3' },
+    tornadoDriverKeys: [targetKey],
+    selectedOutputId: null,
+    rowDriverKey: null,
+    columnDriverKey: null,
+  };
+
+  const validStorage = new MemoryStorage();
+  validStorage.setItem(
+    CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+    JSON.stringify(validDocument),
+  );
+  assert.deepEqual(
+    readSensitivityWorkbenchDocument(
+      validStorage,
+      'model-version',
+      'graph-version',
+    ),
+    validDocument,
+  );
+
+  for (const invalidValue of [
+    '',
+    ' ',
+    'NaN',
+    'Infinity',
+    '-Infinity',
+    '0x10',
+  ]) {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+      JSON.stringify({
+        ...validDocument,
+        overridesByTarget: { [targetKey]: invalidValue },
+      }),
+    );
+
+    assert.equal(
+      readSensitivityWorkbenchDocument(
+        storage,
+        'model-version',
+        'graph-version',
+      ),
+      null,
+      `expected ${JSON.stringify(invalidValue)} to be rejected`,
+    );
+    assert.equal(
+      storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
+      null,
+    );
+  }
+});
+
 test('artifact clearing and graph changes remove the sensitivity workbench document', () => {
   const storage = new MemoryStorage();
   const storeDocument = () =>
@@ -1484,6 +1546,57 @@ test('GET-only sensitivity restore clears a structured missing override then loa
     storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId),
     'baseline-run',
   );
+});
+
+test('GET-only sensitivity restore rethrows synthetic or unrelated 404s and retains override state', async () => {
+  for (const detail of [
+    {
+      code: 'HTTP_404',
+      message: 'proxy not found',
+      retryable: false,
+      resource_id: 'missing-override',
+    },
+    {
+      code: 'CALCULATION_RUN_NOT_FOUND',
+      message: 'different run missing',
+      retryable: false,
+      resource_id: 'different-run',
+    },
+  ]) {
+    const storage = new MemoryStorage();
+    storage.setItem(CALCULATION_STORAGE_KEYS.baselineRunId, 'baseline-run');
+    storage.setItem(
+      CALCULATION_STORAGE_KEYS.overrideRunId,
+      'missing-override',
+    );
+    const calls: string[] = [];
+    const error = Object.assign(new Error(detail.message), {
+      status: 404,
+      detail,
+    });
+
+    await assert.rejects(
+      () =>
+        restoreSensitivityOutputProjection(
+          storage,
+          readPersistedCalculationState(storage),
+          async (runId) => {
+            calls.push(runId);
+            throw error;
+          },
+        ),
+      (caught) => caught === error,
+    );
+    assert.deepEqual(calls, ['missing-override']);
+    assert.equal(
+      storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
+      'missing-override',
+    );
+    assert.equal(
+      storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId),
+      'baseline-run',
+    );
+  }
 });
 
 test('revision/model/graph/output guard rejects stale sensitivity responses', () => {

@@ -87,6 +87,18 @@ function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === 'string';
 }
 
+function isFiniteDecimalString(value: unknown): value is string {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const normalized = value.trim();
+  return (
+    normalized.length > 0 &&
+    /^[+-]?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?$/.test(normalized) &&
+    Number.isFinite(Number(normalized))
+  );
+}
+
 function isSensitivityWorkbenchDocument(
   value: unknown,
 ): value is SensitivityWorkbenchDocument {
@@ -106,7 +118,8 @@ function isSensitivityWorkbenchDocument(
   if (
     !Object.entries(value.overridesByTarget).every(
       ([key, decimalValue]) =>
-        isCanonicalTargetKey(key) && typeof decimalValue === 'string',
+        isCanonicalTargetKey(key) &&
+        isFiniteDecimalString(decimalValue),
     ) ||
     !value.tornadoDriverKeys.every(isCanonicalTargetKey) ||
     (value.rowDriverKey !== null &&

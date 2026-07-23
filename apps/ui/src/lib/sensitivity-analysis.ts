@@ -361,9 +361,12 @@ export function selectDefaultSensitivityOutput(
       kpi.current.availabilityStatus === 'available' &&
       kpi.current.numericValue !== null,
   );
-  const kpiByRole = new Map(
-    availableKpis.map((kpi) => [kpi.businessRole, kpi]),
-  );
+  const kpiByRole = new Map<string, SensitivityKpi>();
+  for (const kpi of availableKpis) {
+    if (!kpiByRole.has(kpi.businessRole)) {
+      kpiByRole.set(kpi.businessRole, kpi);
+    }
+  }
   for (const role of ['project_irr', 'equity_irr', 'npv']) {
     const kpi = kpiByRole.get(role);
     if (kpi !== undefined) {
@@ -613,7 +616,10 @@ export function buildTwoWayMatrix(
   };
 }
 
-function isStructuredNotFound(error: unknown): boolean {
+function isStructuredNotFound(
+  error: unknown,
+  requestedRunId: string,
+): boolean {
   if (typeof error !== 'object' || error === null) {
     return false;
   }
@@ -628,8 +634,15 @@ function isStructuredNotFound(error: unknown): boolean {
   ) {
     return false;
   }
+  const detail = candidate.detail as {
+    code?: unknown;
+    resource_id?: unknown;
+  };
   return (
-    typeof (candidate.detail as { code?: unknown }).code === 'string'
+    detail.code === 'CALCULATION_RUN_NOT_FOUND' &&
+    (detail.resource_id === undefined ||
+      detail.resource_id === null ||
+      detail.resource_id === requestedRunId)
   );
 }
 
@@ -642,7 +655,7 @@ export async function restoreSensitivityOutputProjection(
     try {
       return await getOutputs(state.overrideRunId);
     } catch (error) {
-      if (!isStructuredNotFound(error)) {
+      if (!isStructuredNotFound(error, state.overrideRunId)) {
         throw error;
       }
       try {

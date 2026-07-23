@@ -33,6 +33,16 @@ UUIDString = Annotated[
     AfterValidator(_validated_uuid_string),
 ]
 
+_MAX_CALCULATION_NUMBER_LITERAL_LENGTH = 128
+_MAX_CALCULATION_NUMBER_SIGNIFICANT_DIGITS = 32
+_MIN_BINARY64_DECIMAL_EXPONENT = -324
+_MAX_BINARY64_DECIMAL_EXPONENT = 308
+_MAX_CALCULATION_NUMBER_SCALE = (
+    -_MIN_BINARY64_DECIMAL_EXPONENT
+    + _MAX_CALCULATION_NUMBER_SIGNIFICANT_DIGITS
+    - 1
+)
+
 
 class _CalculationDTO(BaseModel):
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
@@ -45,18 +55,43 @@ class CalculationNumberValue(_CalculationDTO):
     @field_validator("value")
     @classmethod
     def validate_finite_decimal(cls, value: str) -> str:
+        if len(value) > _MAX_CALCULATION_NUMBER_LITERAL_LENGTH:
+            raise ValueError("Number value literal is too long")
         try:
             decimal_value = Decimal(value)
         except InvalidOperation as exc:
             raise ValueError("Number value must be a decimal string") from exc
         if not decimal_value.is_finite():
             raise ValueError("Number value must be finite")
+        _sign, digits, exponent = decimal_value.as_tuple()
+        if len(digits) > _MAX_CALCULATION_NUMBER_SIGNIFICANT_DIGITS:
+            raise ValueError("Number value has too many significant digits")
+        decimal_exponent = int(exponent)
+        if (
+            decimal_exponent > _MAX_BINARY64_DECIMAL_EXPONENT
+            or decimal_exponent < -_MAX_CALCULATION_NUMBER_SCALE
+        ):
+            raise ValueError(
+                "Number value exponent is outside the calculation engine range"
+            )
+        if decimal_value != 0 and not (
+            _MIN_BINARY64_DECIMAL_EXPONENT
+            <= decimal_value.adjusted()
+            <= _MAX_BINARY64_DECIMAL_EXPONENT
+        ):
+            raise ValueError(
+                "Number value exponent is outside the calculation engine range"
+            )
         try:
-            finite_float = math.isfinite(float(decimal_value))
+            float_value = float(decimal_value)
         except (OverflowError, ValueError):
-            finite_float = False
-        if not finite_float:
+            raise ValueError(
+                "Number value is outside the calculation engine range"
+            ) from None
+        if not math.isfinite(float_value):
             raise ValueError("Number value is outside the calculation engine range")
+        if decimal_value != 0 and float_value == 0.0:
+            raise ValueError("Number value underflows the calculation engine range")
         return value
 
 

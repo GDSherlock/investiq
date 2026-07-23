@@ -217,6 +217,29 @@ class CalculationSensitivityService:
         model_version_id: str,
         request: CalculationSensitivityRequest,
     ) -> str:
+        readiness = self._calculation_service.get_readiness(model_version_id)
+        if readiness.status == "model_not_ready":
+            raise CalculationIntegrationError(
+                "MODEL_NOT_MATERIALIZED",
+                "Model version is not canonically materialized.",
+                status_code=409,
+                resource_id=model_version_id,
+            )
+        if readiness.status not in {"ready", "ready_with_warning"}:
+            raise CalculationIntegrationError(
+                "CALCULATION_NOT_PREPARED",
+                "Calculation preparation is not complete.",
+                status_code=409,
+                resource_id=model_version_id,
+            )
+        if request.graph_version_id != readiness.graph_version_id:
+            raise CalculationIntegrationError(
+                "GRAPH_VERSION_MISMATCH",
+                "Requested graph version is not current for the model.",
+                status_code=409,
+                resource_id=request.graph_version_id,
+            )
+
         baseline = self._repository.find_completed_zero_override_run(
             model_version_id,
             request.graph_version_id,

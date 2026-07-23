@@ -59,11 +59,54 @@ def test_number_value_accepts_finite_decimal_string() -> None:
     assert value.value == "900.000000000000000001"
 
 
+def test_number_value_accepts_smallest_binary64_subnormal() -> None:
+    value = TypeAdapter(CalculationInputValue).validate_python(
+        {"value_type": "number", "value": "5e-324"}
+    )
+
+    assert value.value == "5e-324"
+
+
 @pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", "1e999999"])
 def test_number_value_rejects_non_finite_decimal_string(value: str) -> None:
     with pytest.raises(ValidationError):
         TypeAdapter(CalculationInputValue).validate_python(
             {"value_type": "number", "value": value}
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["1e-100000", "0e-100000", "0e100000"],
+)
+def test_number_value_rejects_unbounded_decimal_exponents(value: str) -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(CalculationInputValue).validate_python(
+            {"value_type": "number", "value": value}
+        )
+
+
+def test_number_value_rejects_nonzero_binary64_underflow() -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(CalculationInputValue).validate_python(
+            {"value_type": "number", "value": "1e-324"}
+        )
+
+
+def test_number_value_rejects_overlong_literal() -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(CalculationInputValue).validate_python(
+            {"value_type": "number", "value": f"{'0' * 128}1"}
+        )
+
+
+def test_number_value_rejects_excess_significant_digits() -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(CalculationInputValue).validate_python(
+            {
+                "value_type": "number",
+                "value": "123456789012345678901234567890123",
+            }
         )
 
 

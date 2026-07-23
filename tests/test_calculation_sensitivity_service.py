@@ -560,6 +560,59 @@ def test_baseline_preflight_fails_before_creating_a_run(
 
 
 @pytest.mark.parametrize(
+    ("preflight_state", "expected_code", "expected_status"),
+    [
+        ("unknown_model", "MODEL_VERSION_NOT_FOUND", 404),
+        ("model_not_ready", "MODEL_NOT_MATERIALIZED", 409),
+        ("not_prepared", "CALCULATION_NOT_PREPARED", 409),
+        ("graph_mismatch", "GRAPH_VERSION_MISMATCH", 409),
+    ],
+)
+def test_preflight_validates_readiness_and_graph_before_baseline_lookup(
+    sensitivity_context,
+    monkeypatch: pytest.MonkeyPatch,
+    preflight_state: str,
+    expected_code: str,
+    expected_status: int,
+) -> None:
+    context = sensitivity_context
+    model_version_id = context["model"].id
+    graph_version_id = str(uuid.uuid4())
+    expected_resource_id = model_version_id
+    if preflight_state == "unknown_model":
+        model_version_id = str(uuid.uuid4())
+        expected_resource_id = model_version_id
+    elif preflight_state == "model_not_ready":
+        context["model"].status = "extracted"
+        context["session"].commit()
+    elif preflight_state == "graph_mismatch":
+        context["facade"].prepare(model_version_id)
+        expected_resource_id = graph_version_id
+
+    request = _sensitivity_request(
+        graph_version_id,
+        _output_id(context["model"].id),
+        context["parameter"].id,
+    )
+    service = _service(context)
+    monkeypatch.setattr(
+        service._repository,
+        "find_completed_zero_override_run",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Baseline lookup must follow model and graph validation"
+        ),
+    )
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        service.analyze(model_version_id, request)
+
+    assert captured.value.code == expected_code
+    assert captured.value.status_code == expected_status
+    assert captured.value.resource_id == expected_resource_id
+    assert _run_count(context) == 0
+
+
+@pytest.mark.parametrize(
     "invalid_kind",
     ["unknown", "wrong_model", "non_editable", "non_numeric"],
 )

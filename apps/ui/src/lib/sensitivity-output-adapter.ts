@@ -100,6 +100,8 @@ export interface SensitivitySeries {
   points: SensitivitySeriesPoint[];
   changedPointCount: number;
   maxAbsoluteChange: number | null;
+  unavailableBaselinePointCount: number;
+  unavailableBaselineReasons: string[];
   unavailableCurrentPointCount: number;
   unavailableCurrentReasons: string[];
 }
@@ -242,6 +244,19 @@ export function buildSensitivityOutputView(
     const changes = points
       .map((point) => point.absoluteChange)
       .filter((change): change is number => change !== null && change !== 0);
+    const unavailableBaselinePoints = points.filter(
+      (point) => point.baseline.availabilityStatus === 'unavailable',
+    );
+    const unavailableBaselineReasons = Array.from(
+      new Set(
+        unavailableBaselinePoints.map(
+          (point) =>
+            point.baseline.unavailableReason ??
+            point.baseline.executionStatus ??
+            point.supportStatus,
+        ),
+      ),
+    ).sort();
     const unavailableCurrentPoints = points.filter(
       (point) => point.current.availabilityStatus === 'unavailable',
     );
@@ -249,7 +264,9 @@ export function buildSensitivityOutputView(
       new Set(
         unavailableCurrentPoints.map(
           (point) =>
-            point.current.unavailableReason ?? point.supportStatus,
+            point.current.unavailableReason ??
+            point.current.executionStatus ??
+            point.supportStatus,
         ),
       ),
     ).sort();
@@ -268,6 +285,8 @@ export function buildSensitivityOutputView(
         changes.length > 0
           ? Math.max(...changes.map((change) => Math.abs(change)))
           : null,
+      unavailableBaselinePointCount: unavailableBaselinePoints.length,
+      unavailableBaselineReasons,
       unavailableCurrentPointCount: unavailableCurrentPoints.length,
       unavailableCurrentReasons,
     });

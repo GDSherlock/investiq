@@ -35,13 +35,12 @@ import type {
   CalculationTypedValue,
 } from '@/lib/calculation-api-types';
 import {
-  SENSITIVITY_WORKBENCH_VERSION,
+  CALCULATION_STORAGE_KEYS,
   createGuardedSensitivityStorage,
-  persistSensitivityRunSelection,
-  persistSensitivityWorkbenchDocument,
+  persistSensitivityWorkbenchState,
   readPersistedCalculationState,
   readSensitivityWorkbenchDocument,
-  type SensitivityWorkbenchDocument,
+  type SensitivityWorkbenchDraft,
 } from '@/lib/calculation-storage';
 import {
   buildSensitivityRequest,
@@ -68,6 +67,7 @@ import {
 
 const MAX_TORNADO_DRIVERS = 12;
 const SENSITIVITY_DEBOUNCE_MS = 400;
+const STORAGE_RECONCILIATION_MS = 50;
 
 interface WorkbenchState {
   assumptions: SensitivityAssumption[];
@@ -79,6 +79,8 @@ interface WorkbenchState {
   outputs: CalculationRunOutputsResponse | null;
   analysis: CalculationSensitivityResponse | null;
 }
+
+type BootstrapWorkbenchResult = 'applied' | 'superseded' | 'failed';
 
 interface ActiveIdentity {
   modelVersionId: string;
@@ -180,11 +182,17 @@ function formatRelativeChange(change: number | null): string {
   return `${sign}${formatNumber(change)}%`;
 }
 
-function unavailableReason(kpi: SensitivityKpi): string {
+function projectedUnavailableReason(
+  projected: SensitivityProjectedValue,
+  supportStatus: string,
+): string | null {
+  if (projected.availabilityStatus === 'available') {
+    return null;
+  }
   return (
-    kpi.current.unavailableReason ??
-    kpi.baseline.unavailableReason ??
-    kpi.supportStatus
+    projected.unavailableReason ??
+    projected.executionStatus ??
+    supportStatus
   );
 }
 
@@ -197,6 +205,15 @@ function currentAssumptionValue(
 
 function finiteDecimal(value: string): boolean {
   return value.trim() !== '' && Number.isFinite(Number(value));
+}
+
+function createWorkbenchDocumentRevision(): string {
+  if (typeof window.crypto?.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
 }
 
 function pruneInactiveSensitivitySelections(
@@ -241,7 +258,16 @@ function pruneInactiveSensitivitySelections(
 }
 
 const KpiCard = memo(function KpiCard({ kpi }: { kpi: SensitivityKpi }) {
-  const available = kpi.current.availabilityStatus === 'available';
+  const baselineReason = projectedUnavailableReason(
+    kpi.baseline,
+    kpi.supportStatus,
+  );
+  const currentReason = projectedUnavailableReason(
+    kpi.current,
+    kpi.supportStatus,
+  );
+  const currentAvailable =
+    kpi.current.availabilityStatus === 'available';
   return (
     <article className="rounded-lg border border-d-border bg-d-card p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -255,37 +281,49 @@ const KpiCard = memo(function KpiCard({ kpi }: { kpi: SensitivityKpi }) {
         </div>
         <span
           className={`rounded px-2 py-0.5 text-[10px] font-medium ${
-            available
+            kpi.availabilityStatus === 'available'
               ? 'bg-green-900/30 text-green-300'
-              : 'bg-amber-900/30 text-amber-300'
+              : kpi.availabilityStatus === 'partial'
+                ? 'bg-amber-900/30 text-amber-300'
+                : 'bg-red-900/30 text-red-300'
           }`}
         >
-          {available ? 'Available' : 'Unavailable'}
+          {kpi.availabilityStatus === 'available'
+            ? 'Available'
+            : kpi.availabilityStatus === 'partial'
+              ? 'Partial'
+              : 'Unavailable'}
         </span>
       </div>
       <p
         className={`mt-3 text-2xl font-bold ${
-          available ? 'text-gold-400' : 'text-d-muted'
+          currentAvailable ? 'text-gold-400' : 'text-d-muted'
         }`}
       >
         {formatProjectedValue(kpi.current, kpi.unit, kpi.numberFormat)}
       </p>
-      {available ? (
-        <p className="mt-2 text-xs text-d-muted">
-          Baseline{' '}
-          <span className="font-mono text-slate-200">
-            {formatProjectedValue(kpi.baseline, kpi.unit, kpi.numberFormat)}
-          </span>{' '}
-          · Δ{' '}
-          <span className="font-mono text-gold-300">
-            {formatAbsoluteChange(kpi)}
-          </span>
+      <p className="mt-2 text-xs text-d-muted">
+        Baseline{' '}
+        <span className="font-mono text-slate-200">
+          {formatProjectedValue(kpi.baseline, kpi.unit, kpi.numberFormat)}
+        </span>{' '}
+        · Δ{' '}
+        <span className="font-mono text-gold-300">
+          {formatAbsoluteChange(kpi)}
+        </span>
+      </p>
+      {baselineReason ? (
+        <p className="mt-2 break-words text-[11px] text-amber-200">
+          Baseline unavailable:{' '}
+          <span className="font-mono">{baselineReason}</span>
         </p>
-      ) : (
-        <p className="mt-2 break-words font-mono text-[11px] text-amber-200">
-          {unavailableReason(kpi)}
+      ) : null}
+      {currentReason ? (
+        <p className="mt-1 break-words text-[11px] text-amber-200">
+          Current unavailable:{' '}
+          <span className="font-mono">{currentReason}</span>
         </p>
-      )}
+      ) : null}
     </article>
   );
 });
@@ -401,16 +439,33 @@ const SeriesChartCard = memo(function SeriesChartCard({
         </p>
       )}
 
-      {series.unavailableCurrentReasons.length > 0 ? (
-        <div className="mt-3 rounded border border-amber-800/40 bg-amber-900/10 p-3">
-          <p className="text-xs font-medium text-amber-200">
-            Unavailable current-period reasons
-          </p>
-          <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-100">
-            {series.unavailableCurrentReasons.map((reason) => (
-              <li key={reason}>{reason}</li>
-            ))}
-          </ul>
+      {series.unavailableBaselineReasons.length > 0 ||
+      series.unavailableCurrentReasons.length > 0 ? (
+        <div className="mt-3 grid gap-3 rounded border border-amber-800/40 bg-amber-900/10 p-3 sm:grid-cols-2">
+          {series.unavailableBaselineReasons.length > 0 ? (
+            <div>
+              <p className="text-xs font-medium text-amber-200">
+                Unavailable baseline-period reasons
+              </p>
+              <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-100">
+                {series.unavailableBaselineReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {series.unavailableCurrentReasons.length > 0 ? (
+            <div>
+              <p className="text-xs font-medium text-amber-200">
+                Unavailable current-period reasons
+              </p>
+              <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-100">
+                {series.unavailableCurrentReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -419,8 +474,11 @@ const SeriesChartCard = memo(function SeriesChartCard({
         <span className="font-semibold text-slate-200">
           {series.changedPointCount}
         </span>
+        {series.unavailableBaselinePointCount > 0
+          ? ` · ${series.unavailableBaselinePointCount} baseline unavailable`
+          : ''}
         {series.unavailableCurrentPointCount > 0
-          ? ` · ${series.unavailableCurrentPointCount} unavailable`
+          ? ` · ${series.unavailableCurrentPointCount} current unavailable`
           : ''}
       </p>
     </article>
@@ -436,13 +494,19 @@ export default function SensitivityPage() {
   const [error, setError] = useState<Error | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const storageReconciliationTimerRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestRevisionRef = useRef(0);
   const bootstrapRevisionRef = useRef(0);
   const activeIdentityRef = useRef<ActiveIdentity | null>(null);
   const workbenchSnapshotRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
+  const persistedWorkbenchRef =
+    useRef<WorkbenchState>(EMPTY_WORKBENCH);
+  const workbenchDocumentRevisionRef = useRef<string | null>(null);
 
   function invalidatePersistedIdentity() {
     activeIdentityRef.current = null;
+    workbenchDocumentRevisionRef.current = null;
     setRecalculating(false);
     setError(
       new Error(
@@ -451,7 +515,7 @@ export default function SensitivityPage() {
     );
   }
 
-  async function bootstrapWorkbench() {
+  async function bootstrapWorkbench(): Promise<BootstrapWorkbenchResult> {
     const bootstrapRevision = ++bootstrapRevisionRef.current;
     const previousActiveIdentity = activeIdentityRef.current;
     requestRevisionRef.current += 1;
@@ -477,30 +541,36 @@ export default function SensitivityPage() {
       if (bootstrapRevision === bootstrapRevisionRef.current) {
         setWorkbench(() => EMPTY_WORKBENCH);
         workbenchSnapshotRef.current = EMPTY_WORKBENCH;
+        persistedWorkbenchRef.current = EMPTY_WORKBENCH;
+        workbenchDocumentRevisionRef.current = null;
         setEmptyReason('model');
         setLoading(false);
       }
-      return;
+      return 'applied';
     }
     if (persisted.graphVersionId === null) {
       activeIdentityRef.current = null;
       if (bootstrapRevision === bootstrapRevisionRef.current) {
         setWorkbench(() => EMPTY_WORKBENCH);
         workbenchSnapshotRef.current = EMPTY_WORKBENCH;
+        persistedWorkbenchRef.current = EMPTY_WORKBENCH;
+        workbenchDocumentRevisionRef.current = null;
         setEmptyReason('graph');
         setLoading(false);
       }
-      return;
+      return 'applied';
     }
     if (persisted.baselineRunId === null) {
       activeIdentityRef.current = null;
       if (bootstrapRevision === bootstrapRevisionRef.current) {
         setWorkbench(() => EMPTY_WORKBENCH);
         workbenchSnapshotRef.current = EMPTY_WORKBENCH;
+        persistedWorkbenchRef.current = EMPTY_WORKBENCH;
+        workbenchDocumentRevisionRef.current = null;
         setEmptyReason('baseline');
         setLoading(false);
       }
-      return;
+      return 'applied';
     }
 
     const identity: ActiveIdentity = {
@@ -516,11 +586,11 @@ export default function SensitivityPage() {
     try {
       const readiness = await getCalculationReadiness(identity.modelVersionId);
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
-        return;
+        return 'superseded';
       }
       if (!bootstrapStorage.matchesCurrent()) {
         invalidatePersistedIdentity();
-        return;
+        return 'failed';
       }
       if (
         readiness.model_version_id !== identity.modelVersionId ||
@@ -533,11 +603,6 @@ export default function SensitivityPage() {
         );
       }
 
-      const storedDocument = readSensitivityWorkbenchDocument(
-        bootstrapStorage,
-        identity.modelVersionId,
-        identity.graphVersionId,
-      );
       const [assumptions, outputs] = await Promise.all([
         loadAllEditableNumericParameters(
           identity.modelVersionId,
@@ -550,19 +615,23 @@ export default function SensitivityPage() {
         ),
       ]);
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
-        return;
+        return 'superseded';
       }
       if (!bootstrapStorage.matchesCurrent()) {
         invalidatePersistedIdentity();
-        return;
+        return 'failed';
       }
       const restoredPersisted = readPersistedCalculationState(
         window.localStorage,
       );
       if (outputs === null) {
         activeIdentityRef.current = null;
+        workbenchSnapshotRef.current = EMPTY_WORKBENCH;
+        persistedWorkbenchRef.current = EMPTY_WORKBENCH;
+        workbenchDocumentRevisionRef.current = null;
+        setWorkbench(() => EMPTY_WORKBENCH);
         setEmptyReason('outputs');
-        return;
+        return 'applied';
       }
       if (
         outputs.model_version_id !== identity.modelVersionId ||
@@ -578,6 +647,16 @@ export default function SensitivityPage() {
           'Persisted output projection does not match the active model, graph, and baseline.',
         );
       }
+      const restoredCurrentRunId =
+        restoredPersisted.overrideRunId ??
+        restoredPersisted.baselineRunId;
+      const storedDocument = readSensitivityWorkbenchDocument(
+        bootstrapStorage,
+        identity.modelVersionId,
+        identity.graphVersionId,
+        restoredPersisted.baselineRunId as string,
+        restoredCurrentRunId as string,
+      );
 
       const assumptionByKey = new Map(
         assumptions.map((assumption) => [
@@ -634,14 +713,18 @@ export default function SensitivityPage() {
         analysis: null,
       };
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
-        return;
+        return 'superseded';
       }
       activeIdentityRef.current = identity;
       workbenchSnapshotRef.current = nextWorkbench;
+      persistedWorkbenchRef.current = nextWorkbench;
+      workbenchDocumentRevisionRef.current =
+        storedDocument?.revision ?? null;
       setWorkbench(() => nextWorkbench);
+      return 'applied';
     } catch (caught) {
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
-        return;
+        return 'superseded';
       }
       if (isSensitivityCatalogIdentityError(caught)) {
         activeIdentityRef.current = null;
@@ -651,6 +734,7 @@ export default function SensitivityPage() {
           ? caught
           : new Error('Could not load the sensitivity workbench.'),
       );
+      return 'failed';
     } finally {
       if (bootstrapRevision === bootstrapRevisionRef.current) {
         setLoading(false);
@@ -777,8 +861,7 @@ export default function SensitivityPage() {
         return;
       }
 
-      const document: SensitivityWorkbenchDocument = {
-        version: SENSITIVITY_WORKBENCH_VERSION,
+      const document: SensitivityWorkbenchDraft = {
         modelVersionId: identity.modelVersionId,
         graphVersionId: identity.graphVersionId,
         overridesByTarget: requestWorkbench.overridesByTarget,
@@ -796,10 +879,57 @@ export default function SensitivityPage() {
         invalidatePersistedIdentity();
         return;
       }
+      const persistence = await persistSensitivityWorkbenchState(
+        window.localStorage,
+        {
+          expectedIdentity: persisted,
+          expectedDocumentRevision:
+            workbenchDocumentRevisionRef.current,
+          nextDocumentRevision:
+            createWorkbenchDocumentRevision(),
+          response: analysis,
+          document,
+          isCurrent: stillCurrent,
+        },
+      );
+      if (persistence.status === 'superseded') {
+        return;
+      }
+      if (persistence.status === 'conflict') {
+        const reconciled = await bootstrapWorkbench();
+        if (reconciled === 'superseded') {
+          return;
+        }
+        setError(
+          new Error(
+            reconciled === 'applied'
+              ? 'This sensitivity workbench changed in another browser tab. The latest persisted result was reloaded without creating another run.'
+              : 'This sensitivity workbench changed in another browser tab, but the automatic GET-only reload failed. Refresh before editing.',
+          ),
+        );
+        return;
+      }
+      if (persistence.status === 'unavailable') {
+        const previousWorkbench = persistedWorkbenchRef.current;
+        workbenchSnapshotRef.current = previousWorkbench;
+        setWorkbench(() => previousWorkbench);
+        if (persistence.storageState === 'unknown') {
+          activeIdentityRef.current = null;
+          workbenchDocumentRevisionRef.current = null;
+        }
+        setError(
+          new Error(
+            persistence.storageState === 'unknown'
+              ? 'Browser storage failed and rollback could not be verified. The calculated result was not applied; controls are disabled until you refresh.'
+              : 'The sensitivity result was calculated, but browser storage could not save it. The last persisted result remains displayed.',
+          ),
+        );
+        return;
+      }
+      workbenchDocumentRevisionRef.current = persistence.revision;
+      persistedWorkbenchRef.current = appliedWorkbench;
       workbenchSnapshotRef.current = appliedWorkbench;
       setWorkbench(() => appliedWorkbench);
-      persistSensitivityRunSelection(guardedStorage, analysis);
-      persistSensitivityWorkbenchDocument(guardedStorage, document);
     } catch (caught) {
       if (!stillCurrent()) {
         return;
@@ -832,14 +962,45 @@ export default function SensitivityPage() {
   }
 
   useEffect(() => {
-    void bootstrapWorkbench();
-    return () => {
-      bootstrapRevisionRef.current += 1;
+    const reconciliationKeys = new Set<string>(
+      Object.values(CALCULATION_STORAGE_KEYS),
+    );
+    const handleStorage = (event: StorageEvent) => {
+      if (
+        event.storageArea !== window.localStorage ||
+        (event.key !== null && !reconciliationKeys.has(event.key))
+      ) {
+        return;
+      }
       requestRevisionRef.current += 1;
-      activeIdentityRef.current = null;
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
+      }
+      if (storageReconciliationTimerRef.current !== null) {
+        clearTimeout(storageReconciliationTimerRef.current);
+      }
+      setRecalculating(false);
+      storageReconciliationTimerRef.current = setTimeout(() => {
+        storageReconciliationTimerRef.current = null;
+        void bootstrapWorkbench();
+      }, STORAGE_RECONCILIATION_MS);
+    };
+    window.addEventListener('storage', handleStorage);
+    void bootstrapWorkbench();
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      bootstrapRevisionRef.current += 1;
+      requestRevisionRef.current += 1;
+      activeIdentityRef.current = null;
+      workbenchDocumentRevisionRef.current = null;
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      if (storageReconciliationTimerRef.current !== null) {
+        clearTimeout(storageReconciliationTimerRef.current);
+        storageReconciliationTimerRef.current = null;
       }
     };
   }, []);

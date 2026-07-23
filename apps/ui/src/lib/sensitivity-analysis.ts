@@ -11,8 +11,9 @@ import type {
   CalculationSensitivityResponse,
 } from './calculation-api-types';
 import {
-  CALCULATION_STORAGE_KEYS,
+  removePersistedCalculationRunId,
   type PersistedCalculationState,
+  type SensitivityWorkbenchLockManager,
   type StorageLike,
 } from './calculation-storage';
 import type { SensitivityKpi } from './sensitivity-output-adapter';
@@ -885,6 +886,7 @@ export async function restoreSensitivityOutputProjection(
   storage: StorageLike,
   state: PersistedCalculationState,
   getOutputs: typeof getCalculationRunOutputs = getCalculationRunOutputs,
+  lockManager?: SensitivityWorkbenchLockManager | null,
 ): Promise<CalculationRunOutputsResponse | null> {
   if (state.overrideRunId !== null) {
     try {
@@ -893,11 +895,11 @@ export async function restoreSensitivityOutputProjection(
       if (!isStructuredNotFound(error, state.overrideRunId)) {
         throw error;
       }
-      try {
-        storage.removeItem(CALCULATION_STORAGE_KEYS.overrideRunId);
-      } catch {
-        // Storage may be unavailable or disabled.
-      }
+      await removePersistedCalculationRunId(
+        storage,
+        'override',
+        lockManager,
+      );
     }
   }
   return state.baselineRunId === null

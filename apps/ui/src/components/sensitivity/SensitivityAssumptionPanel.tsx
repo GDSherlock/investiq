@@ -17,6 +17,28 @@ interface SensitivityAssumptionPanelProps {
   onToggleDriver: (targetKey: string, selected: boolean) => void;
 }
 
+interface NumberEditorDraft {
+  targetKey: string;
+  value: string;
+}
+
+const FINITE_DECIMAL_PATTERN =
+  /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$/;
+
+function normalizeFiniteDecimalDraft(value: string): string | null {
+  const trimmed = value.trim();
+  if (
+    !FINITE_DECIMAL_PATTERN.test(trimmed) ||
+    !Number.isFinite(Number(trimmed))
+  ) {
+    return null;
+  }
+  return trimmed.replace(
+    /^([+-]?)\./,
+    (_match, sign: string) => `${sign}0.`,
+  );
+}
+
 function displayValue(value: string, unit: string | null): string {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) {
@@ -66,9 +88,8 @@ export function SensitivityAssumptionPanel({
     () => categoryGroups(assumptions),
     [assumptions],
   );
-  const [numberEditorTargetKey, setNumberEditorTargetKey] = useState<
-    string | null
-  >(null);
+  const [numberEditorDraft, setNumberEditorDraft] =
+    useState<NumberEditorDraft | null>(null);
   const driverLimitReached = selectedDrivers.size >= maxDrivers;
   const hasOverrides = Object.keys(overridesByTarget).length > 0;
 
@@ -117,10 +138,14 @@ export function SensitivityAssumptionPanel({
                   sliderSpec.kind === 'range'
                     ? deriveSliderControlStep(sliderSpec, value)
                     : null;
+                const activeNumberDraft =
+                  numberEditorDraft?.targetKey === assumption.targetKey
+                    ? numberEditorDraft
+                    : null;
                 const showRangeInput =
                   sliderSpec.kind === 'range' &&
                   sliderControlStep !== null &&
-                  numberEditorTargetKey !== assumption.targetKey;
+                  activeNumberDraft === null;
                 const selected = selectedDrivers.has(assumption.targetKey);
                 const rangeCapable = sliderSpec.kind === 'range';
                 const onlySelectedDriver =
@@ -186,28 +211,49 @@ export function SensitivityAssumptionPanel({
                         type="number"
                         step="any"
                         inputMode="decimal"
-                        value={value}
+                        value={activeNumberDraft?.value ?? value}
                         aria-describedby={`${inputId}-value`}
                         onFocus={() =>
-                          setNumberEditorTargetKey(assumption.targetKey)
+                          setNumberEditorDraft({
+                            targetKey: assumption.targetKey,
+                            value,
+                          })
                         }
-                        onBlur={() =>
-                          setNumberEditorTargetKey((currentTargetKey) =>
-                            currentTargetKey === assumption.targetKey
-                              ? null
-                              : currentTargetKey,
-                          )
-                        }
-                        onChange={(event) => {
-                          const nextValue = event.target.value;
+                        onBlur={() => {
+                          const committedValue =
+                            normalizeFiniteDecimalDraft(
+                              activeNumberDraft?.value ?? value,
+                            );
                           if (
-                            nextValue !== '' &&
-                            Number.isFinite(Number(nextValue))
+                            committedValue !== null &&
+                            committedValue !== value
                           ) {
-                            setNumberEditorTargetKey(assumption.targetKey);
                             onValueChange(
                               assumption.targetKey,
-                              nextValue,
+                              committedValue,
+                            );
+                          }
+                          setNumberEditorDraft((currentDraft) =>
+                            currentDraft?.targetKey === assumption.targetKey
+                              ? null
+                              : currentDraft,
+                          );
+                        }}
+                        onChange={(event) => {
+                          const nextValue = event.target.value;
+                          setNumberEditorDraft({
+                            targetKey: assumption.targetKey,
+                            value: nextValue,
+                          });
+                          const validValue =
+                            normalizeFiniteDecimalDraft(nextValue);
+                          if (
+                            validValue !== null &&
+                            validValue !== value
+                          ) {
+                            onValueChange(
+                              assumption.targetKey,
+                              validValue,
                             );
                           }
                         }}

@@ -38,13 +38,12 @@ import {
   createGuardedSensitivityStorage,
   matchesPersistedSensitivityIdentity,
   persistGraphVersionId,
-  persistSensitivityRunSelection,
-  persistSensitivityWorkbenchDocument,
   persistUploadIdentity,
   readPersistedCalculationState,
   readSensitivityWorkbenchDocument,
   reconcileStoredRun,
   shouldAutoRunBaseline,
+  type SensitivityWorkbenchLockManager,
   type StorageLike,
 } from './calculation-storage';
 import {
@@ -89,6 +88,12 @@ class MemoryStorage implements StorageLike {
     this.values.set(key, value);
   }
 }
+
+const immediateLockManager: SensitivityWorkbenchLockManager = {
+  async request(_name, _options, callback) {
+    return callback();
+  },
+};
 
 function uploadResponse(
   overrides: Partial<WorkbookValidationResponse> = {},
@@ -278,7 +283,7 @@ test('ready_with_warning remains calculable', () => {
   assert.equal(isCalculationReady('failed'), false);
 });
 
-test('new uploads clear only calculation graph and run state', () => {
+test('new uploads clear only calculation graph and run state', async () => {
   const storage = new MemoryStorage();
   storage.setItem(CALCULATION_STORAGE_KEYS.workbookVersionId, 'old-workbook');
   storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'old-model');
@@ -287,8 +292,12 @@ test('new uploads clear only calculation graph and run state', () => {
   storage.setItem(CALCULATION_STORAGE_KEYS.overrideRunId, 'old-override');
   storage.setItem('investiq_model_id', 'legacy-model');
 
-  clearCalculationArtifacts(storage);
-  persistUploadIdentity(storage, uploadResponse());
+  await clearCalculationArtifacts(storage, immediateLockManager);
+  await persistUploadIdentity(
+    storage,
+    uploadResponse(),
+    immediateLockManager,
+  );
 
   assert.equal(
     storage.getItem(CALCULATION_STORAGE_KEYS.workbookVersionId),
@@ -434,16 +443,17 @@ test('persisted run reload suppresses automatic recalculation', () => {
   assert.equal(persisted.overrideRunId, 'override-run');
 });
 
-test('stale run IDs are cleared without mixing model or graph values', () => {
+test('stale run IDs are cleared without mixing model or graph values', async () => {
   const storage = new MemoryStorage();
   storage.setItem(CALCULATION_STORAGE_KEYS.baselineRunId, 'stale-run');
 
-  const result = reconcileStoredRun(
+  const result = await reconcileStoredRun(
     storage,
     'baseline',
     runResponse({ model_version_id: 'different-model' }),
     'model-version',
     'graph-version',
+    immediateLockManager,
   );
 
   assert.equal(result.isCurrent, false);
@@ -834,6 +844,97 @@ test('unsupported outputs stay unavailable and missing KPI roles are not fabrica
   assert.equal(view.kpis[0].current.numericValue, null);
   assert.equal(view.kpis[0].current.unavailableReason, 'unsupported');
   assert.equal(view.kpis.some((kpi) => kpi.businessRole === 'npv'), false);
+});
+
+test('partial outputs preserve baseline and current unavailability independently', () => {
+  const view = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'partial-project-irr-output',
+          entity_kind: 'scalar',
+          business_role: 'project_irr',
+          label: 'Project IRR',
+          unit: '%',
+          scenario: null,
+          formula_cell_id: 'formula-project-irr',
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0%',
+          availability_status: 'partial',
+          baseline: unavailableProjection('baseline blocked'),
+          current: projectedNumber('0.12'),
+        },
+        {
+          output_id: 'partial-revenue-output',
+          entity_kind: 'series',
+          business_role: 'revenue',
+          label: 'Revenue',
+          unit: 'USD M',
+          scenario: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          availability_status: 'partial',
+          points: [
+            {
+              financial_series_value_id: 'revenue-2027',
+              period_index: 0,
+              period: '2027',
+              formula_cell_id: 'formula-revenue-2027',
+              mapping_status: 'mapped',
+              support_status: 'supported',
+              number_format: '0.0',
+              availability_status: 'partial',
+              baseline: unavailableProjection('baseline blocked'),
+              current: projectedNumber('105'),
+            },
+            {
+              financial_series_value_id: 'revenue-2028',
+              period_index: 1,
+              period: '2028',
+              formula_cell_id: 'formula-revenue-2028',
+              mapping_status: 'mapped',
+              support_status: 'supported',
+              number_format: '0.0',
+              availability_status: 'partial',
+              baseline: projectedNumber('110'),
+              current: unavailableProjection('current blocked'),
+            },
+          ],
+        },
+      ],
+    }),
+  );
+
+  assert.equal(view.kpis[0].availabilityStatus, 'partial');
+  assert.equal(
+    view.kpis[0].baseline.unavailableReason,
+    'baseline blocked',
+  );
+  assert.equal(view.kpis[0].current.unavailableReason, null);
+  assert.equal(view.kpis[0].absoluteChange, null);
+  assert.equal(view.kpis[0].percentageChange, null);
+
+  const sideAvailability = view.series[0] as unknown as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual(
+    {
+      baselineCount: sideAvailability.unavailableBaselinePointCount,
+      baselineReasons: sideAvailability.unavailableBaselineReasons,
+      currentCount: sideAvailability.unavailableCurrentPointCount,
+      currentReasons: sideAvailability.unavailableCurrentReasons,
+    },
+    {
+      baselineCount: 1,
+      baselineReasons: ['baseline blocked'],
+      currentCount: 1,
+      currentReasons: ['current blocked'],
+    },
+  );
+  assert.equal(view.series[0].points[0].absoluteChange, null);
+  assert.equal(view.series[0].points[1].absoluteChange, null);
 });
 
 test('sensitivity adapter orders canonical series points and compares each stable value ID', () => {
@@ -1370,6 +1471,124 @@ test('fallback number control stays focused through decimal editing and returns 
   });
 });
 
+test('fallback number control keeps intermediate drafts local and emits only finite decimals', () => {
+  const assumption: SensitivityAssumption = {
+    targetKey: 'parameter:22222222-2222-4222-8222-222222222222',
+    target: {
+      kind: 'parameter',
+      parameter_id: '22222222-2222-4222-8222-222222222222',
+    },
+    label: 'Debt amount',
+    category: 'Financing',
+    unit: 'USD',
+    scenario: null,
+    period: null,
+    currentValue: '0',
+  };
+  const emittedValues: string[] = [];
+  const renderPanel = (override: string | null) =>
+    createElement(SensitivityAssumptionPanel, {
+      assumptions: [assumption],
+      overridesByTarget:
+        override === null
+          ? {}
+          : { [assumption.targetKey]: override },
+      tornadoDriverKeys: [],
+      maxDrivers: 12,
+      onValueChange: (_targetKey: string, nextValue: string) => {
+        emittedValues.push(nextValue);
+      },
+      onReset: () => {},
+      onResetAll: () => {},
+      onToggleDriver: () => {},
+    });
+
+  let renderer!: TestRenderer.ReactTestRenderer;
+  act(() => {
+    renderer = TestRenderer.create(renderPanel(null));
+  });
+  let valueInput = renderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.type, 'number');
+  assert.equal(valueInput.props.step, 'any');
+
+  act(() => {
+    valueInput.props.onFocus();
+  });
+  for (const draft of ['', '-', '.', '1e', '1e-']) {
+    act(() => {
+      valueInput.props.onChange({ target: { value: draft } });
+    });
+    valueInput = renderer.root.findByProps({
+      id: `assumption-${assumption.targetKey}`,
+    });
+    assert.equal(valueInput.props.value, draft);
+  }
+  assert.deepEqual(emittedValues, []);
+
+  act(() => {
+    valueInput.props.onChange({ target: { value: '.5' } });
+  });
+  valueInput = renderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.value, '.5');
+  assert.deepEqual(emittedValues, ['0.5']);
+
+  act(() => {
+    renderer.update(renderPanel('0.5'));
+  });
+  valueInput = renderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.type, 'number');
+  assert.equal(valueInput.props.value, '.5');
+
+  act(() => {
+    valueInput.props.onBlur();
+  });
+  valueInput = renderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.type, 'range');
+  assert.equal(valueInput.props.value, '0.5');
+
+  act(() => {
+    renderer.unmount();
+  });
+
+  let invalidRenderer!: TestRenderer.ReactTestRenderer;
+  act(() => {
+    invalidRenderer = TestRenderer.create(renderPanel(null));
+  });
+  valueInput = invalidRenderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  act(() => {
+    valueInput.props.onFocus();
+    valueInput.props.onChange({ target: { value: '-' } });
+  });
+  valueInput = invalidRenderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.value, '-');
+
+  act(() => {
+    valueInput.props.onBlur();
+  });
+  valueInput = invalidRenderer.root.findByProps({
+    id: `assumption-${assumption.targetKey}`,
+  });
+  assert.equal(valueInput.props.type, 'number');
+  assert.equal(valueInput.props.value, '0');
+  assert.deepEqual(emittedValues, ['0.5']);
+
+  act(() => {
+    invalidRenderer.unmount();
+  });
+});
+
 test('sensitivity deltas use percentage points and preserve other output units', () => {
   assert.equal(formatSensitivityDelta(0.01, '%', null), '+1 pp');
   assert.equal(formatSensitivityDelta(-1250, 'USD', null), '-1,250 USD');
@@ -1624,8 +1843,11 @@ test('versioned sensitivity workbench round-trips only for the matching model an
     'parameter:11111111-1111-4111-8111-111111111111';
   const document = {
     version: SENSITIVITY_WORKBENCH_VERSION,
+    revision: 'revision-1',
     modelVersionId: 'model-version',
     graphVersionId: 'graph-version',
+    comparisonBaselineRunId: 'baseline-run',
+    currentRunId: 'current-run',
     overridesByTarget: { [driverKey]: '12.5' },
     tornadoDriverKeys: [driverKey],
     selectedOutputId: 'output-id',
@@ -1633,7 +1855,10 @@ test('versioned sensitivity workbench round-trips only for the matching model an
     columnDriverKey: null,
   };
 
-  persistSensitivityWorkbenchDocument(storage, document);
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+    JSON.stringify(document),
+  );
   assert.deepEqual(
     readSensitivityWorkbenchDocument(
       storage,
@@ -1652,11 +1877,11 @@ test('versioned sensitivity workbench round-trips only for the matching model an
   );
   assert.equal(
     storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
-    null,
+    JSON.stringify(document),
   );
 });
 
-test('corrupt workbench state is cleared and storage failures do not escape', () => {
+test('corrupt workbench state is ignored without mutating storage and storage failures do not escape', async () => {
   const storage = new MemoryStorage();
   storage.setItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench, '{bad json');
   assert.equal(
@@ -1669,7 +1894,7 @@ test('corrupt workbench state is cleared and storage failures do not escape', ()
   );
   assert.equal(
     storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
-    null,
+    '{bad json',
   );
 
   const throwingStorage: StorageLike = {
@@ -1683,7 +1908,9 @@ test('corrupt workbench state is cleared and storage failures do not escape', ()
       throw new Error('blocked');
     },
   };
-  assert.doesNotThrow(() => clearCalculationArtifacts(throwingStorage));
+  await assert.doesNotReject(() =>
+    clearCalculationArtifacts(throwingStorage, immediateLockManager),
+  );
   assert.equal(
     readSensitivityWorkbenchDocument(
       throwingStorage,
@@ -1699,8 +1926,11 @@ test('workbench restore rejects non-finite decimal overrides and accepts signed 
     'parameter:11111111-1111-4111-8111-111111111111';
   const validDocument = {
     version: SENSITIVITY_WORKBENCH_VERSION,
+    revision: 'revision-1',
     modelVersionId: 'model-version',
     graphVersionId: 'graph-version',
+    comparisonBaselineRunId: 'baseline-run',
+    currentRunId: 'current-run',
     overridesByTarget: { [targetKey]: '-2.5e-3' },
     tornadoDriverKeys: [targetKey],
     selectedOutputId: null,
@@ -1750,12 +1980,15 @@ test('workbench restore rejects non-finite decimal overrides and accepts signed 
     );
     assert.equal(
       storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
-      null,
+      JSON.stringify({
+        ...validDocument,
+        overridesByTarget: { [targetKey]: invalidValue },
+      }),
     );
   }
 });
 
-test('artifact clearing and graph changes remove the sensitivity workbench document', () => {
+test('artifact clearing and graph changes remove the sensitivity workbench document', async () => {
   const storage = new MemoryStorage();
   const storeDocument = () =>
     storage.setItem(
@@ -1773,7 +2006,7 @@ test('artifact clearing and graph changes remove the sensitivity workbench docum
     );
 
   storeDocument();
-  clearCalculationArtifacts(storage);
+  await clearCalculationArtifacts(storage, immediateLockManager);
   assert.equal(
     storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
     null,
@@ -1781,40 +2014,13 @@ test('artifact clearing and graph changes remove the sensitivity workbench docum
 
   storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'old-graph');
   storeDocument();
-  persistGraphVersionId(storage, 'new-graph');
+  await persistGraphVersionId(
+    storage,
+    'new-graph',
+    immediateLockManager,
+  );
   assert.equal(
     storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
-    null,
-  );
-});
-
-test('sensitivity run selection uses only explicit comparison baseline and current IDs', () => {
-  const storage = new MemoryStorage();
-  persistSensitivityRunSelection(
-    storage,
-    sensitivityResponse({
-      comparison_baseline_run_id: 'comparison-baseline',
-      current_run_id: 'current-run',
-    }),
-  );
-  assert.equal(
-    storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId),
-    'comparison-baseline',
-  );
-  assert.equal(
-    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
-    'current-run',
-  );
-
-  persistSensitivityRunSelection(
-    storage,
-    sensitivityResponse({
-      comparison_baseline_run_id: 'comparison-baseline',
-      current_run_id: 'comparison-baseline',
-    }),
-  );
-  assert.equal(
-    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
     null,
   );
 });
@@ -1883,6 +2089,7 @@ test('GET-only sensitivity restore clears a structured missing override then loa
       }
       return runOutputsResponse({ calculation_run_id: runId });
     },
+    immediateLockManager,
   );
 
   assert.deepEqual(calls, ['missing-override', 'baseline-run']);
@@ -1933,6 +2140,7 @@ test('GET-only sensitivity restore rethrows synthetic or unrelated 404s and reta
             calls.push(runId);
             throw error;
           },
+          immediateLockManager,
         ),
       (caught) => caught === error,
     );
@@ -2339,8 +2547,12 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
     outputGetIndex,
   );
   const persistenceIndex = pageSource.indexOf(
-    'persistSensitivityRunSelection(',
+    'persistSensitivityWorkbenchState(',
     outputIdentityIndex,
+  );
+  const appliedStateIndex = pageSource.indexOf(
+    'setWorkbench(() => appliedWorkbench)',
+    persistenceIndex,
   );
 
   assert.ok(postIndex >= 0, 'analysis POST must exist');
@@ -2357,6 +2569,14 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
     persistenceIndex > outputIdentityIndex,
     'storage writes must follow both guarded successes',
   );
+  assert.ok(
+    appliedStateIndex > persistenceIndex,
+    'successful server results must become visible only after storage commits',
+  );
+  assert.match(pageSource, /workbenchDocumentRevisionRef\.current/);
+  assert.match(pageSource, /expectedDocumentRevision/);
+  assert.match(pageSource, /window\.addEventListener\('storage'/);
+  assert.match(pageSource, /void bootstrapWorkbench\(\)/);
   assert.match(pageSource, /SENSITIVITY_DEBOUNCE_MS\s*=\s*400/);
   assert.match(pageSource, /requestRevisionRef\.current/);
   assert.match(pageSource, /clearTimeout/);
@@ -2388,6 +2608,10 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
   );
 
   assert.match(pageSource, /Last successful result retained/);
+  assert.match(pageSource, /kpi\.availabilityStatus/);
+  assert.match(pageSource, /Baseline unavailable/);
+  assert.match(pageSource, /Current unavailable/);
+  assert.match(pageSource, /Unavailable baseline-period reasons/);
   assert.match(pageSource, /unavailableCurrentReasons/);
   assert.match(pageSource, /time-series chart/i);
   assert.match(pageSource, /focus-visible:ring-2/);

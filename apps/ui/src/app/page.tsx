@@ -89,17 +89,17 @@ export default function HomePage() {
     if (!file || phase === 'uploading') {
       return;
     }
-    clearCalculationArtifacts(localStorage);
     setActiveIdentity(null);
     setUploadResult(null);
     setUploadError(null);
     setPhase('uploading');
 
     try {
+      await clearCalculationArtifacts(localStorage);
       const response = await uploadWorkbookForCalculation(file);
       setUploadResult(response);
       if (canStartCalculationFlow(response)) {
-        persistUploadIdentity(localStorage, response);
+        await persistUploadIdentity(localStorage, response);
         setActiveIdentity({
           modelVersionId: response.model_version_id,
           workbookVersionId: response.workbook_version_id,

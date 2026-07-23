@@ -22,12 +22,12 @@ import {
   isCalculationReady,
 } from '@/lib/calculation-flow';
 import {
-  CALCULATION_STORAGE_KEYS,
   clearCalculationArtifacts,
   persistCalculationRunId,
   persistGraphVersionId,
   readPersistedCalculationState,
   reconcileStoredRun,
+  removePersistedCalculationRunId,
   shouldAutoRunBaseline,
 } from '@/lib/calculation-storage';
 import { diffCalculationRunValues } from '@/lib/calculation-value-utils';
@@ -232,7 +232,7 @@ export function CalculationPreparationPanel({
             'Baseline response belongs to a different model or graph.',
           );
         }
-        persistCalculationRunId(
+        await persistCalculationRunId(
           window.localStorage,
           'baseline',
           run.calculation_run_id,
@@ -285,7 +285,8 @@ export function CalculationPreparationPanel({
       const notices: string[] = [];
       let firstError: Error | null = null;
 
-      settled.forEach((result, index) => {
+      for (let index = 0; index < settled.length; index += 1) {
+        const result = settled[index];
         const { kind } = requests[index];
         if (result.status === 'rejected') {
           const caught =
@@ -293,19 +294,18 @@ export function CalculationPreparationPanel({
               ? result.reason
               : new Error(`Could not reload the stored ${kind} run.`);
           if (caught instanceof CalculationApiError && caught.status === 404) {
-            window.localStorage.removeItem(
-              kind === 'baseline'
-                ? CALCULATION_STORAGE_KEYS.baselineRunId
-                : CALCULATION_STORAGE_KEYS.overrideRunId,
+            await removePersistedCalculationRunId(
+              window.localStorage,
+              kind,
             );
             notices.push(`Stored ${kind} run was not found and was cleared.`);
           } else {
             firstError ??= caught;
           }
-          return;
+          continue;
         }
 
-        const reconciled = reconcileStoredRun(
+        const reconciled = await reconcileStoredRun(
           window.localStorage,
           kind,
           result.value,
@@ -316,14 +316,14 @@ export function CalculationPreparationPanel({
           if (reconciled.notice) {
             notices.push(reconciled.notice);
           }
-          return;
+          continue;
         }
         if (kind === 'baseline') {
           restoredBaseline = result.value;
         } else {
           restoredOverride = result.value;
         }
-      });
+      }
 
       setBaselineRun(restoredBaseline);
       setOverrideRun(restoredOverride);
@@ -369,12 +369,15 @@ export function CalculationPreparationPanel({
 
       setGraphVersionId(targetGraphVersionId);
       if (!graphMatches) {
-        clearCalculationArtifacts(window.localStorage);
+        await clearCalculationArtifacts(window.localStorage);
         setStateNotice(
           'Stored calculation graph differed from current readiness and its run IDs were cleared. No calculation was submitted.',
         );
       }
-      persistGraphVersionId(window.localStorage, targetGraphVersionId);
+      await persistGraphVersionId(
+        window.localStorage,
+        targetGraphVersionId,
+      );
 
       setPhase('loading_inputs');
       const responseInputs = await getCalculationInputs(modelVersionId, {
@@ -587,7 +590,7 @@ export function CalculationPreparationPanel({
       ) {
         return;
       }
-      persistCalculationRunId(
+      await persistCalculationRunId(
         window.localStorage,
         'override',
         run.calculation_run_id,
@@ -639,7 +642,7 @@ export function CalculationPreparationPanel({
     setError(null);
     try {
       const run = await getCalculationRun(runId);
-      const reconciled = reconcileStoredRun(
+      const reconciled = await reconcileStoredRun(
         window.localStorage,
         kind,
         run,

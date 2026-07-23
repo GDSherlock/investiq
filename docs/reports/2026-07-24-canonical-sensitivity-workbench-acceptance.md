@@ -5,7 +5,7 @@
 PASS for the minimum canonical sensitivity workbench slice on
 `audit/canonical-output-sensitivity-readiness`.
 
-The implementation range is `851f363..a33121b`. It reuses persisted,
+The implementation range is `851f363..d11a0c3`. It reuses persisted,
 model-specific canonical assumptions and outputs. It does not define a
 workbook-specific assumption list, KPI list, sheet/cell request contract, or
 display-label mapping.
@@ -188,7 +188,8 @@ Final observed browser evidence:
 
 - Independent final frontend review found no remaining Critical, Important,
   or valid Minor findings after the shared-lock baseline invalidation and
-  pre-POST lock-capability guards.
+  pre-POST lock-capability guards, including explicit verification of all
+  calculation storage writers.
 - The acceptance databases are temporary SQLite, not PostgreSQL.
 - The fixtures exercise real persisted calculation services, but not live
   workbook upload, extraction/LLM execution, or production data.

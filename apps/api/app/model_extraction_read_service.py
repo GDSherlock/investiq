@@ -198,7 +198,6 @@ class ModelExtractionReadService:
             select(FinancialSeries)
             .where(
                 FinancialSeries.model_version_id == model_version_id,
-                FinancialSeries.business_role.is_not(None),
             )
             .order_by(FinancialSeries.id)
         ).all()

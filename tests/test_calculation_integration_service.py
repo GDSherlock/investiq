@@ -1023,6 +1023,108 @@ def test_run_outputs_project_scalar_and_series_baseline_current_values(
     assert [point.current.value.value for point in series.points] == ["26", "26"]
 
 
+def test_multiple_overrides_project_against_comparison_baseline(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    override_a = facade.calculate(
+        context["model"].id,
+        _calculation_request(
+            prepared.graph_version_id,
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter"].id,
+                },
+                "value": {"value_type": "number", "value": "10"},
+            },
+        ),
+    )
+    override_b = facade.calculate(
+        context["model"].id,
+        _calculation_request(
+            prepared.graph_version_id,
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter"].id,
+                },
+                "value": {"value_type": "number", "value": "20"},
+            },
+        ),
+    )
+
+    projection = facade.get_run_outputs(override_b.calculation_run_id)
+    scalar = next(
+        item
+        for item in projection.outputs
+        if item.business_role == "total_project_cost"
+    )
+
+    assert override_b.base_run_id == override_a.calculation_run_id
+    assert projection.base_run_id == override_a.calculation_run_id
+    assert (
+        projection.comparison_baseline_run_id
+        == baseline.calculation_run_id
+    )
+    assert scalar.baseline.value.value == "5"
+    assert scalar.current.value.value == "23"
+
+
+def test_projection_requires_zero_override_baseline_with_matching_policy(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    idempotency_baseline_request = _calculation_request(
+        prepared.graph_version_id
+    ).model_copy(update={"idempotency_key": "policy-specific-baseline"})
+    baseline = facade.calculate(
+        context["model"].id,
+        idempotency_baseline_request,
+    )
+    override = facade.calculate(
+        context["model"].id,
+        _calculation_request(
+            prepared.graph_version_id,
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter"].id,
+                },
+                "value": {"value_type": "number", "value": "10"},
+            },
+        ),
+    )
+
+    assert override.base_run_id == baseline.calculation_run_id
+    with pytest.raises(CalculationIntegrationError) as captured:
+        facade.get_run_outputs(override.calculation_run_id)
+
+    assert captured.value.code == "CALCULATION_BASELINE_NOT_FOUND"
+    assert captured.value.status_code == 409
+
+
 def test_run_outputs_keep_unsupported_output_explicitly_unavailable(
     integration_context,
 ) -> None:

@@ -18,7 +18,11 @@ from apps.api.app.calculation_rules.inventory import WorkbookFormulaInventory
 from apps.api.app.calculation_rules.phase2_graph import VersionedCalculationGraphBuilder
 from apps.api.app.calculation_rules.phase2_grouping import BusinessRuleGrouper
 from apps.api.app.calculation_rules.phase2_registry import PHASE2_FUNCTION_REGISTRY
-from apps.api.app.calculation_rules.phase2_types import Phase2CalculationConfiguration
+from apps.api.app.calculation_rules.phase2_types import (
+    CalculationRunPolicy,
+    Phase2CalculationConfiguration,
+    canonical_hash,
+)
 from apps.api.app.calculation_rules.repository import CalculationRuleRepository
 from apps.api.app.workbook_storage import WorkbookStorageLocation
 from tests.calculation_rule_test_support import create_materialized_rule_model
@@ -236,6 +240,100 @@ def test_repository_is_idempotent_and_run_reloads_after_restart(
     assert loaded.summary == {"calculated": 1, "reused": 0}
     assert loaded.values[0].value == ScalarValue.number(10)
     assert loaded.values[0].cell_address == first_formula.ref.cell_address
+
+
+def test_repository_finds_completed_zero_override_run_with_exact_versions_and_policy(
+    persistence_context,
+) -> None:
+    context = persistence_context
+    repository = context["repository"]
+    configuration = context["configuration"]
+    run_policy = CalculationRunPolicy().to_payload()
+    run_id = str(uuid.uuid4())
+    repository.save_graph(context["graph"], configuration)
+    repository.start_run(
+        run_id,
+        context["model"].id,
+        context["graph"].id,
+        configuration,
+        normalized_override_hash=canonical_hash([]),
+        run_policy_hash=canonical_hash(run_policy),
+        overrides=(),
+        run_policy=run_policy,
+    )
+    repository.complete_run(
+        run_id,
+        status="completed",
+        summary={},
+        warnings=(),
+    )
+    context["session"].commit()
+
+    found = repository.find_completed_zero_override_run(
+        context["model"].id,
+        context["graph"].id,
+        engine_version=configuration.engine_version,
+        function_registry_version=configuration.function_registry_version,
+        semantics_profile=configuration.semantics_profile,
+        run_policy_hash=canonical_hash(run_policy),
+    )
+
+    assert found is not None
+    assert found.calculation_run_id == run_id
+
+
+def test_repository_rejects_nonempty_override_from_zero_baseline_lookup(
+    persistence_context,
+) -> None:
+    from apps.api.app.calculation_rules.phase2_models import CalculationRunRecord
+
+    context = persistence_context
+    repository = context["repository"]
+    configuration = context["configuration"]
+    run_policy = CalculationRunPolicy().to_payload()
+    override_payload = [
+        {
+            "target_kind": "parameter",
+            "target_id": str(uuid.uuid4()),
+            "sheet_name": None,
+            "cell_address": None,
+            "value_type": "number",
+            "value": 10.0,
+        }
+    ]
+    run_id = str(uuid.uuid4())
+    repository.save_graph(context["graph"], configuration)
+    repository.start_run(
+        run_id,
+        context["model"].id,
+        context["graph"].id,
+        configuration,
+        normalized_override_hash=canonical_hash(override_payload),
+        run_policy_hash=canonical_hash(run_policy),
+        overrides=override_payload,
+        run_policy=run_policy,
+    )
+    repository.complete_run(
+        run_id,
+        status="completed",
+        summary={},
+        warnings=(),
+    )
+    context["session"].commit()
+    corrupt_row = context["session"].get(CalculationRunRecord, run_id)
+    corrupt_row.normalized_override_hash = canonical_hash([])
+    context["session"].commit()
+
+    found = repository.find_completed_zero_override_run(
+        context["model"].id,
+        context["graph"].id,
+        engine_version=configuration.engine_version,
+        function_registry_version=configuration.function_registry_version,
+        semantics_profile=configuration.semantics_profile,
+        run_policy_hash=canonical_hash(run_policy),
+    )
+
+    assert found is None
 
 
 def test_alembic_upgrades_downgrades_and_reupgrades_sqlite(tmp_path: Path) -> None:

@@ -20,7 +20,7 @@ from .phase2_models import (
     CalculationRunValueRecord,
     GroupedCalculationRuleRecord,
 )
-from .phase2_types import Phase2CalculationConfiguration
+from .phase2_types import Phase2CalculationConfiguration, canonical_hash
 from .types import WorkbookCellRef
 
 
@@ -455,6 +455,44 @@ class Phase2CalculationRepository:
             statement = statement.where(CalculationRunRecord.id != exclude_run_id)
         run_id = self._session.scalar(statement.limit(1))
         return self.load_run(run_id) if run_id is not None else None
+
+    def find_completed_zero_override_run(
+        self,
+        model_version_id: str,
+        graph_version_id: str,
+        *,
+        engine_version: str,
+        function_registry_version: str,
+        semantics_profile: str,
+        run_policy_hash: str,
+    ) -> PersistedCalculationRun | None:
+        run_id = self._session.scalar(
+            select(CalculationRunRecord.id)
+            .where(
+                CalculationRunRecord.model_version_id == model_version_id,
+                CalculationRunRecord.graph_version_id == graph_version_id,
+                CalculationRunRecord.engine_version == engine_version,
+                CalculationRunRecord.function_registry_version
+                == function_registry_version,
+                CalculationRunRecord.semantics_profile == semantics_profile,
+                CalculationRunRecord.normalized_override_hash
+                == canonical_hash([]),
+                CalculationRunRecord.run_policy_hash == run_policy_hash,
+                CalculationRunRecord.status.in_(
+                    ("completed", "completed_with_warning")
+                ),
+            )
+            .order_by(
+                CalculationRunRecord.completed_at.desc(),
+                CalculationRunRecord.created_at.desc(),
+                CalculationRunRecord.id.desc(),
+            )
+            .limit(1)
+        )
+        if run_id is None:
+            return None
+        run = self.load_run(run_id)
+        return None if run.overrides else run
 
     def load_run(self, run_id: str) -> PersistedCalculationRun:
         row = self._session.get(CalculationRunRecord, run_id)

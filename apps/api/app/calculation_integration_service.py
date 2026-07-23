@@ -535,11 +535,25 @@ class CalculationIntegrationService:
                     resource_id=calculation_run_id,
                 )
             current_run = bundle.run
-            if current_run.base_run_id is None:
-                baseline_run = current_run
-            else:
-                baseline_run = self._phase2_repository.load_run(
-                    current_run.base_run_id
+            baseline_run = (
+                self._phase2_repository.find_completed_zero_override_run(
+                    current_run.model_version_id,
+                    current_run.graph_version_id,
+                    engine_version=current_run.engine_version,
+                    function_registry_version=(
+                        current_run.function_registry_version
+                    ),
+                    semantics_profile=current_run.semantics_profile,
+                    run_policy_hash=current_run.run_policy_hash,
+                )
+                )
+            if baseline_run is None:
+                raise CalculationIntegrationError(
+                    "CALCULATION_BASELINE_NOT_FOUND",
+                    "A completed zero-override calculation with matching "
+                    "versions is required.",
+                    status_code=409,
+                    resource_id=current_run.model_version_id,
                 )
             definitions = self._read_service.list_calculation_outputs(
                 current_run.model_version_id
@@ -681,6 +695,7 @@ class CalculationIntegrationService:
                 model_version_id=current_run.model_version_id,
                 graph_version_id=current_run.graph_version_id,
                 base_run_id=current_run.base_run_id,
+                comparison_baseline_run_id=baseline_run.calculation_run_id,
                 outputs=outputs,
             )
         except CalculationIntegrationError:

@@ -136,6 +136,22 @@ def test_discovery_maps_each_series_period_to_exact_formula_cell(
     assert discovered_series.support_status == "supported"
 
 
+def test_discovery_exposes_null_role_series_as_unclassified(
+    discovery_context,
+) -> None:
+    session, read_service, model, series, _output_id = discovery_context
+    series.business_role = None
+    session.commit()
+    session.expire_all()
+
+    definitions = read_service.list_calculation_outputs(model.id)
+
+    discovered_series = next(
+        item for item in definitions if item.output_id == series.id
+    )
+    assert discovered_series.business_role == "unclassified"
+
+
 def test_same_business_role_uses_model_specific_source_cells(
     discovery_context,
 ) -> None:

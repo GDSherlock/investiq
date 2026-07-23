@@ -331,6 +331,7 @@ class CalculationRunOutputsResponse(_CalculationDTO):
     model_version_id: UUIDString
     graph_version_id: UUIDString
     base_run_id: UUIDString | None = None
+    comparison_baseline_run_id: UUIDString
     outputs: list[CalculationRunOutputItem] = Field(default_factory=list)
 
 

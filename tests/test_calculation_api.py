@@ -326,6 +326,10 @@ def test_run_output_projection_returns_business_values_without_cell_coordinates(
     assert response.status_code == 200
     payload = response.json()
     assert payload["base_run_id"] == baseline.json()["calculation_run_id"]
+    assert (
+        payload["comparison_baseline_run_id"]
+        == baseline.json()["calculation_run_id"]
+    )
     by_role = {item["business_role"]: item for item in payload["outputs"]}
     assert by_role["total_project_cost"]["baseline"]["value"]["value"] == "5"
     assert by_role["total_project_cost"]["current"]["value"]["value"] == "13"

@@ -11,7 +11,8 @@
   },
   "database": {
     "dialect": "sqlite",
-    "path": "/tmp/investiq-task-6-two-model-acceptance.db",
+    "isolated_per_invocation": true,
+    "path": "<temporary-directory>/acceptance.db",
     "temporary": true
   },
   "models": [
@@ -19,7 +20,7 @@
       "baseline": {
         "persisted": true,
         "reload_matches": true,
-        "run_id": "8662b07b-49db-5d7c-bee5-f6581f3bc29d",
+        "run_id": "24a34969-82db-5046-a4c0-c25a3520f5ad",
         "summary": {
           "blocked_formula_cells": 0,
           "calculated_formula_cells": 7,
@@ -38,38 +39,38 @@
       },
       "canonical_mappings": {
         "current_override_parameter": {
-          "parameter_id": "e72dbbf7-5a2f-538e-900c-dc513fc52017",
+          "parameter_id": "015b5cb7-f1cb-5d76-ad3a-7b3f001a3b25",
           "source": {
             "cell": "A1",
             "sheet": "Calc"
           }
         },
         "second_driver_parameter": {
-          "parameter_id": "77035ff8-b61d-54e2-beca-f8402921d09d",
+          "parameter_id": "bec3198c-8561-5321-92c5-ef8b7bee52f1",
           "source": {
             "cell": "A2",
             "sheet": "Inputs"
           }
         },
         "selected_row_parameter": {
-          "parameter_id": "844af7b8-55ea-5f39-aea8-ffb868d50ac1",
+          "parameter_id": "0e890acb-319b-56b8-bee0-7244b991f7a0",
           "source": {
             "cell": "A1",
             "sheet": "Inputs"
           }
         },
         "selected_scalar_output": {
-          "formula_cell_id": "e977f716-c42a-5262-b363-29b39fee1699",
-          "output_id": "fa60eae1-7d91-52ec-9da6-5e7511cb8421",
+          "formula_cell_id": "90a30ec7-7538-55dc-941d-6c74809e363e",
+          "output_id": "ec2243f7-301f-561c-8042-75136b0c3a84",
           "source": {
             "cell": "B1",
             "sheet": "Calc"
           }
         }
       },
-      "comparison_baseline_run_id": "8662b07b-49db-5d7c-bee5-f6581f3bc29d",
+      "comparison_baseline_run_id": "24a34969-82db-5046-a4c0-c25a3520f5ad",
       "current": {
-        "run_id": "3aadc199-dc22-5fa2-aed8-39f506a1902a",
+        "run_id": "63a71485-9aa5-5f03-b1d8-a743059b1c67",
         "selected_output": {
           "availability_status": "available",
           "engine_error_code": null,
@@ -99,7 +100,7 @@
             },
             "warnings": []
           },
-          "high_run_id": "44f20b8d-e177-5cec-98f7-41bd148b13b9",
+          "high_run_id": "2f849348-aa4d-575f-a2bc-05b8c783acd0",
           "impact": "3",
           "low_output": {
             "availability_status": "available",
@@ -113,10 +114,10 @@
             },
             "warnings": []
           },
-          "low_run_id": "7ff412b9-cf5f-51d8-84f7-104e22aa7c23",
+          "low_run_id": "cf5a3a50-5daf-5176-8d76-cabdb3c9e2df",
           "target": {
             "kind": "parameter",
-            "parameter_id": "844af7b8-55ea-5f39-aea8-ffb868d50ac1"
+            "parameter_id": "0e890acb-319b-56b8-bee0-7244b991f7a0"
           }
         },
         {
@@ -132,7 +133,7 @@
             },
             "warnings": []
           },
-          "high_run_id": "6d5c1fe7-013a-598c-a372-bfb909e24df2",
+          "high_run_id": "c13405cd-62b0-59a7-bb45-47f54674767b",
           "impact": "3",
           "low_output": {
             "availability_status": "available",
@@ -146,10 +147,10 @@
             },
             "warnings": []
           },
-          "low_run_id": "4282252c-9979-5792-b477-e1bfd33f2aff",
+          "low_run_id": "0b7e3b05-9fca-5737-9e52-611a1d8dd3c3",
           "target": {
             "kind": "parameter",
-            "parameter_id": "77035ff8-b61d-54e2-beca-f8402921d09d"
+            "parameter_id": "bec3198c-8561-5321-92c5-ef8b7bee52f1"
           }
         }
       ],
@@ -157,15 +158,15 @@
         {
           "category": null,
           "current_value": {
-            "value": "3",
+            "value": "2026",
             "value_type": "number"
           },
           "editable": true,
-          "label": "First unit price",
+          "label": "First reporting year",
           "non_editable_reason": null,
           "period": null,
           "scenario": null,
-          "target_id": "77035ff8-b61d-54e2-beca-f8402921d09d",
+          "target_id": "015b5cb7-f1cb-5d76-ad3a-7b3f001a3b25",
           "target_kind": "parameter",
           "unit": null
         },
@@ -180,27 +181,27 @@
           "non_editable_reason": null,
           "period": null,
           "scenario": null,
-          "target_id": "844af7b8-55ea-5f39-aea8-ffb868d50ac1",
+          "target_id": "0e890acb-319b-56b8-bee0-7244b991f7a0",
           "target_kind": "parameter",
           "unit": null
         },
         {
           "category": null,
           "current_value": {
-            "value": "2026",
+            "value": "3",
             "value_type": "number"
           },
           "editable": true,
-          "label": "First reporting year",
+          "label": "First unit price",
           "non_editable_reason": null,
           "period": null,
           "scenario": null,
-          "target_id": "e72dbbf7-5a2f-538e-900c-dc513fc52017",
+          "target_id": "bec3198c-8561-5321-92c5-ef8b7bee52f1",
           "target_kind": "parameter",
           "unit": null
         }
       ],
-      "graph_version_id": "5165b498-6a61-5acc-baea-3b469704d06a",
+      "graph_version_id": "7671f234-3eef-5c75-8d44-d97e1b101fce",
       "matrix_cells_row_major": [
         {
           "column_value": "2",
@@ -218,7 +219,7 @@
             "warnings": []
           },
           "row_value": "1",
-          "run_id": "f41b549e-bad0-54db-a3ff-29b4c275a7b8"
+          "run_id": "cd98a712-9bda-5ab5-b2a1-39245d33d760"
         },
         {
           "column_value": "3",
@@ -236,7 +237,7 @@
             "warnings": []
           },
           "row_value": "1",
-          "run_id": "f4864d0b-faff-5e44-b77c-603553e5f357"
+          "run_id": "88556814-e275-5bf9-a4f7-7ab15243b5b0"
         },
         {
           "column_value": "5",
@@ -254,7 +255,7 @@
             "warnings": []
           },
           "row_value": "1",
-          "run_id": "05071fd8-7a9b-566d-b19b-36cd2ef05b49"
+          "run_id": "2f0e9f2b-3b64-530a-a438-050e0e664b45"
         },
         {
           "column_value": "2",
@@ -272,7 +273,7 @@
             "warnings": []
           },
           "row_value": "2",
-          "run_id": "dd241cc5-5f14-53c5-b1d9-68ae0262dd8a"
+          "run_id": "c0a677c6-5bd5-5719-bb00-fd916606c165"
         },
         {
           "column_value": "3",
@@ -290,7 +291,7 @@
             "warnings": []
           },
           "row_value": "2",
-          "run_id": "2f5b6b2d-fdc8-5c46-91e2-628a20db2615"
+          "run_id": "fc57ca45-a59b-5fb3-b6b7-5f0caf4ab17f"
         },
         {
           "column_value": "5",
@@ -308,7 +309,7 @@
             "warnings": []
           },
           "row_value": "2",
-          "run_id": "4d09dd63-0e34-5bed-bd97-ec29277a980e"
+          "run_id": "eb03f301-6443-54e5-abc5-9811f206d925"
         },
         {
           "column_value": "2",
@@ -326,7 +327,7 @@
             "warnings": []
           },
           "row_value": "4",
-          "run_id": "602b8598-6b2b-5e3b-8282-d52746765455"
+          "run_id": "3910d279-1839-55ab-9b53-6ac06fe7d173"
         },
         {
           "column_value": "3",
@@ -344,7 +345,7 @@
             "warnings": []
           },
           "row_value": "4",
-          "run_id": "313fdc10-0898-5cda-b005-e3cef915e12a"
+          "run_id": "18464341-c66a-527e-9012-37c1ebd64cf0"
         },
         {
           "column_value": "5",
@@ -362,17 +363,17 @@
             "warnings": []
           },
           "row_value": "4",
-          "run_id": "7bda383b-00f9-547c-8686-40c65f955143"
+          "run_id": "b4f41fe6-8522-5937-90fd-12e8d7aebc1a"
         }
       ],
-      "model_version_id": "a54630a4-3678-4763-83f1-e02d725237b1",
+      "model_version_id": "2888ad1b-faef-4285-8b1b-9478e9c5bc50",
       "name": "first_model",
       "persisted_reload_checks": [
         {
           "comparison_baseline_matches": true,
           "kind": "current",
           "persisted": true,
-          "run_id": "3aadc199-dc22-5fa2-aed8-39f506a1902a",
+          "run_id": "63a71485-9aa5-5f03-b1d8-a743059b1c67",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -381,7 +382,7 @@
           "comparison_baseline_matches": true,
           "kind": "driver_0_low_case",
           "persisted": true,
-          "run_id": "7ff412b9-cf5f-51d8-84f7-104e22aa7c23",
+          "run_id": "cf5a3a50-5daf-5176-8d76-cabdb3c9e2df",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -390,7 +391,7 @@
           "comparison_baseline_matches": true,
           "kind": "driver_0_high_case",
           "persisted": true,
-          "run_id": "44f20b8d-e177-5cec-98f7-41bd148b13b9",
+          "run_id": "2f849348-aa4d-575f-a2bc-05b8c783acd0",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -399,7 +400,7 @@
           "comparison_baseline_matches": true,
           "kind": "driver_1_low_case",
           "persisted": true,
-          "run_id": "4282252c-9979-5792-b477-e1bfd33f2aff",
+          "run_id": "0b7e3b05-9fca-5737-9e52-611a1d8dd3c3",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -408,7 +409,7 @@
           "comparison_baseline_matches": true,
           "kind": "driver_1_high_case",
           "persisted": true,
-          "run_id": "6d5c1fe7-013a-598c-a372-bfb909e24df2",
+          "run_id": "c13405cd-62b0-59a7-bb45-47f54674767b",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -417,7 +418,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_0",
           "persisted": true,
-          "run_id": "f41b549e-bad0-54db-a3ff-29b4c275a7b8",
+          "run_id": "cd98a712-9bda-5ab5-b2a1-39245d33d760",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -426,7 +427,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_1",
           "persisted": true,
-          "run_id": "f4864d0b-faff-5e44-b77c-603553e5f357",
+          "run_id": "88556814-e275-5bf9-a4f7-7ab15243b5b0",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -435,7 +436,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_2",
           "persisted": true,
-          "run_id": "05071fd8-7a9b-566d-b19b-36cd2ef05b49",
+          "run_id": "2f0e9f2b-3b64-530a-a438-050e0e664b45",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -444,7 +445,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_3",
           "persisted": true,
-          "run_id": "dd241cc5-5f14-53c5-b1d9-68ae0262dd8a",
+          "run_id": "c0a677c6-5bd5-5719-bb00-fd916606c165",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -453,7 +454,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_4",
           "persisted": true,
-          "run_id": "2f5b6b2d-fdc8-5c46-91e2-628a20db2615",
+          "run_id": "fc57ca45-a59b-5fb3-b6b7-5f0caf4ab17f",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -462,7 +463,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_5",
           "persisted": true,
-          "run_id": "4d09dd63-0e34-5bed-bd97-ec29277a980e",
+          "run_id": "eb03f301-6443-54e5-abc5-9811f206d925",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -471,7 +472,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_6",
           "persisted": true,
-          "run_id": "602b8598-6b2b-5e3b-8282-d52746765455",
+          "run_id": "3910d279-1839-55ab-9b53-6ac06fe7d173",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -480,7 +481,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_7",
           "persisted": true,
-          "run_id": "313fdc10-0898-5cda-b005-e3cef915e12a",
+          "run_id": "18464341-c66a-527e-9012-37c1ebd64cf0",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -489,7 +490,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_8",
           "persisted": true,
-          "run_id": "7bda383b-00f9-547c-8686-40c65f955143",
+          "run_id": "b4f41fe6-8522-5937-90fd-12e8d7aebc1a",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -510,12 +511,12 @@
           "entity_kind": "scalar",
           "label": "First circular metric",
           "mapping_status": "mapped",
-          "output_id": "3a276b2f-748c-5ae2-9f5c-13105479e8a0",
+          "output_id": "04c95c6f-0100-5d44-9094-e2792feef8b1",
           "points": [],
           "scenario": "base",
           "source": {
             "cell_address": "B5",
-            "formula_cell_id": "4596719d-215e-5c9f-8516-6ceabcf05cf9",
+            "formula_cell_id": "1fddb13d-b44a-5126-a09a-28bcce5b6736",
             "formula_status": "formula_no_cache",
             "number_format": "General",
             "sheet_name": "Calc"
@@ -528,12 +529,12 @@
           "entity_kind": "scalar",
           "label": "Total project cost",
           "mapping_status": "mapped",
-          "output_id": "fa60eae1-7d91-52ec-9da6-5e7511cb8421",
+          "output_id": "ec2243f7-301f-561c-8042-75136b0c3a84",
           "points": [],
           "scenario": "base",
           "source": {
             "cell_address": "B1",
-            "formula_cell_id": "e977f716-c42a-5262-b363-29b39fee1699",
+            "formula_cell_id": "90a30ec7-7538-55dc-941d-6c74809e363e",
             "formula_status": "formula_no_cache",
             "number_format": "General",
             "sheet_name": "Calc"
@@ -555,20 +556,20 @@
         "availability_status": "unavailable",
         "engine_error_code": null,
         "execution_status": "cycle",
-        "output_id": "3a276b2f-748c-5ae2-9f5c-13105479e8a0",
+        "output_id": "04c95c6f-0100-5d44-9094-e2792feef8b1",
         "unavailable_reason": "cycle",
         "value": null,
         "warnings": [
           "cycle"
         ]
       },
-      "workbook_version_id": "0c91ff79-059d-4e1e-a09f-2e1cdc9651ea"
+      "workbook_version_id": "a68f243f-04fe-4b16-8989-859c271265d1"
     },
     {
       "baseline": {
         "persisted": true,
         "reload_matches": true,
-        "run_id": "16b4abc9-84e5-556f-a5e8-fa09e6e82c90",
+        "run_id": "a6eef3ba-f557-5ed2-90a1-0e65d357345b",
         "summary": {
           "blocked_formula_cells": 0,
           "calculated_formula_cells": 7,
@@ -587,38 +588,38 @@
       },
       "canonical_mappings": {
         "current_override_parameter": {
-          "parameter_id": "add3232c-33ca-5060-9a66-efa642d023e6",
+          "parameter_id": "8633d216-8416-5ac1-970e-ca262a267b0a",
           "source": {
             "cell": "A2",
             "sheet": "Calc"
           }
         },
         "second_driver_parameter": {
-          "parameter_id": "4c7b7810-29c4-5147-856d-6fa2991cdb04",
+          "parameter_id": "a229176c-1f71-5621-9d7d-f2d5203f87a6",
           "source": {
             "cell": "A1",
             "sheet": "Inputs"
           }
         },
         "selected_row_parameter": {
-          "parameter_id": "c82a92f3-3ae5-5582-9dd9-18c744d0e435",
+          "parameter_id": "12d15553-3ff5-5ec9-a28c-f96ad7d0421c",
           "source": {
             "cell": "A2",
             "sheet": "Inputs"
           }
         },
         "selected_scalar_output": {
-          "formula_cell_id": "b0035c97-701b-5db1-9a66-2c166e4c1563",
-          "output_id": "a34d8508-cf1d-5cfa-9fab-f458482a1381",
+          "formula_cell_id": "2e02e583-62fc-5788-b5eb-a796787dfb70",
+          "output_id": "cbaa31a7-7a17-5fe7-b670-e340f94ef637",
           "source": {
             "cell": "B2",
             "sheet": "Calc"
           }
         }
       },
-      "comparison_baseline_run_id": "16b4abc9-84e5-556f-a5e8-fa09e6e82c90",
+      "comparison_baseline_run_id": "a6eef3ba-f557-5ed2-90a1-0e65d357345b",
       "current": {
-        "run_id": "f19868ef-c393-5016-805e-1163272adf67",
+        "run_id": "a86dbab6-593b-5036-bf19-6dd11a16a1a3",
         "selected_output": {
           "availability_status": "available",
           "engine_error_code": null,
@@ -648,7 +649,7 @@
             },
             "warnings": []
           },
-          "high_run_id": "03bb022b-32bf-5792-b6ab-5220a6841ae2",
+          "high_run_id": "c837181a-0328-5e52-b430-25da27fa8bc5",
           "impact": "18",
           "low_output": {
             "availability_status": "available",
@@ -662,10 +663,10 @@
             },
             "warnings": []
           },
-          "low_run_id": "ae033910-c863-5755-813d-634cc34c56d3",
+          "low_run_id": "6e40516e-8b44-5210-83aa-be007b6a3807",
           "target": {
             "kind": "parameter",
-            "parameter_id": "c82a92f3-3ae5-5582-9dd9-18c744d0e435"
+            "parameter_id": "12d15553-3ff5-5ec9-a28c-f96ad7d0421c"
           }
         },
         {
@@ -681,7 +682,7 @@
             },
             "warnings": []
           },
-          "high_run_id": "d53cb522-cdc4-5bd5-a562-3be54cee8632",
+          "high_run_id": "f2ee0e27-0fa0-5388-9430-1e30c42a6218",
           "impact": "12",
           "low_output": {
             "availability_status": "available",
@@ -695,10 +696,10 @@
             },
             "warnings": []
           },
-          "low_run_id": "8713aead-248f-5a72-8b5d-4508bdbd2f8b",
+          "low_run_id": "3d1a3273-349b-557e-9035-1589202beebf",
           "target": {
             "kind": "parameter",
-            "parameter_id": "4c7b7810-29c4-5147-856d-6fa2991cdb04"
+            "parameter_id": "a229176c-1f71-5621-9d7d-f2d5203f87a6"
           }
         }
       ],
@@ -706,15 +707,15 @@
         {
           "category": null,
           "current_value": {
-            "value": "7",
+            "value": "11",
             "value_type": "number"
           },
           "editable": true,
-          "label": "Second unit price",
+          "label": "Second unit volume",
           "non_editable_reason": null,
           "period": null,
           "scenario": null,
-          "target_id": "4c7b7810-29c4-5147-856d-6fa2991cdb04",
+          "target_id": "12d15553-3ff5-5ec9-a28c-f96ad7d0421c",
           "target_kind": "parameter",
           "unit": null
         },
@@ -729,27 +730,27 @@
           "non_editable_reason": null,
           "period": null,
           "scenario": null,
-          "target_id": "add3232c-33ca-5060-9a66-efa642d023e6",
+          "target_id": "8633d216-8416-5ac1-970e-ca262a267b0a",
           "target_kind": "parameter",
           "unit": null
         },
         {
           "category": null,
           "current_value": {
-            "value": "11",
+            "value": "7",
             "value_type": "number"
           },
           "editable": true,
-          "label": "Second unit volume",
+          "label": "Second unit price",
           "non_editable_reason": null,
           "period": null,
           "scenario": null,
-          "target_id": "c82a92f3-3ae5-5582-9dd9-18c744d0e435",
+          "target_id": "a229176c-1f71-5621-9d7d-f2d5203f87a6",
           "target_kind": "parameter",
           "unit": null
         }
       ],
-      "graph_version_id": "e42fb513-9f0e-58fa-824f-9143621c519a",
+      "graph_version_id": "2714a125-40df-55b9-880e-60bd7c893ce8",
       "matrix_cells_row_major": [
         {
           "column_value": "5",
@@ -767,7 +768,7 @@
             "warnings": []
           },
           "row_value": "8",
-          "run_id": "fb5fe0fc-1f7f-56fb-b355-615adfbc1355"
+          "run_id": "c89a95bf-70c0-530e-8a24-39b9dce38106"
         },
         {
           "column_value": "7",
@@ -785,7 +786,7 @@
             "warnings": []
           },
           "row_value": "8",
-          "run_id": "3436db97-649b-5d1e-8102-6b4191b3a086"
+          "run_id": "8009dd5a-9346-558f-872d-ccdea5f2dba4"
         },
         {
           "column_value": "9",
@@ -803,7 +804,7 @@
             "warnings": []
           },
           "row_value": "8",
-          "run_id": "4956e1b2-78e5-5ee5-93aa-606f3423fa7d"
+          "run_id": "fd184198-48eb-5f81-9f04-d3cd6e3c1601"
         },
         {
           "column_value": "5",
@@ -821,7 +822,7 @@
             "warnings": []
           },
           "row_value": "11",
-          "run_id": "010e7298-9bd5-5e59-bc0b-76b45dbc3b89"
+          "run_id": "0962b3ee-1cb7-5344-9bd4-fdcbb83d5174"
         },
         {
           "column_value": "7",
@@ -839,7 +840,7 @@
             "warnings": []
           },
           "row_value": "11",
-          "run_id": "db8285d0-00d7-57bd-afda-293851486d7f"
+          "run_id": "d6840ea5-72fb-562f-9f6e-4851968fa2b0"
         },
         {
           "column_value": "9",
@@ -857,7 +858,7 @@
             "warnings": []
           },
           "row_value": "11",
-          "run_id": "190aa2cc-d213-5c87-907a-de02bb440137"
+          "run_id": "ffd84ed8-e19f-598d-b24d-b9ba5fcf7289"
         },
         {
           "column_value": "5",
@@ -875,7 +876,7 @@
             "warnings": []
           },
           "row_value": "14",
-          "run_id": "605c53ec-8601-5576-a85d-1b54e02fc9e6"
+          "run_id": "cbdc5b33-5d3b-571c-9c7f-c2e12d2fa510"
         },
         {
           "column_value": "7",
@@ -893,7 +894,7 @@
             "warnings": []
           },
           "row_value": "14",
-          "run_id": "33a410ec-690d-55da-bf9e-4b697fc34bf6"
+          "run_id": "f6f0deaa-3954-5c50-8c1a-e644273cd01d"
         },
         {
           "column_value": "9",
@@ -911,17 +912,17 @@
             "warnings": []
           },
           "row_value": "14",
-          "run_id": "2b02880c-49cc-59c3-a6ca-32614dd4cbc3"
+          "run_id": "df39cbe0-1fec-5d7a-bf24-1d9137976ca8"
         }
       ],
-      "model_version_id": "dd792d12-723d-4f72-8615-8a1fb9c65d0b",
+      "model_version_id": "eb6f71cf-7c5d-45e4-af06-a922ca54669e",
       "name": "second_model",
       "persisted_reload_checks": [
         {
           "comparison_baseline_matches": true,
           "kind": "current",
           "persisted": true,
-          "run_id": "f19868ef-c393-5016-805e-1163272adf67",
+          "run_id": "a86dbab6-593b-5036-bf19-6dd11a16a1a3",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -930,7 +931,7 @@
           "comparison_baseline_matches": true,
           "kind": "driver_0_low_case",
           "persisted": true,
-          "run_id": "ae033910-c863-5755-813d-634cc34c56d3",
+          "run_id": "6e40516e-8b44-5210-83aa-be007b6a3807",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -939,7 +940,7 @@
           "comparison_baseline_matches": true,
           "kind": "driver_0_high_case",
           "persisted": true,
-          "run_id": "03bb022b-32bf-5792-b6ab-5220a6841ae2",
+          "run_id": "c837181a-0328-5e52-b430-25da27fa8bc5",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -948,7 +949,7 @@
           "comparison_baseline_matches": true,
           "kind": "driver_1_low_case",
           "persisted": true,
-          "run_id": "8713aead-248f-5a72-8b5d-4508bdbd2f8b",
+          "run_id": "3d1a3273-349b-557e-9035-1589202beebf",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -957,7 +958,7 @@
           "comparison_baseline_matches": true,
           "kind": "driver_1_high_case",
           "persisted": true,
-          "run_id": "d53cb522-cdc4-5bd5-a562-3be54cee8632",
+          "run_id": "f2ee0e27-0fa0-5388-9430-1e30c42a6218",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -966,7 +967,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_0",
           "persisted": true,
-          "run_id": "fb5fe0fc-1f7f-56fb-b355-615adfbc1355",
+          "run_id": "c89a95bf-70c0-530e-8a24-39b9dce38106",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -975,7 +976,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_1",
           "persisted": true,
-          "run_id": "3436db97-649b-5d1e-8102-6b4191b3a086",
+          "run_id": "8009dd5a-9346-558f-872d-ccdea5f2dba4",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -984,7 +985,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_2",
           "persisted": true,
-          "run_id": "4956e1b2-78e5-5ee5-93aa-606f3423fa7d",
+          "run_id": "fd184198-48eb-5f81-9f04-d3cd6e3c1601",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -993,7 +994,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_3",
           "persisted": true,
-          "run_id": "010e7298-9bd5-5e59-bc0b-76b45dbc3b89",
+          "run_id": "0962b3ee-1cb7-5344-9bd4-fdcbb83d5174",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -1002,7 +1003,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_4",
           "persisted": true,
-          "run_id": "db8285d0-00d7-57bd-afda-293851486d7f",
+          "run_id": "d6840ea5-72fb-562f-9f6e-4851968fa2b0",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -1011,7 +1012,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_5",
           "persisted": true,
-          "run_id": "190aa2cc-d213-5c87-907a-de02bb440137",
+          "run_id": "ffd84ed8-e19f-598d-b24d-b9ba5fcf7289",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -1020,7 +1021,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_6",
           "persisted": true,
-          "run_id": "605c53ec-8601-5576-a85d-1b54e02fc9e6",
+          "run_id": "cbdc5b33-5d3b-571c-9c7f-c2e12d2fa510",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -1029,7 +1030,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_7",
           "persisted": true,
-          "run_id": "33a410ec-690d-55da-bf9e-4b697fc34bf6",
+          "run_id": "f6f0deaa-3954-5c50-8c1a-e644273cd01d",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -1038,7 +1039,7 @@
           "comparison_baseline_matches": true,
           "kind": "matrix_8",
           "persisted": true,
-          "run_id": "2b02880c-49cc-59c3-a6ca-32614dd4cbc3",
+          "run_id": "df39cbe0-1fec-5d7a-bf24-1d9137976ca8",
           "run_reload_matches": true,
           "selected_output_reload_matches": true,
           "status": "completed_with_warning"
@@ -1055,16 +1056,16 @@
       },
       "scalar_outputs": [
         {
-          "business_role": "unclassified",
+          "business_role": "total_project_cost",
           "entity_kind": "scalar",
-          "label": "Second circular metric",
+          "label": "Second model total",
           "mapping_status": "mapped",
-          "output_id": "497aa25b-0e33-565d-8c87-590f0f1772fe",
+          "output_id": "cbaa31a7-7a17-5fe7-b670-e340f94ef637",
           "points": [],
           "scenario": "base",
           "source": {
-            "cell_address": "B5",
-            "formula_cell_id": "ab6b74e4-ff9a-550a-beb9-3326ab02058f",
+            "cell_address": "B2",
+            "formula_cell_id": "2e02e583-62fc-5788-b5eb-a796787dfb70",
             "formula_status": "formula_no_cache",
             "number_format": "General",
             "sheet_name": "Calc"
@@ -1073,16 +1074,16 @@
           "unit": "USD"
         },
         {
-          "business_role": "total_project_cost",
+          "business_role": "unclassified",
           "entity_kind": "scalar",
-          "label": "Second model total",
+          "label": "Second circular metric",
           "mapping_status": "mapped",
-          "output_id": "a34d8508-cf1d-5cfa-9fab-f458482a1381",
+          "output_id": "ce71d42c-8f67-59d5-ab8c-d38b00c88544",
           "points": [],
           "scenario": "base",
           "source": {
-            "cell_address": "B2",
-            "formula_cell_id": "b0035c97-701b-5db1-9a66-2c166e4c1563",
+            "cell_address": "B5",
+            "formula_cell_id": "ee539456-a82d-5b68-b5ee-83987c2efe27",
             "formula_status": "formula_no_cache",
             "number_format": "General",
             "sheet_name": "Calc"
@@ -1104,14 +1105,14 @@
         "availability_status": "unavailable",
         "engine_error_code": null,
         "execution_status": "cycle",
-        "output_id": "497aa25b-0e33-565d-8c87-590f0f1772fe",
+        "output_id": "ce71d42c-8f67-59d5-ab8c-d38b00c88544",
         "unavailable_reason": "cycle",
         "value": null,
         "warnings": [
           "cycle"
         ]
       },
-      "workbook_version_id": "80449463-afc3-4437-b65a-84b9db18ecff"
+      "workbook_version_id": "2a075224-351c-4be9-9646-58818dde032c"
     }
   ],
   "request_contract_audit": {
@@ -1127,12 +1128,12 @@
     "requests": [
       {
         "method": "POST",
-        "path_template": "/api/v1/models/a54630a4-3678-4763-83f1-e02d725237b1/calculation/prepare",
+        "path_template": "/api/v1/models/2888ad1b-faef-4285-8b1b-9478e9c5bc50/calculation/prepare",
         "payload_keys": []
       },
       {
         "method": "POST",
-        "path_template": "/api/v1/models/a54630a4-3678-4763-83f1-e02d725237b1/calculations",
+        "path_template": "/api/v1/models/2888ad1b-faef-4285-8b1b-9478e9c5bc50/calculations",
         "payload_keys": [
           "graph_version_id",
           "idempotency_key",
@@ -1141,7 +1142,7 @@
       },
       {
         "method": "POST",
-        "path_template": "/api/v1/models/a54630a4-3678-4763-83f1-e02d725237b1/calculation/sensitivity",
+        "path_template": "/api/v1/models/2888ad1b-faef-4285-8b1b-9478e9c5bc50/calculation/sensitivity",
         "payload_keys": [
           "current_overrides",
           "drivers",
@@ -1152,7 +1153,7 @@
       },
       {
         "method": "POST",
-        "path_template": "/api/v1/models/a54630a4-3678-4763-83f1-e02d725237b1/calculation/sensitivity",
+        "path_template": "/api/v1/models/2888ad1b-faef-4285-8b1b-9478e9c5bc50/calculation/sensitivity",
         "payload_keys": [
           "current_overrides",
           "drivers",
@@ -1163,12 +1164,12 @@
       },
       {
         "method": "POST",
-        "path_template": "/api/v1/models/dd792d12-723d-4f72-8615-8a1fb9c65d0b/calculation/prepare",
+        "path_template": "/api/v1/models/eb6f71cf-7c5d-45e4-af06-a922ca54669e/calculation/prepare",
         "payload_keys": []
       },
       {
         "method": "POST",
-        "path_template": "/api/v1/models/dd792d12-723d-4f72-8615-8a1fb9c65d0b/calculations",
+        "path_template": "/api/v1/models/eb6f71cf-7c5d-45e4-af06-a922ca54669e/calculations",
         "payload_keys": [
           "graph_version_id",
           "idempotency_key",
@@ -1177,7 +1178,7 @@
       },
       {
         "method": "POST",
-        "path_template": "/api/v1/models/dd792d12-723d-4f72-8615-8a1fb9c65d0b/calculation/sensitivity",
+        "path_template": "/api/v1/models/eb6f71cf-7c5d-45e4-af06-a922ca54669e/calculation/sensitivity",
         "payload_keys": [
           "current_overrides",
           "drivers",
@@ -1188,7 +1189,7 @@
       },
       {
         "method": "POST",
-        "path_template": "/api/v1/models/dd792d12-723d-4f72-8615-8a1fb9c65d0b/calculation/sensitivity",
+        "path_template": "/api/v1/models/eb6f71cf-7c5d-45e4-af06-a922ca54669e/calculation/sensitivity",
         "payload_keys": [
           "current_overrides",
           "drivers",

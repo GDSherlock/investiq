@@ -13,6 +13,7 @@ from io import BytesIO
 import json
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 from typing import Any
 
 WORKTREE = Path(__file__).resolve().parents[2]
@@ -47,7 +48,6 @@ EVIDENCE_PATH = (
     WORKTREE
     / "docs/reports/evidence/canonical-sensitivity-two-model.json"
 )
-DATABASE_PATH = Path("/tmp/investiq-task-6-two-model-acceptance.db")
 FORBIDDEN_REQUEST_KEYS = {
     "label",
     "sheet_name",
@@ -733,11 +733,9 @@ def _accept_model(
     }
 
 
-def main() -> None:
-    if DATABASE_PATH.exists():
-        DATABASE_PATH.unlink()
+def _run(database_path: Path) -> None:
     engine, session_factory = create_sqlite_session_factory(
-        sqlite_file_url(DATABASE_PATH)
+        sqlite_file_url(database_path)
     )
     Base.metadata.create_all(engine)
     with session_factory() as setup:
@@ -798,7 +796,8 @@ def main() -> None:
         "status": "passed",
         "database": {
             "dialect": "sqlite",
-            "path": str(DATABASE_PATH),
+            "path": f"<temporary-directory>/{database_path.name}",
+            "isolated_per_invocation": True,
             "temporary": True,
         },
         "models": model_evidence,
@@ -855,6 +854,13 @@ def main() -> None:
     )
     print(json.dumps(evidence["totals"], sort_keys=True))
     print(EVIDENCE_PATH)
+
+
+def main() -> None:
+    with TemporaryDirectory(
+        prefix="investiq-canonical-sensitivity-acceptance-"
+    ) as temporary_directory:
+        _run(Path(temporary_directory) / "acceptance.db")
 
 
 if __name__ == "__main__":

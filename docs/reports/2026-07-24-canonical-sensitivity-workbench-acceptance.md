@@ -5,7 +5,7 @@
 PASS for the minimum canonical sensitivity workbench slice on
 `audit/canonical-output-sensitivity-readiness`.
 
-The implementation range is `851f363..d11a0c3`. It reuses persisted,
+The implementation range is `851f363..69c97b9`. It reuses persisted,
 model-specific canonical assumptions and outputs. It does not define a
 workbook-specific assumption list, KPI list, sheet/cell request contract, or
 display-label mapping.
@@ -24,7 +24,7 @@ modified.
 | No bounded service composed current, one-way, and two-way cases. | The canonical sensitivity endpoint runs current overrides, up to 12 one-way drivers, and an optional 5×5 Cartesian grid within a 50-generated-run request cap. |
 | The sensitivity screen did not discover model-specific inputs and outputs. | It paginates editable numeric parameters and renders every returned scalar and time-series output using canonical IDs and response metadata. |
 | The reference interaction was not wired to persisted calculations. | A 400 ms debounced control change updates current output cards, tornado rows, baseline/current comparison, two-way matrix, and series charts from persisted calculation runs. |
-| Reload and cross-tab activity could mix stale model/run state or silently lose a workbench update. | Bootstrap and reconciliation are GET-only. A shared Web Lock serializes calculation-page and sensitivity-page storage writers; a revisioned compare-and-write transaction verifies commit or rollback and exposes failures. |
+| Reload and cross-tab activity could mix stale model/run state or silently lose a workbench update. | Bootstrap and reconciliation are GET-only. A shared Web Lock serializes writers; operation-start model/graph/run snapshots provide compare-and-set rejection for stale readiness, baseline, override, and cleanup completions; the revisioned workbench transaction verifies commit or rollback and exposes failures. |
 | Partial comparisons could look fully available. | Baseline and current availability are aggregated, invalid deltas are suppressed, and side-specific typed reasons are displayed. |
 | Persisted decimals and intermediate numeric drafts could be coerced. | Range steps preserve valid persisted decimals; the fallback editor keeps local string drafts such as `-`, `.`, and scientific notation until a finite value is committed. |
 | Narrow layouts could leak chart/table min-content width. | Navigation, comparison tables, the two-way grid, and series cards contain their own horizontal overflow; the document itself does not overflow at 320, 640, or 1024 CSS pixels. |
@@ -67,15 +67,18 @@ npm run build
 
 Results:
 
-- `62 passed, 0 failed`;
+- `68 passed, 0 failed`;
 - Next.js compiled and type-checked all 12 pages;
 - `/sensitivity`: `15.9 kB`, first load `221 kB`;
-- the test runner uses an isolated `mktemp` directory and removes it on exit.
+- the test runner uses an isolated `mktemp` directory, removes it on exit,
+  and preserves compiler/test failure exit status.
 
 The suite covers stale response rejection, GET-only restore, paginated
 canonical discovery, partial/unavailable outputs, exact decimal control state,
 same-run concurrent writers, verified rollback, calculation-page/workbench
-serialization, and same-baseline override invalidation.
+serialization, same-baseline override invalidation, cross-model stale writers,
+same-model late graphs, late baselines after newer overrides, and parallel
+reload cleanup.
 
 ## Reproducible two-model acceptance
 
@@ -109,24 +112,28 @@ Observed totals:
 }
 ```
 
-### Exact model identities
+### Model-specific identity and mapping evidence
 
-| Model | Workbook / model / graph | Canonical drivers | Selected output | Baseline / current | Current value |
-| --- | --- | --- | --- | --- | --- |
-| first | `0c91ff79-059d-4e1e-a09f-2e1cdc9651ea` / `a54630a4-3678-4763-83f1-e02d725237b1` / `5165b498-6a61-5acc-baea-3b469704d06a` | `844af7b8-55ea-5f39-aea8-ffb868d50ac1`, `77035ff8-b61d-54e2-beca-f8402921d09d` | `fa60eae1-7d91-52ec-9da6-5e7511cb8421` | `8662b07b-49db-5d7c-bee5-f6581f3bc29d` / `3aadc199-dc22-5fa2-aed8-39f506a1902a` | `5` |
-| second | `80449463-afc3-4437-b65a-84b9db18ecff` / `dd792d12-723d-4f72-8615-8a1fb9c65d0b` / `e42fb513-9f0e-58fa-824f-9143621c519a` | `c82a92f3-3ae5-5582-9dd9-18c744d0e435`, `4c7b7810-29c4-5147-856d-6fa2991cdb04` | `a34d8508-cf1d-5cfa-9fab-f458482a1381` | `16b4abc9-84e5-556f-a5e8-fa09e6e82c90` / `f19868ef-c393-5016-805e-1163272adf67` | `54` |
+| Model | Selected row driver source | Second driver source | Selected output source | Current value |
+| --- | --- | --- | --- | --- |
+| first | `Inputs!A1` | `Inputs!A2` | `Calc!B1` | `5` |
+| second | `Inputs!A2` | `Inputs!A1` | `Calc!B2` | `54` |
 
-The selected parameter and output IDs, source mappings, workbook IDs, model
-IDs, and graph IDs differ between the two fixtures.
+The evidence document records the exact generated workbook, model, graph,
+parameter, output, baseline-run, current-run, one-way-case, and matrix-case
+UUIDs. It also asserts that the selected IDs and source mappings differ
+between the two fixtures. The report intentionally does not copy those
+per-run UUIDs because each isolated acceptance invocation creates a new
+temporary fixture.
 
-### Exact one-way cases
+### One-way case results
 
-| Model / driver | Low run → value | High run → value |
+| Model / driver | Low value | High value |
 | --- | --- | --- |
-| first / `844af7b8-55ea-5f39-aea8-ffb868d50ac1` | `7ff412b9-cf5f-51d8-84f7-104e22aa7c23` → `4` | `44f20b8d-e177-5cec-98f7-41bd148b13b9` → `7` |
-| first / `77035ff8-b61d-54e2-beca-f8402921d09d` | `4282252c-9979-5792-b477-e1bfd33f2aff` → `4` | `6d5c1fe7-013a-598c-a372-bfb909e24df2` → `7` |
-| second / `c82a92f3-3ae5-5582-9dd9-18c744d0e435` | `ae033910-c863-5755-813d-634cc34c56d3` → `45` | `03bb022b-32bf-5792-b6ab-5220a6841ae2` → `63` |
-| second / `4c7b7810-29c4-5147-856d-6fa2991cdb04` | `8713aead-248f-5a72-8b5d-4508bdbd2f8b` → `48` | `d53cb522-cdc4-5bd5-a562-3be54cee8632` → `60` |
+| first / `Inputs!A1` | `4` | `7` |
+| first / `Inputs!A2` | `4` | `7` |
+| second / `Inputs!A2` | `45` | `63` |
+| second / `Inputs!A1` | `48` | `60` |
 
 The evidence JSON records all 18 matrix run IDs, axis values, output values,
 all 28 GET reload checks, both typed cycle samples, and every audited request.
@@ -167,9 +174,9 @@ then open `http://127.0.0.1:3001/sensitivity`.
 
 Final observed browser evidence:
 
-- initial GET-only restore loaded canonical year `2030`, two tornado drivers,
-  the scalar cards, explicit baseline/current table, 3×3 two-way matrix, and
-  the returned canonical time series;
+- initial GET-only restore loaded canonical year `2030`, the persisted driver
+  selections, scalar cards, explicit baseline/current projection, and the
+  returned canonical time series;
 - the persisted year restored with `step=0.008`, `valid=true`, and
   `stepMismatch=false`;
 - one price change `3 → 3.12` issued exactly one sensitivity POST after the
@@ -177,19 +184,28 @@ Final observed browser evidence:
   `00998183-eba5-476e-b1f1-ccee32283f8b`, current run
   `93a00504-6567-519b-bd55-bfa740263090`;
 - a page reload restored `3.12` and issued only readiness, input, and
-  run-output GETs;
+  run-output GETs; the one-way and matrix analysis panels intentionally await
+  the next user interaction rather than reconstructing cases with POSTs during
+  bootstrap;
 - a second tab changed `3.12 → 3.24`; the first tab reconciled through GETs
   only to revision `885e46fd-d7e5-4d0c-97b5-6c8784b2e456`, current run
   `6f52aa2b-8209-59de-ab3b-331ec77b2e1a`;
+- a final price change to `3.36` populated the two-driver tornado and 5×5
+  two-way matrix from persisted sensitivity cases;
 - document client/scroll widths matched at 320, 640, and 1024 CSS-pixel
   viewports: `314/314`, `634/634`, and `1018/1018`.
+
+Tracked visual evidence:
+
+- [Desktop workbench after persisted sensitivity analysis](evidence/canonical-sensitivity-final-desktop-1716.png)
+- [320 CSS-pixel mobile workbench after persisted sensitivity analysis](evidence/canonical-sensitivity-final-mobile-320.png)
 
 ## Review and boundaries
 
 - Independent final frontend review found no remaining Critical, Important,
-  or valid Minor findings after the shared-lock baseline invalidation and
-  pre-POST lock-capability guards, including explicit verification of all
-  calculation storage writers.
+  or valid Minor findings after reproducing and then closing stale
+  model/graph/run writers with operation-start compare-and-set guards,
+  including explicit verification of cleanup and parallel reload paths.
 - The acceptance databases are temporary SQLite, not PostgreSQL.
 - The fixtures exercise real persisted calculation services, but not live
   workbook upload, extraction/LLM execution, or production data.

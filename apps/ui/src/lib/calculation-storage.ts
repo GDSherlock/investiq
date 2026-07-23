@@ -786,6 +786,20 @@ function browserSensitivityLockManager():
   return candidate?.request ? candidate : null;
 }
 
+function resolveCalculationStorageLockManager(
+  lockManager?: SensitivityWorkbenchLockManager | null,
+): SensitivityWorkbenchLockManager | null {
+  return lockManager === undefined
+    ? browserSensitivityLockManager()
+    : lockManager;
+}
+
+export function isCalculationStorageLockAvailable(
+  lockManager?: SensitivityWorkbenchLockManager | null,
+): boolean {
+  return resolveCalculationStorageLockManager(lockManager) !== null;
+}
+
 const CALCULATION_STORAGE_LOCK_NAME =
   'investiq-calculation-storage-persistence';
 
@@ -794,9 +808,7 @@ export async function withCalculationStorageLock<T>(
   lockManager?: SensitivityWorkbenchLockManager | null,
 ): Promise<T> {
   const resolvedLockManager =
-    lockManager === undefined
-      ? browserSensitivityLockManager()
-      : lockManager;
+    resolveCalculationStorageLockManager(lockManager);
   if (resolvedLockManager === null) {
     throw new Error(
       'This browser does not provide the exclusive storage lock required for calculation persistence.',
@@ -818,9 +830,7 @@ export async function persistSensitivityWorkbenchState(
     return { status: 'superseded' };
   }
   const resolvedLockManager =
-    lockManager === undefined
-      ? browserSensitivityLockManager()
-      : lockManager;
+    resolveCalculationStorageLockManager(lockManager);
   if (resolvedLockManager === null) {
     return {
       status: 'unavailable',

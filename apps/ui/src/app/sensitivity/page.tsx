@@ -37,6 +37,7 @@ import type {
 import {
   CALCULATION_STORAGE_KEYS,
   createGuardedSensitivityStorage,
+  isCalculationStorageLockAvailable,
   persistSensitivityWorkbenchState,
   readPersistedCalculationState,
   readSensitivityWorkbenchDocument,
@@ -50,7 +51,6 @@ import {
   canRetainSensitivityIdentity,
   deriveSliderSpec,
   formatSensitivityDelta,
-  isSensitivityCatalogIdentityError,
   loadAllEditableNumericParameters,
   retainEligibleSensitivityDrivers,
   resolveSensitivitySelections,
@@ -715,20 +715,29 @@ export default function SensitivityPage() {
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
         return 'superseded';
       }
-      activeIdentityRef.current = identity;
+      const storageLockAvailable =
+        isCalculationStorageLockAvailable();
+      activeIdentityRef.current = storageLockAvailable
+        ? identity
+        : null;
       workbenchSnapshotRef.current = nextWorkbench;
       persistedWorkbenchRef.current = nextWorkbench;
       workbenchDocumentRevisionRef.current =
         storedDocument?.revision ?? null;
       setWorkbench(() => nextWorkbench);
+      if (!storageLockAvailable) {
+        setError(
+          new Error(
+            'This browser cannot coordinate calculation storage across tabs. Results remain available to view, but sensitivity controls are disabled to prevent unpersisted calculation runs.',
+          ),
+        );
+      }
       return 'applied';
     } catch (caught) {
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
         return 'superseded';
       }
-      if (isSensitivityCatalogIdentityError(caught)) {
-        activeIdentityRef.current = null;
-      }
+      activeIdentityRef.current = null;
       setError(
         caught instanceof Error
           ? caught
@@ -802,6 +811,15 @@ export default function SensitivityPage() {
     );
 
     try {
+      if (!isCalculationStorageLockAvailable()) {
+        activeIdentityRef.current = null;
+        setError(
+          new Error(
+            'This browser cannot coordinate calculation storage across tabs. Sensitivity controls are disabled before calculation submission.',
+          ),
+        );
+        return;
+      }
       const request = buildSensitivityRequest({
         graphVersionId: identity.graphVersionId,
         outputId: requestWorkbench.selectedOutputId as string,
@@ -913,7 +931,13 @@ export default function SensitivityPage() {
         const previousWorkbench = persistedWorkbenchRef.current;
         workbenchSnapshotRef.current = previousWorkbench;
         setWorkbench(() => previousWorkbench);
-        if (persistence.storageState === 'unknown') {
+        const storageCoordinationFailed =
+          persistence.reason === 'lock_unavailable' ||
+          persistence.reason === 'lock_failed';
+        if (
+          persistence.storageState === 'unknown' ||
+          storageCoordinationFailed
+        ) {
           activeIdentityRef.current = null;
           workbenchDocumentRevisionRef.current = null;
         }
@@ -921,6 +945,8 @@ export default function SensitivityPage() {
           new Error(
             persistence.storageState === 'unknown'
               ? 'Browser storage failed and rollback could not be verified. The calculated result was not applied; controls are disabled until you refresh.'
+              : storageCoordinationFailed
+                ? 'Browser storage coordination failed. The calculated result was not applied; controls are disabled before another calculation can be submitted.'
               : 'The sensitivity result was calculated, but browser storage could not save it. The last persisted result remains displayed.',
           ),
         );

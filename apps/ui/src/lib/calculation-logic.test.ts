@@ -36,6 +36,7 @@ import {
   SENSITIVITY_WORKBENCH_VERSION,
   clearCalculationArtifacts,
   createGuardedSensitivityStorage,
+  isCalculationStorageLockAvailable,
   matchesPersistedSensitivityIdentity,
   persistGraphVersionId,
   persistUploadIdentity,
@@ -311,6 +312,14 @@ test('new uploads clear only calculation graph and run state', async () => {
   assert.equal(storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId), null);
   assert.equal(storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId), null);
   assert.equal(storage.getItem('investiq_model_id'), 'legacy-model');
+});
+
+test('calculation storage lock capability is explicit before mutation', () => {
+  assert.equal(isCalculationStorageLockAvailable(null), false);
+  assert.equal(
+    isCalculationStorageLockAvailable(immediateLockManager),
+    true,
+  );
 });
 
 test('baseline and canonical parameter requests preserve string numbers', () => {
@@ -2524,7 +2533,7 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   );
   assert.match(
     bootstrapSource,
-    /isSensitivityCatalogIdentityError\(caught\)[\s\S]*activeIdentityRef\.current = null/,
+    /catch \(caught\)[\s\S]*activeIdentityRef\.current = null;[\s\S]*return 'failed'/,
   );
   assert.match(
     bootstrapSource,
@@ -2534,6 +2543,10 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   assert.doesNotMatch(bootstrapSource, /method:\s*['"]POST['"]/);
 
   const postIndex = pageSource.indexOf('await runCalculationSensitivity(');
+  const preflightLockIndex = pageSource.lastIndexOf(
+    'if (!isCalculationStorageLockAvailable())',
+    postIndex,
+  );
   const responseGuardIndex = pageSource.indexOf(
     'canApplySensitivityResponse(',
     postIndex,
@@ -2556,6 +2569,10 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   );
 
   assert.ok(postIndex >= 0, 'analysis POST must exist');
+  assert.ok(
+    preflightLockIndex >= 0 && preflightLockIndex < postIndex,
+    'exclusive storage lock capability must be checked before POST',
+  );
   assert.ok(responseGuardIndex > postIndex, 'POST response must be guarded');
   assert.ok(
     outputGetIndex > responseGuardIndex,
@@ -2574,6 +2591,10 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
     'successful server results must become visible only after storage commits',
   );
   assert.match(pageSource, /workbenchDocumentRevisionRef\.current/);
+  assert.match(
+    pageSource,
+    /activeIdentityRef\.current = null;[\s\S]*Could not load the sensitivity workbench/,
+  );
   assert.match(pageSource, /expectedDocumentRevision/);
   assert.match(pageSource, /window\.addEventListener\('storage'/);
   assert.match(pageSource, /void bootstrapWorkbench\(\)/);

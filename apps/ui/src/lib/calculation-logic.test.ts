@@ -38,6 +38,7 @@ import {
   createGuardedSensitivityStorage,
   isCalculationStorageLockAvailable,
   matchesPersistedSensitivityIdentity,
+  persistCalculationRunId,
   persistGraphVersionId,
   persistUploadIdentity,
   readPersistedCalculationState,
@@ -1890,7 +1891,7 @@ test('versioned sensitivity workbench round-trips only for the matching model an
   );
 });
 
-test('corrupt workbench state is ignored without mutating storage and storage failures do not escape', async () => {
+test('corrupt workbench state is ignored while mutation failures remain observable', async () => {
   const storage = new MemoryStorage();
   storage.setItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench, '{bad json');
   assert.equal(
@@ -1917,8 +1918,38 @@ test('corrupt workbench state is ignored without mutating storage and storage fa
       throw new Error('blocked');
     },
   };
-  await assert.doesNotReject(() =>
+  await assert.rejects(
+    () =>
     clearCalculationArtifacts(throwingStorage, immediateLockManager),
+    /blocked/,
+  );
+  await assert.rejects(
+    () =>
+      persistUploadIdentity(
+        throwingStorage,
+        uploadResponse(),
+        immediateLockManager,
+      ),
+    /blocked/,
+  );
+  await assert.rejects(
+    () =>
+      persistGraphVersionId(
+        throwingStorage,
+        'graph-version',
+        immediateLockManager,
+      ),
+    /blocked/,
+  );
+  await assert.rejects(
+    () =>
+      persistCalculationRunId(
+        throwingStorage,
+        'baseline',
+        'baseline-run',
+        immediateLockManager,
+      ),
+    /blocked/,
   );
   assert.equal(
     readSensitivityWorkbenchDocument(
@@ -1927,6 +1958,24 @@ test('corrupt workbench state is ignored without mutating storage and storage fa
       'graph-version',
     ),
     null,
+  );
+
+  const ignoredWrites: StorageLike = {
+    getItem() {
+      return null;
+    },
+    removeItem() {},
+    setItem() {},
+  };
+  await assert.rejects(
+    () =>
+      persistCalculationRunId(
+        ignoredWrites,
+        'baseline',
+        'baseline-run',
+        immediateLockManager,
+      ),
+    /did not persist/,
   );
 });
 

@@ -128,19 +128,21 @@ function safeGetItem(storage: StorageLike, key: string): string | null {
   }
 }
 
-function safeRemoveItem(storage: StorageLike, key: string): void {
-  try {
-    storage.removeItem(key);
-  } catch {
-    // Storage may be unavailable or disabled.
+function removeStorageItem(storage: StorageLike, key: string): void {
+  storage.removeItem(key);
+  if (storage.getItem(key) !== null) {
+    throw new Error(`Browser storage did not remove ${key}.`);
   }
 }
 
-function safeSetItem(storage: StorageLike, key: string, value: string): void {
-  try {
-    storage.setItem(key, value);
-  } catch {
-    // Storage may be unavailable, disabled, or full.
+function setStorageItem(
+  storage: StorageLike,
+  key: string,
+  value: string,
+): void {
+  storage.setItem(key, value);
+  if (storage.getItem(key) !== value) {
+    throw new Error(`Browser storage did not persist ${key}.`);
   }
 }
 
@@ -230,14 +232,17 @@ function normalizeStoredIdentity(value: string | null): string | null {
 function clearSensitivityWorkbenchDocuments(
   storage: StorageLike,
 ): void {
-  safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.sensitivityWorkbench);
-  safeRemoveItem(storage, LEGACY_SENSITIVITY_WORKBENCH_KEY);
+  removeStorageItem(
+    storage,
+    CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+  );
+  removeStorageItem(storage, LEGACY_SENSITIVITY_WORKBENCH_KEY);
 }
 
 function clearCalculationArtifactsUnlocked(storage: StorageLike): void {
-  safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.graphVersionId);
-  safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.baselineRunId);
-  safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.overrideRunId);
+  removeStorageItem(storage, CALCULATION_STORAGE_KEYS.graphVersionId);
+  removeStorageItem(storage, CALCULATION_STORAGE_KEYS.baselineRunId);
+  removeStorageItem(storage, CALCULATION_STORAGE_KEYS.overrideRunId);
   clearSensitivityWorkbenchDocuments(storage);
 }
 
@@ -261,8 +266,7 @@ export async function persistUploadIdentity(
   }
   return withCalculationStorageLock(
     () => {
-      const previousModelVersionId = safeGetItem(
-        storage,
+      const previousModelVersionId = storage.getItem(
         CALCULATION_STORAGE_KEYS.modelVersionId,
       );
       if (
@@ -271,12 +275,12 @@ export async function persistUploadIdentity(
       ) {
         clearCalculationArtifactsUnlocked(storage);
       }
-      safeSetItem(
+      setStorageItem(
         storage,
         CALCULATION_STORAGE_KEYS.workbookVersionId,
         response.workbook_version_id,
       );
-      safeSetItem(
+      setStorageItem(
         storage,
         CALCULATION_STORAGE_KEYS.modelVersionId,
         response.model_version_id,
@@ -294,19 +298,24 @@ export async function persistGraphVersionId(
 ): Promise<void> {
   await withCalculationStorageLock(
     () => {
-      const previousGraphVersionId = safeGetItem(
-        storage,
+      const previousGraphVersionId = storage.getItem(
         CALCULATION_STORAGE_KEYS.graphVersionId,
       );
       if (
         previousGraphVersionId !== null &&
         previousGraphVersionId !== graphVersionId
       ) {
-        safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.baselineRunId);
-        safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.overrideRunId);
+        removeStorageItem(
+          storage,
+          CALCULATION_STORAGE_KEYS.baselineRunId,
+        );
+        removeStorageItem(
+          storage,
+          CALCULATION_STORAGE_KEYS.overrideRunId,
+        );
         clearSensitivityWorkbenchDocuments(storage);
       }
-      safeSetItem(
+      setStorageItem(
         storage,
         CALCULATION_STORAGE_KEYS.graphVersionId,
         graphVersionId,
@@ -329,19 +338,21 @@ export async function persistCalculationRunId(
           ? CALCULATION_STORAGE_KEYS.baselineRunId
           : CALCULATION_STORAGE_KEYS.overrideRunId;
       const runSelectionChanged =
-        safeGetItem(storage, key) !== runId ||
+        storage.getItem(key) !== runId ||
         (kind === 'baseline' &&
-          safeGetItem(
-            storage,
+          storage.getItem(
             CALCULATION_STORAGE_KEYS.overrideRunId,
           ) !== null);
       if (runSelectionChanged) {
         clearSensitivityWorkbenchDocuments(storage);
       }
       if (kind === 'baseline') {
-        safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.overrideRunId);
+        removeStorageItem(
+          storage,
+          CALCULATION_STORAGE_KEYS.overrideRunId,
+        );
       }
-      safeSetItem(storage, key, runId);
+      setStorageItem(storage, key, runId);
     },
     lockManager,
   );
@@ -354,14 +365,17 @@ export async function removePersistedCalculationRunId(
 ): Promise<void> {
   await withCalculationStorageLock(
     () => {
-      safeRemoveItem(
+      removeStorageItem(
         storage,
         kind === 'baseline'
           ? CALCULATION_STORAGE_KEYS.baselineRunId
           : CALCULATION_STORAGE_KEYS.overrideRunId,
       );
       if (kind === 'baseline') {
-        safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.overrideRunId);
+        removeStorageItem(
+          storage,
+          CALCULATION_STORAGE_KEYS.overrideRunId,
+        );
       }
       clearSensitivityWorkbenchDocuments(storage);
     },
@@ -442,23 +456,21 @@ export function createGuardedSensitivityStorage(
       if (!matchesCurrent()) {
         return;
       }
-      try {
-        storage.removeItem(key);
-        updateExpectedRunSelection(key, null);
-      } catch {
-        // Storage may be unavailable or disabled.
+      storage.removeItem(key);
+      if (storage.getItem(key) !== null) {
+        throw new Error(`Browser storage did not remove ${key}.`);
       }
+      updateExpectedRunSelection(key, null);
     },
     setItem(key: string, value: string) {
       if (!matchesCurrent()) {
         return;
       }
-      try {
-        storage.setItem(key, value);
-        updateExpectedRunSelection(key, value);
-      } catch {
-        // Storage may be unavailable, disabled, or full.
+      storage.setItem(key, value);
+      if (storage.getItem(key) !== value) {
+        throw new Error(`Browser storage did not persist ${key}.`);
       }
+      updateExpectedRunSelection(key, value);
     },
   };
 }

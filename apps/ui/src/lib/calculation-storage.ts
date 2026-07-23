@@ -1,4 +1,5 @@
 import type {
+  CalculationSensitivityResponse,
   CalculationRunResponse,
   WorkbookValidationResponse,
 } from './calculation-api-types';
@@ -16,7 +17,21 @@ export const CALCULATION_STORAGE_KEYS = {
   graphVersionId: 'investiq_calculation_graph_version_id',
   baselineRunId: 'investiq_baseline_calculation_run_id',
   overrideRunId: 'investiq_override_calculation_run_id',
+  sensitivityWorkbench: 'investiq_sensitivity_workbench:v1',
 } as const;
+
+export const SENSITIVITY_WORKBENCH_VERSION = 1 as const;
+
+export interface SensitivityWorkbenchDocument {
+  version: 1;
+  modelVersionId: string;
+  graphVersionId: string;
+  overridesByTarget: Record<string, string>;
+  tornadoDriverKeys: string[];
+  selectedOutputId: string | null;
+  rowDriverKey: string | null;
+  columnDriverKey: string | null;
+}
 
 export interface PersistedCalculationState {
   workbookVersionId: string | null;
@@ -29,6 +44,79 @@ export interface PersistedCalculationState {
 export interface RestorableCalculationIdentity {
   modelVersionId: string;
   workbookVersionId: string;
+}
+
+const CANONICAL_TARGET_KEY_PATTERN =
+  /^(parameter|financial_series_value):[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function safeGetItem(storage: StorageLike, key: string): string | null {
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeRemoveItem(storage: StorageLike, key: string): void {
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Storage may be unavailable or disabled.
+  }
+}
+
+function safeSetItem(storage: StorageLike, key: string, value: string): void {
+  try {
+    storage.setItem(key, value);
+  } catch {
+    // Storage may be unavailable, disabled, or full.
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isCanonicalTargetKey(value: unknown): value is string {
+  return (
+    typeof value === 'string' && CANONICAL_TARGET_KEY_PATTERN.test(value)
+  );
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isSensitivityWorkbenchDocument(
+  value: unknown,
+): value is SensitivityWorkbenchDocument {
+  if (
+    !isRecord(value) ||
+    value.version !== SENSITIVITY_WORKBENCH_VERSION ||
+    typeof value.modelVersionId !== 'string' ||
+    typeof value.graphVersionId !== 'string' ||
+    !isRecord(value.overridesByTarget) ||
+    !Array.isArray(value.tornadoDriverKeys) ||
+    !isNullableString(value.selectedOutputId) ||
+    !isNullableString(value.rowDriverKey) ||
+    !isNullableString(value.columnDriverKey)
+  ) {
+    return false;
+  }
+  if (
+    !Object.entries(value.overridesByTarget).every(
+      ([key, decimalValue]) =>
+        isCanonicalTargetKey(key) && typeof decimalValue === 'string',
+    ) ||
+    !value.tornadoDriverKeys.every(isCanonicalTargetKey) ||
+    (value.rowDriverKey !== null &&
+      !isCanonicalTargetKey(value.rowDriverKey)) ||
+    (value.columnDriverKey !== null &&
+      !isCanonicalTargetKey(value.columnDriverKey))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function normalizeStoredIdentity(value: string | null): string | null {
@@ -44,9 +132,10 @@ function normalizeStoredIdentity(value: string | null): string | null {
 }
 
 export function clearCalculationArtifacts(storage: StorageLike): void {
-  storage.removeItem(CALCULATION_STORAGE_KEYS.graphVersionId);
-  storage.removeItem(CALCULATION_STORAGE_KEYS.baselineRunId);
-  storage.removeItem(CALCULATION_STORAGE_KEYS.overrideRunId);
+  safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.graphVersionId);
+  safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.baselineRunId);
+  safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.overrideRunId);
+  safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.sensitivityWorkbench);
 }
 
 export function persistUploadIdentity(
@@ -56,11 +145,13 @@ export function persistUploadIdentity(
   if (!canStartCalculationFlow(response)) {
     return false;
   }
-  storage.setItem(
+  safeSetItem(
+    storage,
     CALCULATION_STORAGE_KEYS.workbookVersionId,
     response.workbook_version_id,
   );
-  storage.setItem(
+  safeSetItem(
+    storage,
     CALCULATION_STORAGE_KEYS.modelVersionId,
     response.model_version_id,
   );
@@ -71,7 +162,21 @@ export function persistGraphVersionId(
   storage: StorageLike,
   graphVersionId: string,
 ): void {
-  storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, graphVersionId);
+  const previousGraphVersionId = safeGetItem(
+    storage,
+    CALCULATION_STORAGE_KEYS.graphVersionId,
+  );
+  if (
+    previousGraphVersionId !== null &&
+    previousGraphVersionId !== graphVersionId
+  ) {
+    safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.sensitivityWorkbench);
+  }
+  safeSetItem(
+    storage,
+    CALCULATION_STORAGE_KEYS.graphVersionId,
+    graphVersionId,
+  );
 }
 
 export function persistCalculationRunId(
@@ -79,7 +184,8 @@ export function persistCalculationRunId(
   kind: 'baseline' | 'override',
   runId: string,
 ): void {
-  storage.setItem(
+  safeSetItem(
+    storage,
     kind === 'baseline'
       ? CALCULATION_STORAGE_KEYS.baselineRunId
       : CALCULATION_STORAGE_KEYS.overrideRunId,
@@ -91,22 +197,93 @@ export function readPersistedCalculationState(
   storage: StorageLike,
 ): PersistedCalculationState {
   return {
-    workbookVersionId: storage.getItem(
+    workbookVersionId: safeGetItem(
+      storage,
       CALCULATION_STORAGE_KEYS.workbookVersionId,
     ),
-    modelVersionId: storage.getItem(
+    modelVersionId: safeGetItem(
+      storage,
       CALCULATION_STORAGE_KEYS.modelVersionId,
     ),
-    graphVersionId: storage.getItem(
+    graphVersionId: safeGetItem(
+      storage,
       CALCULATION_STORAGE_KEYS.graphVersionId,
     ),
-    baselineRunId: storage.getItem(
+    baselineRunId: safeGetItem(
+      storage,
       CALCULATION_STORAGE_KEYS.baselineRunId,
     ),
-    overrideRunId: storage.getItem(
+    overrideRunId: safeGetItem(
+      storage,
       CALCULATION_STORAGE_KEYS.overrideRunId,
     ),
   };
+}
+
+export function persistSensitivityWorkbenchDocument(
+  storage: StorageLike,
+  document: SensitivityWorkbenchDocument,
+): void {
+  try {
+    safeSetItem(
+      storage,
+      CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+      JSON.stringify(document),
+    );
+  } catch {
+    // The minimal document is expected to be serializable.
+  }
+}
+
+export function readSensitivityWorkbenchDocument(
+  storage: StorageLike,
+  modelVersionId: string,
+  graphVersionId: string,
+): SensitivityWorkbenchDocument | null {
+  const rawDocument = safeGetItem(
+    storage,
+    CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+  );
+  if (rawDocument === null) {
+    return null;
+  }
+
+  let parsedDocument: unknown;
+  try {
+    parsedDocument = JSON.parse(rawDocument);
+  } catch {
+    safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.sensitivityWorkbench);
+    return null;
+  }
+  if (
+    !isSensitivityWorkbenchDocument(parsedDocument) ||
+    parsedDocument.modelVersionId !== modelVersionId ||
+    parsedDocument.graphVersionId !== graphVersionId
+  ) {
+    safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.sensitivityWorkbench);
+    return null;
+  }
+  return parsedDocument;
+}
+
+export function persistSensitivityRunSelection(
+  storage: StorageLike,
+  response: CalculationSensitivityResponse,
+): void {
+  safeSetItem(
+    storage,
+    CALCULATION_STORAGE_KEYS.baselineRunId,
+    response.comparison_baseline_run_id,
+  );
+  if (response.current_run_id === response.comparison_baseline_run_id) {
+    safeRemoveItem(storage, CALCULATION_STORAGE_KEYS.overrideRunId);
+    return;
+  }
+  safeSetItem(
+    storage,
+    CALCULATION_STORAGE_KEYS.overrideRunId,
+    response.current_run_id,
+  );
 }
 
 export function readRestorableCalculationIdentity(
@@ -143,7 +320,8 @@ export function reconcileStoredRun(
     return { isCurrent: true, notice: null };
   }
 
-  storage.removeItem(
+  safeRemoveItem(
+    storage,
     kind === 'baseline'
       ? CALCULATION_STORAGE_KEYS.baselineRunId
       : CALCULATION_STORAGE_KEYS.overrideRunId,

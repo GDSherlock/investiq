@@ -133,6 +133,87 @@ export interface CalculationInputsResponse {
   next_cursor: string | null;
 }
 
+export type CalculationOutputMappingStatus =
+  | 'mapped'
+  | 'partial'
+  | 'missing'
+  | 'static';
+
+export type CalculationOutputAvailabilityStatus =
+  | 'available'
+  | 'partial'
+  | 'unavailable';
+
+export type CalculationOutputValue = Exclude<
+  CalculationTypedValue,
+  { value_type: 'date' }
+>;
+
+export interface CalculationProjectedOutputValue {
+  availability_status: 'available' | 'unavailable';
+  value: CalculationOutputValue | null;
+  unavailable_reason: string | null;
+  execution_status: string | null;
+  engine_error_code: string | null;
+  validation_status: string | null;
+  warnings: string[];
+}
+
+export interface CalculationRunScalarOutput {
+  output_id: string;
+  entity_kind: 'scalar';
+  business_role: string;
+  label: string;
+  unit: string | null;
+  scenario: string | null;
+  formula_cell_id: string | null;
+  mapping_status: CalculationOutputMappingStatus;
+  support_status: string;
+  number_format: string | null;
+  availability_status: CalculationOutputAvailabilityStatus;
+  baseline: CalculationProjectedOutputValue;
+  current: CalculationProjectedOutputValue;
+}
+
+export interface CalculationRunSeriesPoint {
+  financial_series_value_id: string;
+  period_index: number;
+  period: string | null;
+  formula_cell_id: string | null;
+  mapping_status: Exclude<CalculationOutputMappingStatus, 'partial'>;
+  support_status: string;
+  number_format: string | null;
+  availability_status: CalculationOutputAvailabilityStatus;
+  baseline: CalculationProjectedOutputValue;
+  current: CalculationProjectedOutputValue;
+}
+
+export interface CalculationRunSeriesOutput {
+  output_id: string;
+  entity_kind: 'series';
+  business_role: string;
+  label: string;
+  unit: string | null;
+  scenario: string | null;
+  mapping_status: CalculationOutputMappingStatus;
+  support_status: string;
+  availability_status: CalculationOutputAvailabilityStatus;
+  points: CalculationRunSeriesPoint[];
+}
+
+export type CalculationRunOutput =
+  | CalculationRunScalarOutput
+  | CalculationRunSeriesOutput;
+
+export interface CalculationRunOutputsResponse {
+  calculation_run_id: string;
+  model_version_id: string;
+  graph_version_id: string;
+  base_run_id: string | null;
+  comparison_baseline_run_id: string;
+  outputs: CalculationRunOutput[];
+}
+
 export type CalculationOverrideTarget =
   | { kind: 'parameter'; parameter_id: string }
   | {
@@ -149,6 +230,94 @@ export interface CalculationRequest {
   graph_version_id: string;
   overrides: CalculationOverride[];
   idempotency_key: string | null;
+}
+
+export type CalculationNumberValue = Extract<
+  CalculationTypedValue,
+  { value_type: 'number' }
+>;
+
+export interface CalculationSensitivityOverrideRequest {
+  target: CalculationOverrideTarget;
+  value: CalculationNumberValue;
+}
+
+export interface CalculationSensitivityDriverRequest {
+  target: CalculationOverrideTarget;
+  low: CalculationNumberValue;
+  high: CalculationNumberValue;
+}
+
+export interface CalculationSensitivityAxisRequest {
+  target: CalculationOverrideTarget;
+  values: CalculationNumberValue[];
+}
+
+export interface CalculationSensitivityTwoWayRequest {
+  row: CalculationSensitivityAxisRequest;
+  column: CalculationSensitivityAxisRequest;
+}
+
+export interface CalculationSensitivityRequest {
+  graph_version_id: string;
+  output_id: string;
+  current_overrides: CalculationSensitivityOverrideRequest[];
+  drivers: CalculationSensitivityDriverRequest[];
+  two_way: CalculationSensitivityTwoWayRequest | null;
+}
+
+export interface CalculationSensitivitySelectedOutput {
+  output_id: string;
+  business_role: string;
+  label: string;
+  unit: string | null;
+  scenario: string | null;
+  number_format: string | null;
+  mapping_status: CalculationOutputMappingStatus;
+  support_status: string;
+  availability_status: CalculationOutputAvailabilityStatus;
+  baseline: CalculationProjectedOutputValue;
+  current: CalculationProjectedOutputValue;
+}
+
+export interface CalculationSensitivityCase {
+  input_value: CalculationNumberValue;
+  calculation_run_id: string;
+  output: CalculationProjectedOutputValue;
+  warnings: string[];
+}
+
+export interface CalculationSensitivityDriverResult {
+  target: CalculationOverrideTarget;
+  low_case: CalculationSensitivityCase;
+  high_case: CalculationSensitivityCase;
+  impact: string | null;
+  warnings: string[];
+}
+
+export interface CalculationSensitivityTwoWayCell {
+  row_value: CalculationNumberValue;
+  column_value: CalculationNumberValue;
+  calculation_run_id: string;
+  output: CalculationProjectedOutputValue;
+  warnings: string[];
+}
+
+export interface CalculationSensitivityTwoWayResult {
+  row_target: CalculationOverrideTarget;
+  column_target: CalculationOverrideTarget;
+  cells: CalculationSensitivityTwoWayCell[];
+}
+
+export interface CalculationSensitivityResponse {
+  model_version_id: string;
+  graph_version_id: string;
+  comparison_baseline_run_id: string;
+  current_run_id: string;
+  selected_output: CalculationSensitivitySelectedOutput;
+  drivers: CalculationSensitivityDriverResult[];
+  two_way: CalculationSensitivityTwoWayResult | null;
+  warnings: string[];
 }
 
 export interface CalculationRunSummary {

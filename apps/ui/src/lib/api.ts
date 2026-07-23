@@ -2,6 +2,9 @@ import type {
   CalculationInputsResponse,
   CalculationReadinessResponse,
   CalculationRequest,
+  CalculationSensitivityRequest,
+  CalculationSensitivityResponse,
+  CalculationRunOutputsResponse,
   CalculationRunResponse,
   WorkbookValidationResponse,
 } from './calculation-api-types';
@@ -20,7 +23,14 @@ interface LegacyModelUploadResponse {
 }
 
 function getAuthHeaders(): Record<string, string> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('investiq_token') : null;
+  let token: string | null = null;
+  if (typeof window !== 'undefined') {
+    try {
+      token = localStorage.getItem('investiq_token');
+    } catch {
+      token = null;
+    }
+  }
   const headers: Record<string, string> = {};
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
@@ -171,6 +181,38 @@ export async function getCalculationRun(
     },
   );
   return parseJsonResponse<CalculationRunResponse>(res);
+}
+
+export async function getCalculationRunOutputs(
+  calculationRunId: string,
+): Promise<CalculationRunOutputsResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/v1/calculation-runs/${encodeURIComponent(calculationRunId)}/outputs`,
+    {
+      cache: 'no-store',
+      headers: { ...getAuthHeaders() },
+    },
+  );
+  return parseJsonResponse<CalculationRunOutputsResponse>(res);
+}
+
+export async function runCalculationSensitivity(
+  modelVersionId: string,
+  request: CalculationSensitivityRequest,
+): Promise<CalculationSensitivityResponse> {
+  return parseJsonResponse<CalculationSensitivityResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/calculation/sensitivity`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify(request),
+      },
+    ),
+  );
 }
 
 export function isUsableLegacyModelId(

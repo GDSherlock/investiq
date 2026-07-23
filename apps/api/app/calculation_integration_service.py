@@ -347,6 +347,57 @@ class CalculationIntegrationService:
             next_cursor=(page[-1].target_id if has_more and page else None),
         )
 
+    def get_input(
+        self,
+        model_version_id: str,
+        target_kind: str,
+        target_id: str,
+    ) -> CalculationInputItem:
+        if target_kind not in {"parameter", "financial_series_value"}:
+            raise CalculationIntegrationError(
+                "INVALID_INPUT_KIND",
+                "Calculation input kind is not supported.",
+                status_code=422,
+                resource_id=target_id,
+            )
+        try:
+            candidate = self._read_service.get_calculation_input(
+                model_version_id,
+                target_kind,
+                target_id,
+            )
+            return self._input_item(candidate)
+        except ModelVersionNotFound as exc:
+            raise CalculationIntegrationError(
+                "MODEL_VERSION_NOT_FOUND",
+                "Model version was not found.",
+                status_code=404,
+                resource_id=model_version_id,
+            ) from exc
+        except ModelVersionNotReady as exc:
+            raise CalculationIntegrationError(
+                "MODEL_NOT_MATERIALIZED",
+                "Model version is not canonically materialized.",
+                status_code=409,
+                resource_id=model_version_id,
+            ) from exc
+        except (ParameterNotFound, FinancialSeriesValueNotFound) as exc:
+            raise CalculationIntegrationError(
+                "INVALID_OVERRIDE_TARGET",
+                "Override target was not found in the model version.",
+                status_code=422,
+                resource_id=target_id,
+            ) from exc
+        except CalculationIntegrationError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise CalculationIntegrationError(
+                "INVALID_OVERRIDE_VALUE",
+                "Canonical input has an unsupported value type.",
+                status_code=422,
+                resource_id=target_id,
+            ) from exc
+
     def list_outputs(self, model_version_id: str) -> CalculationOutputsResponse:
         try:
             definitions = self._read_service.list_calculation_outputs(

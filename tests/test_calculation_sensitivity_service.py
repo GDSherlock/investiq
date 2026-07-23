@@ -255,6 +255,15 @@ def _parameter_target(parameter_id: str) -> dict[str, object]:
     return {"kind": "parameter", "parameter_id": parameter_id}
 
 
+def _financial_series_value_target(
+    financial_series_value_id: str,
+) -> dict[str, object]:
+    return {
+        "kind": "financial_series_value",
+        "financial_series_value_id": financial_series_value_id,
+    }
+
+
 def _sensitivity_request(
     graph_version_id: str,
     output_id: str,
@@ -295,6 +304,7 @@ def _add_parameter(
     session,
     model_id: str,
     *,
+    source_sheet: str = "Inputs",
     source_cell: str,
     value: object,
     data_type: str,
@@ -302,7 +312,7 @@ def _add_parameter(
 ) -> ModelParameter:
     parameter = ModelParameter(
         id=FinancialEntityIdFactory(model_id).parameter_id(
-            "Inputs", source_cell
+            source_sheet, source_cell
         ),
         model_version_id=model_id,
         entity_kind="parameter",
@@ -312,7 +322,7 @@ def _add_parameter(
         validated_role="hardcoded_input",
         raw_value_json=value,
         validated_value_json=value,
-        source_sheet="Inputs",
+        source_sheet=source_sheet,
         source_cell=source_cell,
         formula_status="static_value",
         source_validation_status="validated",
@@ -464,6 +474,70 @@ def test_one_way_runs_are_persisted_and_use_real_engine_values(
             projection.comparison_baseline_run_id
             == baseline.calculation_run_id
         )
+
+
+def test_unrelated_unsupported_input_does_not_block_valid_sensitivity(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_cell="A3",
+        value={"unsupported": True},
+        data_type="x",
+        label="Unrelated unsupported input",
+    )
+    prepared, baseline = _prepare_with_baseline(context)
+    request = _sensitivity_request(
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        context["parameter"].id,
+    )
+
+    response = _service(context).analyze(context["model"].id, request)
+
+    assert response.comparison_baseline_run_id == baseline.calculation_run_id
+    assert response.selected_output.current.value.value == "13"
+    assert response.drivers[0].low_case.output.value.value == "4"
+    assert response.drivers[0].high_case.output.value.value == "7"
+
+
+def test_editable_numeric_financial_series_value_runs_real_one_way_cases(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    series_value = context["series_value"]
+    series_value.value_json = 3
+    series_value.value_source_sheet = "Inputs"
+    series_value.value_source_cell = "A2"
+    series_value.exact_formula = None
+    series_value.formula_status = "static_value"
+    series_value.cached_value_available = True
+    series_value.cached_value_freshness = "unknown"
+    series_value.data_type = "n"
+    context["session"].commit()
+    prepared, baseline = _prepare_with_baseline(context)
+    payload = _sensitivity_request(
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        context["parameter"].id,
+    ).model_dump(mode="json")
+    target = _financial_series_value_target(series_value.id)
+    payload["current_overrides"][0]["target"] = target
+    payload["drivers"][0]["target"] = target
+    request = CalculationSensitivityRequest.model_validate(payload)
+
+    response = _service(context).analyze(context["model"].id, request)
+
+    assert response.comparison_baseline_run_id == baseline.calculation_run_id
+    assert response.selected_output.current.value.value == "12"
+    assert response.drivers[0].low_case.output.value.value == "3"
+    assert response.drivers[0].high_case.output.value.value == "6"
+    assert response.drivers[0].impact == "3"
+    for run_id in _response_run_ids(response):
+        run = context["session"].get(CalculationRunRecord, run_id)
+        assert run.status in {"completed", "completed_with_warning"}
 
 
 def test_baseline_preflight_fails_before_creating_a_run(
@@ -629,12 +703,29 @@ def test_two_way_returns_real_cartesian_cells_in_row_major_order(
         data_type="n",
         label="Unit price",
     )
+    unrelated_parameter = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_sheet="Calc",
+        source_cell="A1",
+        value=2026,
+        data_type="n",
+        label="Unrelated current override",
+    )
     prepared, baseline = _prepare_with_baseline(context)
     request = _two_way_request(
         context,
         prepared.graph_version_id,
         second_parameter.id,
     )
+    payload = request.model_dump(mode="json")
+    payload["current_overrides"].append(
+        {
+            "target": _parameter_target(unrelated_parameter.id),
+            "value": _number("11"),
+        }
+    )
+    request = CalculationSensitivityRequest.model_validate(payload)
 
     response = _service(context).analyze(context["model"].id, request)
 
@@ -667,6 +758,14 @@ def test_two_way_returns_real_cartesian_cells_in_row_major_order(
             projection.comparison_baseline_run_id
             == baseline.calculation_run_id
         )
+        run = context["session"].get(CalculationRunRecord, cell_id)
+        unrelated_override = next(
+            override
+            for override in run.overrides_json
+            if override["target_id"] == unrelated_parameter.id
+        )
+        assert unrelated_override["value_type"] == "number"
+        assert unrelated_override["value"] == "11"
 
 
 def test_replay_returns_identical_current_endpoint_and_cell_run_ids(

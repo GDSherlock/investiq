@@ -703,6 +703,80 @@ def test_list_inputs_defaults_to_editable_parameters_and_includes_graph(
     assert "source_cell" not in item.model_dump()
 
 
+def test_get_input_returns_one_exact_canonical_item(integration_context) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+
+    item = facade.get_input(
+        context["model"].id,
+        "parameter",
+        context["parameter"].id,
+    )
+
+    assert item.target_kind == "parameter"
+    assert item.target_id == context["parameter"].id
+    assert item.current_value.value_type == "number"
+    assert item.current_value.value == "2"
+    assert item.editable is True
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_code", "expected_status"),
+    [
+        ("unknown_model", "MODEL_VERSION_NOT_FOUND", 404),
+        ("model_not_materialized", "MODEL_NOT_MATERIALIZED", 409),
+        ("unknown_target", "INVALID_OVERRIDE_TARGET", 422),
+        ("unsupported_value", "INVALID_OVERRIDE_VALUE", 422),
+    ],
+)
+def test_get_input_preserves_structured_model_target_and_value_errors(
+    integration_context,
+    case: str,
+    expected_code: str,
+    expected_status: int,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationError,
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    model_id = context["model"].id
+    target_id = context["parameter"].id
+    if case == "unknown_model":
+        model_id = str(uuid.uuid4())
+    elif case == "model_not_materialized":
+        context["model"].status = "extracting"
+        context["session"].commit()
+    elif case == "unknown_target":
+        target_id = str(uuid.uuid4())
+    elif case == "unsupported_value":
+        context["parameter"].validated_value_json = {"unsupported": True}
+        context["parameter"].data_type = "x"
+        context["session"].commit()
+
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        facade.get_input(model_id, "parameter", target_id)
+
+    assert captured.value.code == expected_code
+    assert captured.value.status_code == expected_status
+    assert captured.value.resource_id == (
+        model_id
+        if case in {"unknown_model", "model_not_materialized"}
+        else target_id
+    )
+
+
 def test_list_inputs_filters_formula_backed_financial_series_values(
     integration_context,
 ) -> None:

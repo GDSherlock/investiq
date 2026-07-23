@@ -18,7 +18,6 @@ from .calculation_rules.phase2_types import (
     canonical_hash,
 )
 from .schemas import (
-    CalculationInputsResponse,
     CalculationNumberValue,
     CalculationOverrideRequest,
     CalculationOverrideTarget,
@@ -254,10 +253,6 @@ class CalculationSensitivityService:
                 resource_id=request.output_id,
             )
 
-        inputs = self._all_inputs(model_version_id)
-        by_identity = {
-            (item.target_kind, item.target_id): item for item in inputs
-        }
         targets = [
             override.target for override in request.current_overrides
         ] + [driver.target for driver in request.drivers]
@@ -265,11 +260,31 @@ class CalculationSensitivityService:
             targets.extend(
                 [request.two_way.row.target, request.two_way.column.target]
             )
-        for target in targets:
-            candidate = by_identity.get(target.identity)
+        targets_by_identity = {
+            target.identity: target for target in targets
+        }
+        for target in targets_by_identity.values():
+            try:
+                candidate = self._calculation_service.get_input(
+                    model_version_id,
+                    target.kind,
+                    _target_id(target),
+                )
+            except CalculationIntegrationError as error:
+                if error.code not in {
+                    "INVALID_OVERRIDE_TARGET",
+                    "INVALID_OVERRIDE_VALUE",
+                }:
+                    raise
+                raise CalculationIntegrationError(
+                    "INVALID_SENSITIVITY_TARGET",
+                    "Sensitivity target must be an editable numeric canonical "
+                    "input in the model.",
+                    status_code=422,
+                    resource_id=_target_id(target),
+                ) from error
             if (
-                candidate is None
-                or not candidate.editable
+                not candidate.editable
                 or candidate.current_value.value_type != "number"
             ):
                 raise CalculationIntegrationError(
@@ -280,26 +295,6 @@ class CalculationSensitivityService:
                     resource_id=_target_id(target),
                 )
         return baseline.calculation_run_id
-
-    def _all_inputs(self, model_version_id: str) -> list:
-        inputs = []
-        for target_kind in ("parameter", "financial_series_value"):
-            cursor = None
-            while True:
-                page: CalculationInputsResponse = (
-                    self._calculation_service.list_inputs(
-                        model_version_id,
-                        target_kind=target_kind,
-                        editable_only=False,
-                        limit=500,
-                        cursor=cursor,
-                    )
-                )
-                inputs.extend(page.inputs)
-                if page.next_cursor is None:
-                    break
-                cursor = page.next_cursor
-        return inputs
 
     @staticmethod
     def _sorted_current_overrides(

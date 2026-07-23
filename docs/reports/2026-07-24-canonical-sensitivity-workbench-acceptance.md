@@ -5,7 +5,7 @@
 PASS for the minimum canonical sensitivity workbench slice on
 `audit/canonical-output-sensitivity-readiness`.
 
-The implementation range is `851f363..0f2c115`. It reuses persisted,
+The implementation range is `851f363..a33121b`. It reuses persisted,
 model-specific canonical assumptions and outputs. It does not define a
 workbook-specific assumption list, KPI list, sheet/cell request contract, or
 display-label mapping.
@@ -67,9 +67,9 @@ npm run build
 
 Results:
 
-- `61 passed, 0 failed`;
+- `62 passed, 0 failed`;
 - Next.js compiled and type-checked all 12 pages;
-- `/sensitivity`: `17.8 kB`, first load `220 kB`;
+- `/sensitivity`: `15.9 kB`, first load `221 kB`;
 - the test runner uses an isolated `mktemp` directory and removes it on exit.
 
 The suite covers stale response rejection, GET-only restore, paginated
@@ -187,7 +187,8 @@ Final observed browser evidence:
 ## Review and boundaries
 
 - Independent final frontend review found no remaining Critical, Important,
-  or valid Minor findings after the shared-lock baseline invalidation fix.
+  or valid Minor findings after the shared-lock baseline invalidation and
+  pre-POST lock-capability guards.
 - The acceptance databases are temporary SQLite, not PostgreSQL.
 - The fixtures exercise real persisted calculation services, but not live
   workbook upload, extraction/LLM execution, or production data.

@@ -1173,6 +1173,7 @@ test('canonical sensitivity API posts the exact request body to the model route'
         high: { value_type: 'number', value: '120' },
       },
     ],
+    two_way_mode: 'top_impact',
     two_way: null,
   };
   const originalFetch = globalThis.fetch;
@@ -1745,7 +1746,7 @@ test('default output prioritizes available project IRR, equity IRR, NPV, then di
   assert.equal(selectDefaultSensitivityOutput([]), null);
 });
 
-test('sensitivity request uses canonical targets, changed overrides, driver cap, and exact actual axes', () => {
+test('sensitivity request uses canonical targets, changed overrides, driver cap, and top-impact mode', () => {
   const assumptions = Array.from({ length: 13 }, (_, index) =>
     numericAssumption(`driver-${index + 1}`, index === 0 ? '0.1' : '100', {
       label: `Driver ${index + 1}`,
@@ -1776,18 +1777,12 @@ test('sensitivity request uses canonical targets, changed overrides, driver cap,
       value: { value_type: 'number', value: '125' },
     },
   ]);
-  assert.deepEqual(
-    request.two_way?.row.values.map((value) => value.value),
-    ['0.16', '0.18', '0.2', '0.22', '0.24'],
-  );
-  assert.deepEqual(
-    request.two_way?.column.values.map((value) => value.value),
-    ['80', '90', '100', '110', '120'],
-  );
+  assert.equal(request.two_way_mode, 'top_impact');
+  assert.equal(request.two_way, null);
   assert.doesNotMatch(JSON.stringify(request), /sheet_name|cell_address|cell:/);
 });
 
-test('two-way request is omitted for missing, equal, or zero-valued axes', () => {
+test('top-impact request omits explicit axes regardless of stored selections', () => {
   const assumptions = [
     numericAssumption('zero', '0'),
     numericAssumption('one', '1'),

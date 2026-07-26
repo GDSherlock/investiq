@@ -40,6 +40,7 @@ _IMPACT_UNAVAILABLE_WARNING = (
     "Impact is unavailable because one or both endpoint outputs are not "
     "available numeric values."
 )
+_TOP_IMPACT_TWO_WAY_UNAVAILABLE_WARNING = "TOP_IMPACT_TWO_WAY_UNAVAILABLE"
 
 
 def _target_id(target: CalculationOverrideTarget) -> str:
@@ -56,6 +57,44 @@ def _decimal_string(value: Decimal) -> str:
     if value == 0:
         return "0"
     return format(value.normalize(), "f")
+
+
+def _five_linear_values(
+    low: CalculationNumberValue,
+    high: CalculationNumberValue,
+) -> list[CalculationNumberValue]:
+    low_value = Decimal(low.value)
+    high_value = Decimal(high.value)
+    return [
+        CalculationNumberValue(
+            value_type="number",
+            value=_decimal_string(
+                low_value + (high_value - low_value) * Decimal(index) / 4
+            ),
+        )
+        for index in range(5)
+    ]
+
+
+def _rank_top_impact_drivers(
+    drivers: Sequence[CalculationSensitivityDriverResult],
+) -> list[CalculationSensitivityDriverResult]:
+    ranked = [
+        (index, driver)
+        for index, driver in enumerate(drivers)
+        if driver.impact is not None
+    ]
+    return [
+        driver
+        for _index, driver in sorted(
+            ranked,
+            key=lambda item: (
+                -Decimal(item[1].impact or "0"),
+                item[0],
+                item[1].target.identity,
+            ),
+        )[:2]
+    ]
 
 
 def _replace_numeric_override(
@@ -170,7 +209,42 @@ class CalculationSensitivityService:
             response_warnings.extend(warnings)
 
         two_way_result = None
-        if request.two_way is not None:
+        if request.two_way_mode == "top_impact":
+            selected_drivers = _rank_top_impact_drivers(driver_results)
+            if len(selected_drivers) < 2:
+                response_warnings.append(
+                    _TOP_IMPACT_TWO_WAY_UNAVAILABLE_WARNING
+                )
+            else:
+                row_driver, column_driver = selected_drivers
+                row_values = _five_linear_values(
+                    row_driver.low_case.input_value,
+                    row_driver.high_case.input_value,
+                )
+                column_values = _five_linear_values(
+                    column_driver.low_case.input_value,
+                    column_driver.high_case.input_value,
+                )
+                cells = []
+                for row_value in row_values:
+                    for column_value in column_values:
+                        cell = self._run_two_way_cell(
+                            model_version_id,
+                            request,
+                            baseline_run_id,
+                            row_driver.target,
+                            column_driver.target,
+                            row_value,
+                            column_value,
+                        )
+                        cells.append(cell)
+                        response_warnings.extend(cell.warnings)
+                two_way_result = CalculationSensitivityTwoWayResult(
+                    row_target=row_driver.target,
+                    column_target=column_driver.target,
+                    cells=cells,
+                )
+        elif request.two_way is not None:
             cells = []
             for row_value in request.two_way.row.values:
                 for column_value in request.two_way.column.values:
@@ -178,6 +252,8 @@ class CalculationSensitivityService:
                         model_version_id,
                         request,
                         baseline_run_id,
+                        request.two_way.row.target,
+                        request.two_way.column.target,
                         row_value,
                         column_value,
                     )
@@ -387,18 +463,19 @@ class CalculationSensitivityService:
         model_version_id: str,
         request: CalculationSensitivityRequest,
         baseline_run_id: str,
+        row_target: CalculationOverrideTarget,
+        column_target: CalculationOverrideTarget,
         row_value: CalculationNumberValue,
         column_value: CalculationNumberValue,
     ) -> CalculationSensitivityTwoWayCell:
-        assert request.two_way is not None
         row_overrides = _replace_numeric_override(
             request.current_overrides,
-            request.two_way.row.target,
+            row_target,
             row_value,
         )
         merged_overrides = _replace_numeric_override(
             row_overrides,
-            request.two_way.column.target,
+            column_target,
             column_value,
         )
         run = self._calculate(

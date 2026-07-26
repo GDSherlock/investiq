@@ -74,6 +74,75 @@ def test_sensitivity_contract_preserves_decimal_strings() -> None:
     assert request.drivers[0].high.value == "2.00"
 
 
+def test_sensitivity_contract_defaults_to_explicit_two_way_mode() -> None:
+    request = CalculationSensitivityRequest.model_validate(_contract_request())
+
+    assert request.two_way_mode == "explicit"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda payload: payload.update(
+                {
+                    "two_way_mode": "top_impact",
+                    "two_way": {
+                        "row": {
+                            "target": _target(),
+                            "values": [_number("1")],
+                        },
+                        "column": {
+                            "target": _target(),
+                            "values": [_number("2")],
+                        },
+                    },
+                }
+            ),
+            "Top-impact two-way mode does not accept explicit axes",
+        ),
+        (
+            lambda payload: payload.update({"two_way_mode": "top_impact"}),
+            "Top-impact two-way mode requires at least two one-way drivers",
+        ),
+    ],
+)
+def test_top_impact_contract_rejects_incompatible_shapes(
+    mutation,
+    message: str,
+) -> None:
+    payload = _contract_request()
+    mutation(payload)
+
+    with pytest.raises(ValidationError, match=message):
+        CalculationSensitivityRequest.model_validate(payload)
+
+
+def test_top_impact_contract_keeps_existing_driver_and_case_bounds() -> None:
+    payload = _contract_request()
+    payload["two_way_mode"] = "top_impact"
+    payload["drivers"] = [
+        {
+            "target": _target(),
+            "low": _number(str(index)),
+            "high": _number(str(index + 1)),
+        }
+        for index in range(12)
+    ]
+
+    CalculationSensitivityRequest.model_validate(payload)
+    payload["drivers"].append(
+        {
+            "target": _target(),
+            "low": _number("100"),
+            "high": _number("101"),
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        CalculationSensitivityRequest.model_validate(payload)
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
@@ -726,6 +795,34 @@ def _two_way_request(
     )
 
 
+def _top_impact_request(
+    context,
+    graph_version_id: str,
+    output_id: str,
+    second_parameter_id: str,
+) -> CalculationSensitivityRequest:
+    payload = _sensitivity_request(
+        graph_version_id,
+        output_id,
+        context["parameter"].id,
+    ).model_dump(mode="json")
+    payload["two_way_mode"] = "top_impact"
+    payload["drivers"] = [
+        {
+            "target": _parameter_target(context["parameter"].id),
+            "low": _number("1"),
+            "high": _number("5"),
+        },
+        {
+            "target": _parameter_target(second_parameter_id),
+            "low": _number("1"),
+            "high": _number("4"),
+        },
+    ]
+    payload["two_way"] = None
+    return CalculationSensitivityRequest.model_validate(payload)
+
+
 def _response_run_ids(response) -> list[str]:
     return [
         response.current_run_id,
@@ -771,6 +868,7 @@ def test_two_way_returns_real_cartesian_cells_in_row_major_order(
         prepared.graph_version_id,
         second_parameter.id,
     )
+    assert request.two_way_mode == "explicit"
     payload = request.model_dump(mode="json")
     payload["current_overrides"].append(
         {
@@ -819,6 +917,122 @@ def test_two_way_returns_real_cartesian_cells_in_row_major_order(
         )
         assert unrelated_override["value_type"] == "number"
         assert unrelated_override["value"] == "11"
+
+
+def test_top_impact_ranks_numeric_impacts_by_request_order(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    second_parameter = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_cell="A2",
+        value=3,
+        data_type="n",
+        label="Unit price",
+    )
+    prepared, _baseline = _prepare_with_baseline(context)
+    request = _top_impact_request(
+        context,
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        second_parameter.id,
+    )
+    response = _service(context).analyze(context["model"].id, request)
+    from apps.api.app.calculation_sensitivity_service import (
+        _rank_top_impact_drivers,
+    )
+
+    first, second = response.drivers
+    ranked = _rank_top_impact_drivers(
+        [
+            second.model_copy(update={"impact": "4"}),
+            first.model_copy(update={"impact": "4"}),
+            first.model_copy(update={"impact": None}),
+        ]
+    )
+
+    assert [driver.target.identity for driver in ranked] == [
+        second.target.identity,
+        first.target.identity,
+    ]
+
+
+def test_top_impact_persists_twenty_five_linear_cartesian_cases(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    second_parameter = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_cell="A2",
+        value=3,
+        data_type="n",
+        label="Unit price",
+    )
+    prepared, _baseline = _prepare_with_baseline(context)
+    request = _top_impact_request(
+        context,
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        second_parameter.id,
+    )
+
+    response = _service(context).analyze(context["model"].id, request)
+
+    assert response.two_way is not None
+    assert response.two_way.row_target.identity == (
+        "parameter",
+        context["parameter"].id,
+    )
+    assert response.two_way.column_target.identity == (
+        "parameter",
+        second_parameter.id,
+    )
+    assert [cell.row_value.value for cell in response.two_way.cells] == [
+        value for value in ["1", "2", "3", "4", "5"] for _ in range(5)
+    ]
+    assert [cell.column_value.value for cell in response.two_way.cells] == [
+        value
+        for _ in range(5)
+        for value in ["1", "1.75", "2.5", "3.25", "4"]
+    ]
+    assert len(response.two_way.cells) == 25
+    assert len({cell.calculation_run_id for cell in response.two_way.cells}) == 25
+    assert _run_count(context) == 31
+
+
+def test_top_impact_returns_typed_warning_when_fewer_than_two_impacts_are_usable(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    second_parameter = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_cell="A2",
+        value=3,
+        data_type="n",
+        label="Unit price",
+    )
+    unavailable_output = _add_output(
+        context["session"],
+        context["model"].id,
+        source_cell="B5",
+        business_role="unclassified",
+        label="Circular metric",
+    )
+    prepared, _baseline = _prepare_with_baseline(context)
+    request = _top_impact_request(
+        context,
+        prepared.graph_version_id,
+        unavailable_output.id,
+        second_parameter.id,
+    )
+
+    response = _service(context).analyze(context["model"].id, request)
+
+    assert response.two_way is None
+    assert "TOP_IMPACT_TWO_WAY_UNAVAILABLE" in response.warnings
 
 
 def test_replay_returns_identical_current_endpoint_and_cell_run_ids(

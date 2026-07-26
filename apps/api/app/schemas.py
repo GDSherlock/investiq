@@ -413,6 +413,7 @@ class CalculationSensitivityTwoWayRequest(_CalculationDTO):
 class CalculationSensitivityRequest(_CalculationDTO):
     graph_version_id: UUIDString
     output_id: UUIDString
+    two_way_mode: Literal["explicit", "top_impact"] = "explicit"
     current_overrides: list[CalculationSensitivityOverrideRequest] = Field(
         default_factory=list,
         max_length=500,
@@ -433,11 +434,23 @@ class CalculationSensitivityRequest(_CalculationDTO):
         driver_targets = [driver.target.identity for driver in self.drivers]
         if len(driver_targets) != len(set(driver_targets)):
             raise ValueError("Duplicate one-way driver target")
-        two_way_cases = (
-            len(self.two_way.row.values) * len(self.two_way.column.values)
-            if self.two_way is not None
-            else 0
-        )
+        if self.two_way_mode == "top_impact":
+            if self.two_way is not None:
+                raise ValueError(
+                    "Top-impact two-way mode does not accept explicit axes"
+                )
+            if len(self.drivers) < 2:
+                raise ValueError(
+                    "Top-impact two-way mode requires at least two one-way "
+                    "drivers"
+                )
+            two_way_cases = 25
+        else:
+            two_way_cases = (
+                len(self.two_way.row.values) * len(self.two_way.column.values)
+                if self.two_way is not None
+                else 0
+            )
         case_count = 1 + 2 * len(self.drivers) + two_way_cases
         if case_count > 50:
             raise ValueError("Sensitivity requests support at most 50 cases")

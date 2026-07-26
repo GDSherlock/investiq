@@ -261,6 +261,7 @@ export interface CalculationSensitivityTwoWayRequest {
 export interface CalculationSensitivityRequest {
   graph_version_id: string;
   output_id: string;
+  two_way_mode: 'explicit' | 'top_impact';
   current_overrides: CalculationSensitivityOverrideRequest[];
   drivers: CalculationSensitivityDriverRequest[];
   two_way: CalculationSensitivityTwoWayRequest | null;

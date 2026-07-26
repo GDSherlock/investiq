@@ -624,16 +624,6 @@ function currentAssumptionValue(
   return override.trim();
 }
 
-function axisValues(value: string): CalculationNumberValue[] {
-  return [
-    multiplyDecimal(value, 4, 5),
-    multiplyDecimal(value, 9, 10),
-    multiplyDecimal(value, 1, 1),
-    multiplyDecimal(value, 11, 10),
-    multiplyDecimal(value, 6, 5),
-  ].map(numberValue);
-}
-
 export function buildSensitivityRequest(
   input: SensitivityRequestBuildInput,
 ): CalculationSensitivityRequest {
@@ -679,48 +669,13 @@ export function buildSensitivityRequest(
     ];
   });
 
-  let two_way: CalculationSensitivityRequest['two_way'] = null;
-  if (
-    input.rowDriverKey !== null &&
-    input.columnDriverKey !== null &&
-    input.rowDriverKey !== input.columnDriverKey
-  ) {
-    const row = assumptionsByTarget.get(input.rowDriverKey);
-    const column = assumptionsByTarget.get(input.columnDriverKey);
-    if (row !== undefined && column !== undefined) {
-      const rowValue = currentAssumptionValue(
-        row,
-        input.overridesByTarget,
-      );
-      const columnValue = currentAssumptionValue(
-        column,
-        input.overridesByTarget,
-      );
-      const rowDecimal = parseDecimal(rowValue);
-      const columnDecimal = parseDecimal(columnValue);
-      if (
-        rowDecimal !== null &&
-        columnDecimal !== null &&
-        rowDecimal.sign !== 0 &&
-        columnDecimal.sign !== 0
-      ) {
-        two_way = {
-          row: { target: row.target, values: axisValues(rowValue) },
-          column: {
-            target: column.target,
-            values: axisValues(columnValue),
-          },
-        };
-      }
-    }
-  }
-
   return {
     graph_version_id: input.graphVersionId,
     output_id: input.outputId,
+    two_way_mode: 'top_impact',
     current_overrides,
     drivers,
-    two_way,
+    two_way: null,
   };
 }
 

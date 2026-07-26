@@ -3387,6 +3387,10 @@ test('application root contains narrow-screen overflow while sensitivity regions
 
   assert.match(
     layoutSource,
+    /<html[^>]*className="[^"]*\boverflow-x-hidden\b[^"]*"[^>]*>/,
+  );
+  assert.match(
+    layoutSource,
     /<div className="[^"]*\boverflow-x-hidden\b[^"]*">[\s\S]*<NavBar \/>[\s\S]*<main/,
   );
   assert.equal(navSource.match(/\boverflow-x-auto\b/g)?.length, 3);

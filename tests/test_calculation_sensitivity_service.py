@@ -913,6 +913,44 @@ def _response_run_ids(response) -> list[str]:
     ]
 
 
+def test_top_impact_rejects_unrepresentable_exact_interpolation_before_runs(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    second_parameter = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_cell="A2",
+        value=3,
+        data_type="n",
+        label="Unit price",
+    )
+    prepared, _baseline = _prepare_with_baseline(context)
+    request = _top_impact_request(
+        context,
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        second_parameter.id,
+        driver_specs=[
+            (
+                context["parameter"].id,
+                "12345678901234567890123456789012",
+                "12345678901234567890123456789015",
+            ),
+            (second_parameter.id, "1", "5"),
+        ],
+    )
+    before = _run_count(context)
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        _service(context).analyze(context["model"].id, request)
+
+    assert captured.value.code == "INVALID_SENSITIVITY_INTERPOLATION"
+    assert captured.value.status_code == 422
+    assert captured.value.resource_id == context["parameter"].id
+    assert _run_count(context) == before
+
+
 def test_two_way_returns_real_cartesian_cells_in_row_major_order(
     sensitivity_context,
 ) -> None:

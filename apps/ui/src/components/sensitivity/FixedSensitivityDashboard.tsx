@@ -181,6 +181,14 @@ export function FixedSensitivityDashboard({
                         )
                       : 'Unavailable'}
                   </dd>
+                  {slot.unavailableDetail ? (
+                    <p
+                      className="mt-1 line-clamp-2 text-[10px] text-amber-200"
+                      title={slot.unavailableDetail}
+                    >
+                      {slot.unavailableDetail}
+                    </p>
+                  ) : null}
                 </div>
               ))}
             </dl>
@@ -299,6 +307,14 @@ export function FixedSensitivityDashboard({
                       : 'Unavailable'}
                   </span>
                 </p>
+                {slot.unavailableDetail ? (
+                  <p
+                    className="mt-2 line-clamp-2 text-[10px] leading-4 text-amber-200"
+                    title={slot.unavailableDetail}
+                  >
+                    {slot.unavailableDetail}
+                  </p>
+                ) : null}
               </article>
             ))}
           </section>

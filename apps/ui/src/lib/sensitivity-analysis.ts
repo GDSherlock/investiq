@@ -722,9 +722,8 @@ export function buildTornadoRows(
         highValue === null || currentValue === null
           ? null
           : highValue - currentValue;
-      const endpointImpacts = [lowDelta, highDelta].filter(
-        (value): value is number => value !== null,
-      );
+      const backendImpact =
+        driver.impact === null ? null : Number(driver.impact);
       const unavailableReason =
         projectionUnavailableReason(response.selected_output.current) ??
         projectionUnavailableReason(driver.low_case.output) ??
@@ -742,11 +741,9 @@ export function buildTornadoRows(
           lowDelta,
           highDelta,
           impact:
-            endpointImpacts.length === 0
-              ? null
-              : Math.max(
-                  ...endpointImpacts.map((value) => Math.abs(value)),
-                ),
+            backendImpact !== null && Number.isFinite(backendImpact)
+              ? backendImpact
+              : null,
           lowRunId: driver.low_case.calculation_run_id,
           highRunId: driver.high_case.calculation_run_id,
           unavailableReason,

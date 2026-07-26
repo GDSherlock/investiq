@@ -63,6 +63,7 @@ export interface FixedDashboardKpiSlot {
   sourceLabel: string | null;
   kpi: SensitivityKpi | null;
   unavailable: boolean;
+  unavailableDetail: string | null;
 }
 
 export interface FixedDashboardViewModel {
@@ -93,12 +94,15 @@ function resolveSlot(
   definition: FixedDashboardSlotDefinition,
   kpis: readonly SensitivityKpi[],
 ): FixedDashboardKpiSlot {
+  let diagnosticCandidate:
+    | { kpi: SensitivityKpi; roleIndex: number }
+    | null = null;
   for (let index = 0; index < definition.roles.length; index += 1) {
     const role = definition.roles[index];
-    const kpi = kpis.find(
-      (candidate) =>
-        candidate.businessRole === role && isAvailableNumericKpi(candidate),
+    const roleCandidates = kpis.filter(
+      (candidate) => candidate.businessRole === role,
     );
+    const kpi = roleCandidates.find(isAvailableNumericKpi);
     if (kpi !== undefined) {
       const sourceLabel = definition.sourceLabels[index];
       const usesFallback = index > 0;
@@ -111,8 +115,45 @@ function resolveSlot(
         sourceLabel: usesFallback ? sourceLabel : null,
         kpi,
         unavailable: false,
+        unavailableDetail: null,
       };
     }
+    if (diagnosticCandidate === null && roleCandidates[0] !== undefined) {
+      diagnosticCandidate = {
+        kpi: roleCandidates[0],
+        roleIndex: index,
+      };
+    }
+  }
+  if (diagnosticCandidate !== null) {
+    const { kpi, roleIndex } = diagnosticCandidate;
+    const sourceLabel = definition.sourceLabels[roleIndex];
+    const usesFallback = roleIndex > 0;
+    const unavailableDetail = Array.from(
+      new Set(
+        [
+          kpi.current.unavailableReason,
+          kpi.current.executionStatus,
+          kpi.current.validationStatus,
+          ...kpi.current.warnings,
+          kpi.supportStatus === 'supported' ? null : kpi.supportStatus,
+        ].filter(
+          (detail): detail is string =>
+            detail !== null && detail.trim().length > 0,
+        ),
+      ),
+    ).join(' · ');
+    return {
+      key: definition.key,
+      label: definition.label,
+      displayLabel: usesFallback
+        ? `${definition.label} · ${sourceLabel}`
+        : definition.label,
+      sourceLabel: usesFallback ? sourceLabel : null,
+      kpi,
+      unavailable: true,
+      unavailableDetail: unavailableDetail || 'Unavailable canonical output',
+    };
   }
   return {
     key: definition.key,
@@ -121,6 +162,7 @@ function resolveSlot(
     sourceLabel: null,
     kpi: null,
     unavailable: true,
+    unavailableDetail: null,
   };
 }
 
@@ -137,19 +179,23 @@ export function resolveFixedDashboardViewModel(
   const slots = FIXED_DASHBOARD_SLOT_DEFINITIONS.map((definition) =>
     resolveSlot(definition, kpis),
   );
+  const irrSlot = slots.find((slot) => slot.key === 'irr');
   return {
     slots,
     irrOutputId:
-      slots.find((slot) => slot.key === 'irr')?.kpi?.outputId ?? null,
+      irrSlot !== undefined && !irrSlot.unavailable
+        ? irrSlot.kpi?.outputId ?? null
+        : null,
   };
 }
 
 export function resolveFixedDashboardCalculationMode(
   irrOutputId: string | null,
-  _driverCount: number,
+  driverCount: number,
 ): FixedDashboardCalculationMode {
-  void _driverCount;
-  return irrOutputId === null ? 'calculation' : 'sensitivity';
+  return irrOutputId === null || driverCount === 0
+    ? 'calculation'
+    : 'sensitivity';
 }
 
 export function resolveFixedDashboardAnalysis(

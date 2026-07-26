@@ -928,6 +928,16 @@ test('unsupported outputs stay unavailable and missing KPI roles are not fabrica
   assert.equal(view.kpis[0].current.numericValue, null);
   assert.equal(view.kpis[0].current.unavailableReason, 'unsupported');
   assert.equal(view.kpis.some((kpi) => kpi.businessRole === 'npv'), false);
+  const dashboard = resolveFixedDashboardViewModel(view.kpis);
+  const irrSlot = dashboard.slots.find((slot) => slot.key === 'irr');
+  assert.equal(irrSlot?.kpi?.outputId, 'equity-irr-output');
+  assert.equal(irrSlot?.unavailable, true);
+  assert.match(
+    (irrSlot as { unavailableDetail?: string } | undefined)
+      ?.unavailableDetail ?? '',
+    /unsupported/,
+  );
+  assert.equal(dashboard.irrOutputId, null);
 });
 
 test('fixed dashboard keeps five controlled KPI slots and resolves only approved numeric roles', () => {
@@ -980,6 +990,21 @@ test('fixed dashboard keeps five controlled KPI slots and resolves only approved
           current: projectedNumber('120'),
         },
         {
+          output_id: 'payback-output',
+          entity_kind: 'scalar',
+          business_role: 'payback_period',
+          label: 'Payback period',
+          unit: 'years',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'blocked',
+          number_format: '0.0',
+          availability_status: 'unavailable',
+          baseline: unavailableProjection('blocked formula'),
+          current: unavailableProjection('blocked formula'),
+        },
+        {
           output_id: 'misleading-output',
           entity_kind: 'scalar',
           business_role: 'free_cash_flow',
@@ -1023,7 +1048,12 @@ test('fixed dashboard keeps five controlled KPI slots and resolves only approved
         label: 'NPV',
         unavailable: false,
       },
-      { key: 'payback', outputId: null, label: 'Payback', unavailable: true },
+      {
+        key: 'payback',
+        outputId: 'payback-output',
+        label: 'Payback',
+        unavailable: true,
+      },
       { key: 'dscr', outputId: null, label: 'DSCR', unavailable: true },
       {
         key: 'equity_multiple',
@@ -1136,6 +1166,21 @@ test('fixed dashboard renders the stable workbench, eight default sliders, and n
           baseline: projectedNumber('100'),
           current: projectedNumber('120'),
         },
+        {
+          output_id: 'payback-render-output',
+          entity_kind: 'scalar',
+          business_role: 'payback_period',
+          label: 'Payback period',
+          unit: 'years',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'blocked',
+          number_format: '0.0',
+          availability_status: 'unavailable',
+          baseline: unavailableProjection('blocked formula'),
+          current: unavailableProjection('blocked formula'),
+        },
       ],
     }),
   );
@@ -1186,6 +1231,7 @@ test('fixed dashboard renders the stable workbench, eight default sliders, and n
   assert.match(renderedText, /Scenario comparison/);
   assert.match(renderedText, /Two-way sensitivity/);
   assert.match(renderedText, /Current Assumptions/);
+  assert.match(renderedText, /blocked formula/);
   assert.doesNotMatch(renderedText, /Canonical time-series outputs/);
   assert.equal(
     renderer.root.findAll(
@@ -1284,6 +1330,10 @@ test('fixed dashboard uses ordinary calculation only when IRR sensitivity cannot
   assert.equal(
     resolveFixedDashboardCalculationMode('equity-irr-output', 1),
     'sensitivity',
+  );
+  assert.equal(
+    resolveFixedDashboardCalculationMode('project-irr-output', 0),
+    'calculation',
   );
   assert.equal(resolveFixedDashboardCalculationMode(null, 8), 'calculation');
   assert.equal(resolveFixedDashboardCalculationMode(null, 0), 'calculation');
@@ -1735,7 +1785,7 @@ test('run output projection API uses GET and the business-output route', async (
   ]);
 });
 
-test('canonical sensitivity API posts the exact request body to the model route', async () => {
+test('canonical sensitivity API preserves a legacy explicit request without a mode field', async () => {
   const request: CalculationSensitivityRequest = {
     graph_version_id: 'graph-version',
     output_id: 'project-irr-output',
@@ -1747,7 +1797,6 @@ test('canonical sensitivity API posts the exact request body to the model route'
         high: { value_type: 'number', value: '120' },
       },
     ],
-    two_way_mode: 'top_impact',
     two_way: null,
   };
   const originalFetch = globalThis.fetch;
@@ -2977,7 +3026,7 @@ test('tornado rows join canonical targets, rank absolute impact, and retain unav
           high_case: {
             input_value: { value_type: 'number', value: '6' },
             calculation_run_id: 'unavailable-high-run',
-            output: projectedNumber('103'),
+            output: projectedNumber('1000'),
             warnings: [],
           },
           impact: null,
@@ -3008,6 +3057,7 @@ test('tornado rows join canonical targets, rank absolute impact, and retain unav
   assert.deepEqual(
     rows.map((row) => ({
       label: row.label,
+      impact: row.impact,
       low: row.lowValue,
       current: row.currentValue,
       high: row.highValue,
@@ -3020,6 +3070,7 @@ test('tornado rows join canonical targets, rank absolute impact, and retain unav
     [
       {
         label: 'High impact',
+        impact: 50,
         low: 70,
         current: 100,
         high: 120,
@@ -3031,11 +3082,12 @@ test('tornado rows join canonical targets, rank absolute impact, and retain unav
       },
       {
         label: 'Unavailable driver',
+        impact: null,
         low: null,
         current: 100,
-        high: 103,
+        high: 1000,
         lowDelta: null,
-        highDelta: 3,
+        highDelta: 900,
         lowRunId: 'unavailable-low-run',
         highRunId: 'unavailable-high-run',
         unavailableReason: 'blocked',

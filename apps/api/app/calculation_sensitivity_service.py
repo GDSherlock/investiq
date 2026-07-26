@@ -76,10 +76,14 @@ def _five_linear_values(
     low_value = Decimal(low.value)
     high_value = Decimal(high.value)
     with localcontext() as context:
-        context.prec = 2 * max(
-            len(low_value.as_tuple().digits),
-            len(high_value.as_tuple().digits),
-        ) + 2
+        context.prec = (
+            max(low_value.adjusted(), high_value.adjusted())
+            - min(
+                int(low_value.as_tuple().exponent),
+                int(high_value.as_tuple().exponent),
+            )
+            + 4
+        )
         return [
             CalculationNumberValue(
                 value_type="number",
@@ -408,6 +412,18 @@ class CalculationSensitivityService:
                     status_code=422,
                     resource_id=_target_id(target),
                 )
+        if request.two_way_mode == "top_impact":
+            for driver in request.drivers:
+                try:
+                    _five_linear_values(driver.low, driver.high)
+                except (ArithmeticError, ValueError) as error:
+                    raise CalculationIntegrationError(
+                        "INVALID_SENSITIVITY_INTERPOLATION",
+                        "Top-impact driver endpoints cannot be interpolated "
+                        "exactly within the calculation numeric contract.",
+                        status_code=422,
+                        resource_id=_target_id(driver.target),
+                    ) from error
         return baseline.calculation_run_id
 
     @staticmethod

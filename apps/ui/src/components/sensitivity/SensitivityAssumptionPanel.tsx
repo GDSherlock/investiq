@@ -84,7 +84,7 @@ export function SensitivityAssumptionPanel({
 
   return (
     <div className="min-w-0">
-      <div className="mb-3 flex items-center justify-end">
+      <div className="mb-2 flex items-center justify-end">
         <button
           type="button"
           onClick={onResetAll}
@@ -95,7 +95,7 @@ export function SensitivityAssumptionPanel({
         </button>
       </div>
 
-      <div className="space-y-5">
+      <div className="space-y-4">
         {assumptions.length === 0 ? (
           <p className="rounded border border-amber-800/50 bg-amber-900/10 p-3 text-sm text-amber-200">
             This model has no editable numeric canonical parameters.
@@ -104,10 +104,10 @@ export function SensitivityAssumptionPanel({
 
         {groupedAssumptions.map((group) => (
           <section key={group.category}>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gold-300">
+            <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gold-300">
               {group.category}
             </h3>
-            <div className="space-y-3">
+            <div className="divide-y divide-d-border/70">
               {group.assumptions.map((assumption) => {
                 const value =
                   overridesByTarget[assumption.targetKey] ??
@@ -136,33 +136,16 @@ export function SensitivityAssumptionPanel({
                 return (
                   <div
                     key={assumption.targetKey}
-                    className="rounded border border-d-border bg-d-bg/70 p-3"
+                    data-testid="sensitivity-assumption-row"
+                    className="grid min-w-0 gap-x-3 gap-y-1.5 py-2 md:grid-cols-[minmax(9rem,0.8fr)_minmax(12rem,1.5fr)_auto] md:items-center"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <label
-                          htmlFor={inputId}
-                          className="block text-sm font-medium text-slate-100"
-                        >
-                          {assumption.label}
-                        </label>
-                        <p
-                          id={`${inputId}-value`}
-                          className="mt-0.5 font-mono text-xs text-gold-300"
-                        >
-                          {displayValue(value, assumption.unit)}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => onReset(assumption.targetKey)}
-                        disabled={!changed}
-                        className="shrink-0 rounded px-2 py-1 text-[11px] text-d-muted hover:bg-d-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
-                        aria-label={`Reset ${assumption.label}`}
-                      >
-                        Reset
-                      </button>
-                    </div>
+                    <label
+                      htmlFor={inputId}
+                      className="min-w-0 truncate text-sm font-medium text-slate-100"
+                      title={assumption.label}
+                    >
+                      {assumption.label}
+                    </label>
 
                     {showRangeInput && sliderControlStep !== null ? (
                       <input
@@ -179,7 +162,7 @@ export function SensitivityAssumptionPanel({
                             event.target.value,
                           )
                         }
-                        className="mt-3 w-full accent-gold-500"
+                        className="w-full accent-gold-500"
                       />
                     ) : (
                       <input
@@ -233,10 +216,27 @@ export function SensitivityAssumptionPanel({
                             );
                           }
                         }}
-                        className="mt-3 w-full rounded border border-d-border bg-d-card px-3 py-2 font-mono text-sm text-white focus:border-gold-400 focus:outline-none focus:ring-1 focus:ring-gold-400"
+                        className="w-full min-w-0 rounded border border-d-border bg-d-card px-2 py-1.5 font-mono text-sm text-white focus:border-gold-400 focus:outline-none focus:ring-1 focus:ring-gold-400"
                       />
                     )}
 
+                    <div className="flex min-w-0 items-center justify-between gap-2 md:justify-end">
+                      <span
+                        id={`${inputId}-value`}
+                        className="min-w-[5.5rem] text-right font-mono text-xs text-gold-300"
+                      >
+                        {displayValue(value, assumption.unit)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onReset(assumption.targetKey)}
+                        disabled={!changed}
+                        className="shrink-0 rounded px-2 py-1 text-[11px] text-d-muted hover:bg-d-hover hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+                        aria-label={`Reset ${assumption.label}`}
+                      >
+                        Reset
+                      </button>
+                    </div>
                   </div>
                 );
               })}

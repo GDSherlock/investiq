@@ -1352,6 +1352,111 @@ test('fixed dashboard surfaces the typed top-impact warning when no matrix is re
   });
 });
 
+test('assumption panel renders eight compact desktop rows with controls kept together', () => {
+  const assumptions = Array.from({ length: 8 }, (_, index) =>
+    numericAssumption(`compact-driver-${index + 1}`, `${index + 1}`, {
+      label: `Compact driver ${index + 1}`,
+      category: 'Operating assumptions',
+      unit: index === 0 ? '%' : null,
+    }),
+  );
+  let renderer!: TestRenderer.ReactTestRenderer;
+
+  act(() => {
+    renderer = TestRenderer.create(
+      createElement(SensitivityAssumptionPanel, {
+        assumptions,
+        overridesByTarget: {},
+        onValueChange: () => {},
+        onReset: () => {},
+        onResetAll: () => {},
+      }),
+    );
+  });
+
+  const rows = renderer.root.findAllByProps({
+    'data-testid': 'sensitivity-assumption-row',
+  });
+  assert.equal(rows.length, 8);
+  for (const [index, row] of rows.entries()) {
+    assert.match(row.props.className, /\bgrid\b/);
+    assert.match(row.props.className, /\bmd:grid-cols-/);
+    assert.doesNotMatch(row.props.className, /\bp-3\b/);
+    assert.equal(
+      row.findAllByProps({
+        id: `assumption-${assumptions[index].targetKey}`,
+      }).length,
+      1,
+    );
+    assert.equal(
+      row.findAllByProps({
+        'aria-label': `Reset ${assumptions[index].label}`,
+      }).length,
+      1,
+    );
+  }
+  assert.match(JSON.stringify(renderer.toJSON()), /100 %/);
+
+  act(() => {
+    renderer.unmount();
+  });
+});
+
+test('two-way matrix keeps case provenance accessible without adding visible cell rows', () => {
+  let renderer!: TestRenderer.ReactTestRenderer;
+
+  act(() => {
+    renderer = TestRenderer.create(
+      createElement(SensitivityTwoWayMatrix, {
+        matrix: {
+          rowTargetKey: 'parameter:row',
+          columnTargetKey: 'parameter:column',
+          rowLabel: 'Row driver',
+          columnLabel: 'Column driver',
+          rowValues: ['10'],
+          columnValues: ['20'],
+          rows: [
+            {
+              value: '10',
+              cells: [
+                {
+                  rowValue: '10',
+                  columnValue: '20',
+                  calculationRunId: 'matrix-case-run',
+                  numericValue: 0.12,
+                  unavailableReason: null,
+                  warnings: ['reviewed'],
+                },
+              ],
+            },
+          ],
+        },
+        outputLabel: 'Project IRR',
+        formatAxisValue: (_targetKey: string, value: string) => value,
+        formatOutputValue: (value: number | null) =>
+          value === null ? 'Unavailable' : `${value * 100}%`,
+      }),
+    );
+  });
+
+  const cell = renderer.root.findByType('td');
+  assert.match(cell.props.className, /\bpy-2\b/);
+  assert.doesNotMatch(cell.props.className, /\bpy-3\b/);
+  assert.equal(cell.findAllByType('details').length, 0);
+  const provenance = cell.findByProps({
+    'data-testid': 'sensitivity-matrix-cell-provenance',
+  });
+  assert.match(provenance.props.className, /\bsr-only\b/);
+  assert.match(JSON.stringify(provenance.children), /Case details/);
+  assert.match(JSON.stringify(provenance.children), /Run matrix-case-run/);
+  assert.match(cell.props.title, /Run matrix-case-run/);
+  assert.match(cell.props['aria-label'], /Run matrix-case-run/);
+
+  act(() => {
+    renderer.unmount();
+  });
+});
+
 test('ordinary fixed-dashboard calculation submits the complete canonical override set', () => {
   const assumptions = [
     numericAssumption('driver-1', '10'),

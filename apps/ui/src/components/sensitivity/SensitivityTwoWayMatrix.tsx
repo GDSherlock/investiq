@@ -70,7 +70,7 @@ export function SensitivityTwoWayMatrix({
             <tr key={row.value} className="border-b border-d-border">
               <th
                 scope="row"
-                className="px-3 py-3 text-left font-mono font-medium text-slate-200"
+                className="px-3 py-2 text-left font-mono font-medium text-slate-200"
               >
                 {formatAxisValue(matrix.rowTargetKey, row.value)}
               </th>
@@ -85,7 +85,7 @@ export function SensitivityTwoWayMatrix({
                 return (
                   <td
                     key={`${cell.rowValue}:${cell.columnValue}`}
-                    className={`px-3 py-3 text-right font-mono ${
+                    className={`px-3 py-2 text-right font-mono ${
                       cell.numericValue === null
                         ? 'text-amber-200'
                         : 'font-semibold text-white'
@@ -105,18 +105,16 @@ export function SensitivityTwoWayMatrix({
                     <span>
                       {cell.numericValue === null ? 'Unavailable' : value}
                     </span>
-                    <details className="mt-1 text-[10px] font-sans text-slate-200">
-                      <summary className="cursor-pointer list-none underline decoration-dotted underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400">
-                        Case details
-                      </summary>
-                      <p className="mt-1 whitespace-normal text-left">
-                        {metadata}
-                        {reason}
-                        {cell.warnings.length > 0
-                          ? `; ${cell.warnings.join('; ')}`
-                          : ''}
-                      </p>
-                    </details>
+                    <span
+                      data-testid="sensitivity-matrix-cell-provenance"
+                      className="sr-only"
+                    >
+                      Case details. {metadata}
+                      {reason}
+                      {cell.warnings.length > 0
+                        ? `; ${cell.warnings.join('; ')}`
+                        : ''}
+                    </span>
                   </td>
                 );
               })}

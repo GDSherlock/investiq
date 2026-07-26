@@ -24,7 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <ScenarioProvider>
               <ThemeProvider>
                 <AuthGuard>
-                  <div className="min-h-screen bg-d-bg">
+                  <div className="min-h-screen overflow-x-hidden bg-d-bg">
                     <NavBar />
                     <main className="max-w-[1600px] mx-auto px-4 py-6">{children}</main>
                   </div>

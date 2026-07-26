@@ -3373,6 +3373,27 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
   assert.doesNotMatch(matrixSource, /normalized \* 0\.64/);
 });
 
+test('application root contains narrow-screen overflow while sensitivity regions remain independently scrollable', () => {
+  const layoutSource = readFileSync('src/app/layout.tsx', 'utf8');
+  const navSource = readFileSync('src/app/NavBar.tsx', 'utf8');
+  const tornadoSource = readFileSync(
+    'src/components/sensitivity/SensitivityTornadoChart.tsx',
+    'utf8',
+  );
+  const matrixSource = readFileSync(
+    'src/components/sensitivity/SensitivityTwoWayMatrix.tsx',
+    'utf8',
+  );
+
+  assert.match(
+    layoutSource,
+    /<div className="[^"]*\boverflow-x-hidden\b[^"]*">[\s\S]*<NavBar \/>[\s\S]*<main/,
+  );
+  assert.equal(navSource.match(/\boverflow-x-auto\b/g)?.length, 3);
+  assert.match(tornadoSource, /\boverflow-x-auto\b/);
+  assert.match(matrixSource, /\boverflow-x-auto\b/);
+});
+
 test('only the newest sensitivity response may apply when requests resolve out of order', async () => {
   const applied: string[] = [];
   let currentRevision = 0;

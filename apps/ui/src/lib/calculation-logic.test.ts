@@ -4,6 +4,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
+import { FixedSensitivityDashboard } from '../components/sensitivity/FixedSensitivityDashboard';
 import { SensitivityAssumptionPanel } from '../components/sensitivity/SensitivityAssumptionPanel';
 
 import {
@@ -59,10 +60,12 @@ import {
 import {
   orderFixedDashboardAssumptions,
   promoteFixedDashboardDriver,
+  resolveFixedDashboardCalculationMode,
   resolveFixedDashboardViewModel,
   visibleFixedDashboardAssumptions,
 } from './sensitivity-dashboard-view-model';
 import {
+  buildCanonicalOverrideCalculationRequest,
   buildSensitivityRequest,
   buildTornadoRows,
   buildTwoWayMatrix,
@@ -1096,6 +1099,224 @@ test('fixed dashboard assumption helpers preserve canonical order, impact rankin
   );
 });
 
+test('fixed dashboard renders the stable workbench, eight default sliders, and no output or axis selectors', () => {
+  const outputView = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'project-irr-output',
+          entity_kind: 'scalar',
+          business_role: 'project_irr',
+          label: 'Project return',
+          unit: '%',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0%',
+          availability_status: 'available',
+          baseline: projectedNumber('0.1'),
+          current: projectedNumber('0.12'),
+        },
+        {
+          output_id: 'npv-output',
+          entity_kind: 'scalar',
+          business_role: 'npv',
+          label: 'Net present value',
+          unit: 'USD M',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0',
+          availability_status: 'available',
+          baseline: projectedNumber('100'),
+          current: projectedNumber('120'),
+        },
+      ],
+    }),
+  );
+  const assumptions = Array.from({ length: 10 }, (_, index) => ({
+    ...numericAssumption(`driver-${index + 1}`, `${index + 1}`),
+    label: `Model assumption ${index + 1}`,
+  }));
+  let expandRequested = false;
+  let renderer!: TestRenderer.ReactTestRenderer;
+
+  act(() => {
+    renderer = TestRenderer.create(
+      createElement(FixedSensitivityDashboard, {
+        dashboard: resolveFixedDashboardViewModel(outputView.kpis),
+        assumptions,
+        overridesByTarget: {},
+        tornadoRows: [],
+        matrix: null,
+        expanded: false,
+        recalculating: false,
+        errorMessage: null,
+        controlsDisabled: false,
+        calculationRunId: outputView.calculationRunId,
+        analysisOutputLabel: 'IRR',
+        analysisUnavailableReason: null,
+        onToggleExpanded: () => {
+          expandRequested = true;
+        },
+        onValueChange: () => {},
+        onReset: () => {},
+        onResetAll: () => {},
+        onRefresh: () => {},
+        formatAxisValue: (_targetKey: string, value: string) => value,
+        formatAnalyzedOutputValue: (value: number | null) =>
+          value === null ? 'Unavailable' : String(value),
+        formatAnalyzedOutputDelta: (value: number) => String(value),
+      }),
+    );
+  });
+
+  const renderedText = JSON.stringify(renderer.toJSON());
+  assert.match(renderedText, /Decision Confidence/);
+  assert.match(renderedText, /Threshold unavailable/);
+  assert.match(renderedText, /Live Model KPIs/);
+  assert.match(renderedText, /Assumption sliders/);
+  assert.match(renderedText, /IRR tornado chart/);
+  assert.match(renderedText, /Scenario comparison/);
+  assert.match(renderedText, /Two-way sensitivity/);
+  assert.match(renderedText, /Current Assumptions/);
+  assert.doesNotMatch(renderedText, /Canonical time-series outputs/);
+  assert.equal(
+    renderer.root.findAll(
+      (node) =>
+        node.type === 'article' &&
+        node.props['data-testid'] === 'fixed-kpi-card',
+    ).length,
+    5,
+  );
+  assert.equal(
+    renderer.root.findAll(
+      (node) =>
+        node.type === 'input' &&
+        String(node.props.id ?? '').startsWith('assumption-'),
+    ).length,
+    8,
+  );
+  assert.equal(
+    renderer.root.findAll((node) => node.type === 'select').length,
+    0,
+  );
+  const sensitivityControls = renderer.root.findByProps({
+    'data-testid': 'fixed-sensitivity-controls',
+  });
+  assert.equal(
+    sensitivityControls.findAllByProps({
+      'aria-label': 'Refresh persisted results',
+    }).length,
+    0,
+  );
+  assert.equal(
+    renderer.root.findAllByProps({
+      'aria-label': 'Refresh persisted results',
+    }).length,
+    1,
+  );
+  assert.doesNotMatch(renderedText, /Select two distinct/);
+  const expandButton = renderer.root.findByProps({
+    'aria-label': 'Show all 10 assumptions',
+  });
+  act(() => {
+    expandButton.props.onClick();
+  });
+  assert.equal(expandRequested, true);
+
+  act(() => {
+    renderer.update(
+      createElement(FixedSensitivityDashboard, {
+        dashboard: resolveFixedDashboardViewModel(outputView.kpis),
+        assumptions,
+        overridesByTarget: {},
+        tornadoRows: [],
+        matrix: null,
+        expanded: true,
+        recalculating: false,
+        errorMessage: 'Backend failed',
+        controlsDisabled: false,
+        calculationRunId: outputView.calculationRunId,
+        analysisOutputLabel: 'IRR',
+        analysisUnavailableReason: null,
+        onToggleExpanded: () => {},
+        onValueChange: () => {},
+        onReset: () => {},
+        onResetAll: () => {},
+        onRefresh: () => {},
+        formatAxisValue: (_targetKey: string, value: string) => value,
+        formatAnalyzedOutputValue: (value: number | null) =>
+          value === null ? 'Unavailable' : String(value),
+        formatAnalyzedOutputDelta: (value: number) => String(value),
+      }),
+    );
+  });
+  assert.equal(
+    renderer.root.findAll(
+      (node) =>
+        node.type === 'input' &&
+        String(node.props.id ?? '').startsWith('assumption-'),
+    ).length,
+    10,
+  );
+  assert.match(
+    JSON.stringify(renderer.toJSON()),
+    /Last successful result retained/,
+  );
+  act(() => {
+    renderer.unmount();
+  });
+});
+
+test('fixed dashboard uses ordinary calculation only when IRR sensitivity cannot run', () => {
+  assert.equal(
+    resolveFixedDashboardCalculationMode('project-irr-output', 2),
+    'sensitivity',
+  );
+  assert.equal(
+    resolveFixedDashboardCalculationMode('equity-irr-output', 1),
+    'sensitivity',
+  );
+  assert.equal(resolveFixedDashboardCalculationMode(null, 8), 'calculation');
+  assert.equal(resolveFixedDashboardCalculationMode(null, 0), 'calculation');
+});
+
+test('ordinary fixed-dashboard calculation submits the complete canonical override set', () => {
+  const assumptions = [
+    numericAssumption('driver-1', '10'),
+    numericAssumption('driver-2', '20'),
+    numericAssumption('driver-3', '30'),
+  ];
+
+  assert.deepEqual(
+    buildCanonicalOverrideCalculationRequest({
+      graphVersionId: 'graph-version',
+      assumptions,
+      overridesByTarget: {
+        [assumptions[0].targetKey]: '11.5',
+        [assumptions[1].targetKey]: '18',
+      },
+    }),
+    {
+      graph_version_id: 'graph-version',
+      overrides: [
+        {
+          target: assumptions[0].target,
+          value: { value_type: 'number', value: '11.5' },
+        },
+        {
+          target: assumptions[1].target,
+          value: { value_type: 'number', value: '18' },
+        },
+      ],
+      idempotency_key: null,
+    },
+  );
+});
+
 test('partial outputs preserve baseline and current unavailability independently', () => {
   const view = buildSensitivityOutputView(
     runOutputsResponse({
@@ -1666,14 +1887,11 @@ test('fallback number control stays focused through decimal editing and returns 
       overridesByTarget: {
         [assumption.targetKey]: value,
       },
-      tornadoDriverKeys: [assumption.targetKey],
-      maxDrivers: 12,
       onValueChange: (_targetKey: string, nextValue: string) => {
         changedValue = nextValue;
       },
       onReset: () => {},
       onResetAll: () => {},
-      onToggleDriver: () => {},
     });
 
   let renderer!: TestRenderer.ReactTestRenderer;
@@ -1744,14 +1962,11 @@ test('fallback number control keeps intermediate drafts local and emits only fin
         override === null
           ? {}
           : { [assumption.targetKey]: override },
-      tornadoDriverKeys: [],
-      maxDrivers: 12,
       onValueChange: (_targetKey: string, nextValue: string) => {
         emittedValues.push(nextValue);
       },
       onReset: () => {},
       onResetAll: () => {},
-      onToggleDriver: () => {},
     });
 
   let renderer!: TestRenderer.ReactTestRenderer;
@@ -2737,6 +2952,7 @@ test('two-way matrix preserves explicit axis order, run IDs, and unavailable cel
 test('sensitivity workbench composes canonical APIs and dynamic components without legacy mappings', () => {
   const pageSource = readFileSync('src/app/sensitivity/page.tsx', 'utf8');
   const componentSources = [
+    'FixedSensitivityDashboard.tsx',
     'SensitivityAssumptionPanel.tsx',
     'SensitivityTornadoChart.tsx',
     'SensitivityTwoWayMatrix.tsx',
@@ -2750,17 +2966,19 @@ test('sensitivity workbench composes canonical APIs and dynamic components witho
   const allSource = [pageSource, ...componentSources].join('\n');
 
   for (const requiredSource of [
-    'SensitivityAssumptionPanel',
-    'SensitivityTornadoChart',
-    'SensitivityTwoWayMatrix',
+    'FixedSensitivityDashboard',
     'getCalculationReadiness',
     'getCalculationRunOutputs',
+    'runCalculation',
     'runCalculationSensitivity',
     'loadAllEditableNumericParameters',
     'restoreSensitivityOutputProjection',
     'comparison_baseline_run_id',
     'selectedOutputId',
     'tornadoDriverKeys',
+    'resolveFixedDashboardViewModel',
+    'resolveFixedDashboardCalculationMode',
+    'promoteFixedDashboardDriver',
     'MAX_TORNADO_DRIVERS = 12',
   ]) {
     assert.ok(
@@ -2769,6 +2987,10 @@ test('sensitivity workbench composes canonical APIs and dynamic components witho
     );
   }
   assert.ok(allSource.includes('Reset all'), 'reset-all control must exist');
+  assert.ok(allSource.includes('IRR tornado chart'));
+  assert.ok(allSource.includes('Threshold unavailable'));
+  assert.doesNotMatch(allSource, /<select/);
+  assert.doesNotMatch(allSource, /Canonical time-series outputs/);
 
   for (const forbiddenSource of [
     'getModel',
@@ -2779,7 +3001,6 @@ test('sensitivity workbench composes canonical APIs and dynamic components witho
     'interp(',
     'LNG',
     'throughput',
-    'WACC',
     '12.3',
   ]) {
     assert.equal(
@@ -2828,6 +3049,7 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
     /loadAllEditableNumericParameters\([\s\S]*identity\.graphVersionId/,
   );
   assert.doesNotMatch(bootstrapSource, /runCalculationSensitivity/);
+  assert.doesNotMatch(bootstrapSource, /runCalculation\(/);
   assert.doesNotMatch(bootstrapSource, /method:\s*['"]POST['"]/);
 
   const postIndex = pageSource.indexOf('await runCalculationSensitivity(');
@@ -2840,11 +3062,11 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
     postIndex,
   );
   const outputGetIndex = pageSource.indexOf(
-    'getCalculationRunOutputs(analysis.current_run_id)',
+    'getCalculationRunOutputs(currentRunId)',
     responseGuardIndex,
   );
   const outputIdentityIndex = pageSource.indexOf(
-    'outputs.calculation_run_id !== analysis.current_run_id',
+    'outputs.calculation_run_id !== currentRunId',
     outputGetIndex,
   );
   const persistenceIndex = pageSource.indexOf(
@@ -2864,7 +3086,7 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   assert.ok(responseGuardIndex > postIndex, 'POST response must be guarded');
   assert.ok(
     outputGetIndex > responseGuardIndex,
-    'current outputs must load only after a guarded sensitivity response',
+    'current outputs must load only after the guarded calculation branch',
   );
   assert.ok(
     outputIdentityIndex > outputGetIndex,
@@ -2892,11 +3114,19 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   assert.match(pageSource, /matchesCurrent\(\)/);
   assert.match(
     pageSource,
-    /nextWorkbench\.tornadoDriverKeys\.length\s*===\s*0/,
+    /calculationMode === 'sensitivity'[\s\S]*nextWorkbench\.tornadoDriverKeys\.length === 0/,
   );
   assert.match(
     pageSource,
     /request\.drivers\.length\s*===\s*0/,
+  );
+  assert.match(
+    pageSource,
+    /calculationMode === 'sensitivity'[\s\S]*runCalculationSensitivity[\s\S]*else \{[\s\S]*runCalculation\(/,
+  );
+  assert.match(
+    pageSource,
+    /buildCanonicalOverrideCalculationRequest\([\s\S]*requestWorkbench\.overridesByTarget/,
   );
 });
 
@@ -2905,6 +3135,10 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
   const navSource = readFileSync('src/app/NavBar.tsx', 'utf8');
   const panelSource = readFileSync(
     'src/components/sensitivity/SensitivityAssumptionPanel.tsx',
+    'utf8',
+  );
+  const fixedSource = readFileSync(
+    'src/components/sensitivity/FixedSensitivityDashboard.tsx',
     'utf8',
   );
   const tornadoSource = readFileSync(
@@ -2916,32 +3150,29 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
     'utf8',
   );
 
-  assert.match(pageSource, /Last successful result retained/);
-  assert.match(pageSource, /kpi\.availabilityStatus/);
-  assert.match(pageSource, /Baseline unavailable/);
-  assert.match(pageSource, /Current unavailable/);
-  assert.match(pageSource, /Unavailable baseline-period reasons/);
-  assert.match(pageSource, /unavailableCurrentReasons/);
-  assert.match(pageSource, /time-series chart/i);
-  assert.match(pageSource, /focus-visible:ring-2/);
-  assert.match(pageSource, /memo\(function KpiCard/);
-  assert.match(pageSource, /memo\(function SeriesChartCard/);
+  assert.match(pageSource, /resolveFixedDashboardViewModel/);
+  assert.match(pageSource, /orderFixedDashboardAssumptions/);
+  assert.match(pageSource, /promoteFixedDashboardDriver/);
+  assert.match(pageSource, /rowDriverKey: null/);
+  assert.match(pageSource, /columnDriverKey: null/);
+  assert.match(pageSource, /SENSITIVITY_DEBOUNCE_MS = 400/);
   assert.match(
     pageSource,
-    /kpi\.absoluteChange !== null[\s\S]*\{' \('\}[\s\S]*formatRelativeChange\(kpi\.percentageChange\)[\s\S]*\{'\)'\}/,
+    /dashboard\.irrOutputId === null[\s\S]*KPI cards still recalculate/,
   );
-  assert.match(
-    pageSource,
-    /<section className="min-w-0 overflow-x-auto rounded-lg border border-d-border bg-d-card p-5 shadow-sm">/,
-  );
-  assert.match(
-    pageSource,
-    /<section className="min-w-0 rounded-lg border border-d-border bg-d-card p-5 shadow-sm">[\s\S]*Two-way sensitivity/,
-  );
-  assert.match(
-    pageSource,
-    /const SeriesChartCard[\s\S]*<article className="min-w-0 overflow-hidden rounded-lg border border-d-border bg-d-card p-5 shadow-sm">/,
-  );
+  assert.doesNotMatch(pageSource, /Canonical time-series outputs/);
+  assert.doesNotMatch(fixedSource, /<select/);
+  assert.match(fixedSource, /Decision Confidence/);
+  assert.match(fixedSource, /Threshold unavailable/);
+  assert.match(fixedSource, /Live Model KPIs/);
+  assert.match(fixedSource, /Assumption sliders/);
+  assert.match(fixedSource, /IRR tornado chart/);
+  assert.match(fixedSource, /Scenario comparison/);
+  assert.match(fixedSource, /Two-way sensitivity/);
+  assert.match(fixedSource, /Current Assumptions/);
+  assert.match(fixedSource, /sm:grid-cols-2 xl:grid-cols-5/);
+  assert.match(fixedSource, /overflow-x-auto/);
+  assert.match(fixedSource, /focus-visible:ring-2/);
   assert.equal(
     navSource.match(
       /bg-d-bg text-white border-t border-d-border overflow-x-auto/g,
@@ -2953,16 +3184,8 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
     /ROW 1: Brand \+ Project pill[\s\S]*<div className="bg-d-card text-white overflow-x-auto">/,
   );
   assert.match(panelSource, /useMemo/);
-  assert.match(
-    panelSource,
-    /Include \$\{assumption\.label\} as tornado driver/,
-  );
-  assert.match(panelSource, /non-zero value/i);
-  assert.match(panelSource, /at least one non-zero driver required/i);
-  assert.match(
-    panelSource,
-    /aria-describedby=\{[\s\S]*driverLimitBlocksSelection[\s\S]*\$\{driverId\}-help/,
-  );
+  assert.doesNotMatch(panelSource, /tornado driver/i);
+  assert.doesNotMatch(panelSource, /type="checkbox"/);
   assert.match(
     panelSource,
     /const baseSpec = deriveSliderSpec\(assumption\.currentValue\)/,
@@ -2971,8 +3194,6 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
     panelSource,
     /baseSpec\.kind === 'number'[\s\S]*deriveSliderSpec\(value\)[\s\S]*: baseSpec/,
   );
-  assert.match(panelSource, /lg:max-h/);
-  assert.doesNotMatch(panelSource, /className="max-h/);
   assert.match(tornadoSource, /Case provenance/);
   assert.match(tornadoSource, /formatDelta/);
   assert.match(matrixSource, /Case details/);

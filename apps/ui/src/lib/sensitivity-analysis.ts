@@ -6,8 +6,10 @@ import type {
   CalculationNumberValue,
   CalculationOverrideTarget,
   CalculationProjectedOutputValue,
+  CalculationRequest,
   CalculationRunOutputsResponse,
   CalculationSensitivityRequest,
+  CalculationSensitivityOverrideRequest,
   CalculationSensitivityResponse,
 } from './calculation-api-types';
 import {
@@ -43,6 +45,12 @@ export interface SensitivityRequestBuildInput {
   tornadoDriverKeys: string[];
   rowDriverKey: string | null;
   columnDriverKey: string | null;
+}
+
+export interface CanonicalOverrideCalculationRequestBuildInput {
+  graphVersionId: string;
+  assumptions: SensitivityAssumption[];
+  overridesByTarget: Record<string, string>;
 }
 
 export interface SensitivityTornadoRow {
@@ -633,16 +641,11 @@ export function buildSensitivityRequest(
       assumption,
     ]),
   );
-  const current_overrides = input.assumptions.flatMap((assumption) => {
-    const override = input.overridesByTarget[assumption.targetKey];
-    if (
-      override === undefined ||
-      decimalEquals(override, assumption.currentValue)
-    ) {
-      return [];
-    }
-    return [{ target: assumption.target, value: numberValue(override) }];
-  });
+  const current_overrides = buildCanonicalOverrideCalculationRequest({
+    graphVersionId: input.graphVersionId,
+    assumptions: input.assumptions,
+    overridesByTarget: input.overridesByTarget,
+  }).overrides;
 
   const uniqueDriverKeys = Array.from(
     new Set(input.tornadoDriverKeys),
@@ -676,6 +679,27 @@ export function buildSensitivityRequest(
     current_overrides,
     drivers,
     two_way: null,
+  };
+}
+
+export function buildCanonicalOverrideCalculationRequest(
+  input: CanonicalOverrideCalculationRequestBuildInput,
+): CalculationRequest & {
+  overrides: CalculationSensitivityOverrideRequest[];
+} {
+  return {
+    graph_version_id: input.graphVersionId,
+    overrides: input.assumptions.flatMap((assumption) => {
+      const override = input.overridesByTarget[assumption.targetKey];
+      if (
+        override === undefined ||
+        decimalEquals(override, assumption.currentValue)
+      ) {
+        return [];
+      }
+      return [{ target: assumption.target, value: numberValue(override) }];
+    }),
+    idempotency_key: null,
   };
 }
 

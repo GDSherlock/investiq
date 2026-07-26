@@ -16,8 +16,8 @@ export function SensitivityTwoWayMatrix({
   if (matrix === null) {
     return (
       <p className="rounded border border-d-border bg-d-bg p-4 text-sm text-d-muted">
-        Select two distinct non-zero assumptions and run an analysis to build
-        the matrix.
+        Run an analysis to build the automatic matrix from the two highest
+        impact assumptions.
       </p>
     );
   }

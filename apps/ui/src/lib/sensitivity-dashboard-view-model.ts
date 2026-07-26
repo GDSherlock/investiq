@@ -74,6 +74,10 @@ export interface FixedDashboardDriverPromotionInput {
   maxDrivers?: number;
 }
 
+export type FixedDashboardCalculationMode =
+  | 'sensitivity'
+  | 'calculation';
+
 function isAvailableNumericKpi(kpi: SensitivityKpi): boolean {
   return (
     kpi.current.availabilityStatus === 'available' &&
@@ -134,6 +138,14 @@ export function resolveFixedDashboardViewModel(
     irrOutputId:
       slots.find((slot) => slot.key === 'irr')?.kpi?.outputId ?? null,
   };
+}
+
+export function resolveFixedDashboardCalculationMode(
+  irrOutputId: string | null,
+  _driverCount: number,
+): FixedDashboardCalculationMode {
+  void _driverCount;
+  return irrOutputId === null ? 'calculation' : 'sensitivity';
 }
 
 export function visibleFixedDashboardAssumptions(

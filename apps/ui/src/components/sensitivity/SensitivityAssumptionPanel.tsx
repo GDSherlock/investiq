@@ -9,12 +9,9 @@ import {
 interface SensitivityAssumptionPanelProps {
   assumptions: SensitivityAssumption[];
   overridesByTarget: Record<string, string>;
-  tornadoDriverKeys: string[];
-  maxDrivers: number;
   onValueChange: (targetKey: string, value: string) => void;
   onReset: (targetKey: string) => void;
   onResetAll: () => void;
-  onToggleDriver: (targetKey: string, selected: boolean) => void;
 }
 
 interface NumberEditorDraft {
@@ -73,35 +70,21 @@ function categoryGroups(
 export function SensitivityAssumptionPanel({
   assumptions,
   overridesByTarget,
-  tornadoDriverKeys,
-  maxDrivers,
   onValueChange,
   onReset,
   onResetAll,
-  onToggleDriver,
 }: SensitivityAssumptionPanelProps) {
-  const selectedDrivers = useMemo(
-    () => new Set(tornadoDriverKeys),
-    [tornadoDriverKeys],
-  );
   const groupedAssumptions = useMemo(
     () => categoryGroups(assumptions),
     [assumptions],
   );
   const [numberEditorDraft, setNumberEditorDraft] =
     useState<NumberEditorDraft | null>(null);
-  const driverLimitReached = selectedDrivers.size >= maxDrivers;
   const hasOverrides = Object.keys(overridesByTarget).length > 0;
 
   return (
-    <aside className="rounded-lg border border-d-border bg-d-card shadow-sm lg:sticky lg:top-6">
-      <div className="flex items-start justify-between gap-3 border-b border-d-border p-4">
-        <div>
-          <h2 className="text-base font-semibold text-white">Assumptions</h2>
-          <p className="mt-1 text-xs text-d-muted">
-            Canonical editable numeric parameters
-          </p>
-        </div>
+    <div className="min-w-0">
+      <div className="mb-3 flex items-center justify-end">
         <button
           type="button"
           onClick={onResetAll}
@@ -112,7 +95,7 @@ export function SensitivityAssumptionPanel({
         </button>
       </div>
 
-      <div className="space-y-5 p-4 lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto">
+      <div className="space-y-5">
         {assumptions.length === 0 ? (
           <p className="rounded border border-amber-800/50 bg-amber-900/10 p-3 text-sm text-amber-200">
             This model has no editable numeric canonical parameters.
@@ -146,14 +129,7 @@ export function SensitivityAssumptionPanel({
                   sliderSpec.kind === 'range' &&
                   sliderControlStep !== null &&
                   activeNumberDraft === null;
-                const selected = selectedDrivers.has(assumption.targetKey);
-                const rangeCapable = sliderSpec.kind === 'range';
-                const onlySelectedDriver =
-                  selected && selectedDrivers.size === 1;
-                const driverLimitBlocksSelection =
-                  !selected && driverLimitReached;
                 const inputId = `assumption-${assumption.targetKey}`;
-                const driverId = `driver-${assumption.targetKey}`;
                 const changed =
                   overridesByTarget[assumption.targetKey] !== undefined;
 
@@ -261,60 +237,6 @@ export function SensitivityAssumptionPanel({
                       />
                     )}
 
-                    <label
-                      htmlFor={driverId}
-                      className="mt-3 flex items-start gap-2 text-xs text-d-muted"
-                    >
-                      <input
-                        id={driverId}
-                        type="checkbox"
-                        checked={selected}
-                        disabled={
-                          !rangeCapable ||
-                          onlySelectedDriver ||
-                          driverLimitBlocksSelection
-                        }
-                        aria-label={`Include ${assumption.label} as tornado driver`}
-                        aria-describedby={
-                          !rangeCapable ||
-                          onlySelectedDriver ||
-                          driverLimitBlocksSelection
-                            ? `${driverId}-help`
-                            : undefined
-                        }
-                        onChange={(event) =>
-                          onToggleDriver(
-                            assumption.targetKey,
-                            event.target.checked,
-                          )
-                        }
-                        className="mt-0.5 accent-gold-500"
-                      />
-                      <span>
-                        Include as tornado driver
-                        {!rangeCapable
-                          ? ' — requires a non-zero value'
-                          : onlySelectedDriver
-                            ? ' — at least one non-zero driver required'
-                            : driverLimitBlocksSelection
-                              ? ` — ${maxDrivers}-driver limit reached`
-                              : ''}
-                      </span>
-                    </label>
-                    {!rangeCapable ||
-                    onlySelectedDriver ||
-                    driverLimitBlocksSelection ? (
-                      <p
-                        id={`${driverId}-help`}
-                        className="mt-1 pl-6 text-[11px] text-amber-200"
-                      >
-                        {!rangeCapable
-                          ? 'Enter a non-zero value before selecting this driver.'
-                          : onlySelectedDriver
-                            ? 'At least one non-zero driver required; select another eligible driver before removing this one.'
-                            : `The ${maxDrivers}-driver limit is reached; remove another driver before selecting this one.`}
-                      </p>
-                    ) : null}
                   </div>
                 );
               })}
@@ -322,6 +244,6 @@ export function SensitivityAssumptionPanel({
           </section>
         ))}
       </div>
-    </aside>
+    </div>
   );
 }

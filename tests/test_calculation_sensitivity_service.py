@@ -170,6 +170,50 @@ def test_top_impact_linear_values_preserve_thirty_two_significant_digits() -> No
 
 
 @pytest.mark.parametrize(
+    ("low", "high", "expected"),
+    [
+        (
+            "1.2345678901234567890123456789012e100",
+            "1.2345678901234567890123456789016e100",
+            [
+                "1.2345678901234567890123456789012e+100",
+                "1.2345678901234567890123456789013e+100",
+                "1.2345678901234567890123456789014e+100",
+                "1.2345678901234567890123456789015e+100",
+                "1.2345678901234567890123456789016e+100",
+            ],
+        ),
+        (
+            "-1.2345678901234567890123456789016e-100",
+            "-1.2345678901234567890123456789012e-100",
+            [
+                "-1.2345678901234567890123456789016e-100",
+                "-1.2345678901234567890123456789015e-100",
+                "-1.2345678901234567890123456789014e-100",
+                "-1.2345678901234567890123456789013e-100",
+                "-1.2345678901234567890123456789012e-100",
+            ],
+        ),
+    ],
+)
+def test_top_impact_linear_values_preserve_scientific_notation_precision(
+    low: str,
+    high: str,
+    expected: list[str],
+) -> None:
+    from apps.api.app.calculation_sensitivity_service import (
+        _five_linear_values,
+    )
+
+    values = _five_linear_values(
+        CalculationNumberValue(value_type="number", value=low),
+        CalculationNumberValue(value_type="number", value=high),
+    )
+
+    assert [value.value for value in values] == expected
+
+
+@pytest.mark.parametrize(
     ("mutation", "message"),
     [
         (

@@ -59,6 +59,16 @@ def _decimal_string(value: Decimal) -> str:
     return format(value.normalize(), "f")
 
 
+def _calculation_number_literal(value: Decimal) -> str:
+    fixed = _decimal_string(value)
+    if (
+        len(fixed) <= 128
+        and len(Decimal(fixed).as_tuple().digits) <= 32
+    ):
+        return fixed
+    return format(value.normalize(), "e")
+
+
 def _five_linear_values(
     low: CalculationNumberValue,
     high: CalculationNumberValue,
@@ -73,7 +83,7 @@ def _five_linear_values(
         return [
             CalculationNumberValue(
                 value_type="number",
-                value=_decimal_string(
+                value=_calculation_number_literal(
                     low_value + (high_value - low_value) * Decimal(index) / 4
                 ),
             )

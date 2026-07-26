@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from typing import Sequence
 
 from sqlalchemy.orm import Session
@@ -65,15 +65,20 @@ def _five_linear_values(
 ) -> list[CalculationNumberValue]:
     low_value = Decimal(low.value)
     high_value = Decimal(high.value)
-    return [
-        CalculationNumberValue(
-            value_type="number",
-            value=_decimal_string(
-                low_value + (high_value - low_value) * Decimal(index) / 4
-            ),
-        )
-        for index in range(5)
-    ]
+    with localcontext() as context:
+        context.prec = 2 * max(
+            len(low_value.as_tuple().digits),
+            len(high_value.as_tuple().digits),
+        ) + 2
+        return [
+            CalculationNumberValue(
+                value_type="number",
+                value=_decimal_string(
+                    low_value + (high_value - low_value) * Decimal(index) / 4
+                ),
+            )
+            for index in range(5)
+        ]
 
 
 def _rank_top_impact_drivers(

@@ -25,6 +25,7 @@ from apps.api.app.model_extraction_models import (
 from apps.api.app.model_extraction_read_service import ModelExtractionReadService
 from apps.api.app.model_extraction_types import FinancialEntityIdFactory, new_uuid
 from apps.api.app.schemas import (
+    CalculationNumberValue,
     CalculationRequest,
     CalculationSensitivityRequest,
 )
@@ -141,6 +142,31 @@ def test_top_impact_contract_keeps_existing_driver_and_case_bounds() -> None:
 
     with pytest.raises(ValidationError):
         CalculationSensitivityRequest.model_validate(payload)
+
+
+def test_top_impact_linear_values_preserve_thirty_two_significant_digits() -> None:
+    from apps.api.app.calculation_sensitivity_service import (
+        _five_linear_values,
+    )
+
+    values = _five_linear_values(
+        CalculationNumberValue(
+            value_type="number",
+            value="12345678901234567890123456789012",
+        ),
+        CalculationNumberValue(
+            value_type="number",
+            value="12345678901234567890123456789016",
+        ),
+    )
+
+    assert [value.value for value in values] == [
+        "12345678901234567890123456789012",
+        "12345678901234567890123456789013",
+        "12345678901234567890123456789014",
+        "12345678901234567890123456789015",
+        "12345678901234567890123456789016",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -800,6 +826,8 @@ def _top_impact_request(
     graph_version_id: str,
     output_id: str,
     second_parameter_id: str,
+    *,
+    driver_specs: list[tuple[str, str, str]] | None = None,
 ) -> CalculationSensitivityRequest:
     payload = _sensitivity_request(
         graph_version_id,
@@ -807,17 +835,17 @@ def _top_impact_request(
         context["parameter"].id,
     ).model_dump(mode="json")
     payload["two_way_mode"] = "top_impact"
+    driver_specs = driver_specs or [
+        (context["parameter"].id, "1", "5"),
+        (second_parameter_id, "1", "4"),
+    ]
     payload["drivers"] = [
         {
-            "target": _parameter_target(context["parameter"].id),
-            "low": _number("1"),
-            "high": _number("5"),
-        },
-        {
-            "target": _parameter_target(second_parameter_id),
-            "low": _number("1"),
-            "high": _number("4"),
-        },
+            "target": _parameter_target(parameter_id),
+            "low": _number(low),
+            "high": _number(high),
+        }
+        for parameter_id, low, high in driver_specs
     ]
     payload["two_way"] = None
     return CalculationSensitivityRequest.model_validate(payload)
@@ -919,8 +947,47 @@ def test_two_way_returns_real_cartesian_cells_in_row_major_order(
         assert unrelated_override["value"] == "11"
 
 
-def test_top_impact_ranks_numeric_impacts_by_request_order(
+def _make_driver_impacts_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    service,
+    parameter_id: str,
+) -> None:
+    original_run_case = service._run_case
+
+    def run_case_with_unavailable_impact(
+        model_version_id,
+        request,
+        baseline_run_id,
+        target,
+        input_value,
+    ):
+        case = original_run_case(
+            model_version_id,
+            request,
+            baseline_run_id,
+            target,
+            input_value,
+        )
+        if target.identity != ("parameter", parameter_id):
+            return case
+        return case.model_copy(
+            update={
+                "output": case.output.model_copy(
+                    update={
+                        "availability_status": "unavailable",
+                        "value": None,
+                        "unavailable_reason": "synthetic unavailable impact",
+                    }
+                )
+            }
+        )
+
+    monkeypatch.setattr(service, "_run_case", run_case_with_unavailable_impact)
+
+
+def test_top_impact_selects_largest_numeric_impacts_and_excludes_unavailable_driver(
     sensitivity_context,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = sensitivity_context
     second_parameter = _add_parameter(
@@ -931,31 +998,103 @@ def test_top_impact_ranks_numeric_impacts_by_request_order(
         data_type="n",
         label="Unit price",
     )
+    unavailable_driver = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_sheet="Calc",
+        source_cell="A1",
+        value=2026,
+        data_type="n",
+        label="Unavailable impact driver",
+    )
     prepared, _baseline = _prepare_with_baseline(context)
     request = _top_impact_request(
         context,
         prepared.graph_version_id,
         _output_id(context["model"].id),
         second_parameter.id,
+        driver_specs=[
+            (context["parameter"].id, "1", "5"),
+            (second_parameter.id, "1", "4"),
+            (unavailable_driver.id, "1", "2"),
+        ],
     )
-    response = _service(context).analyze(context["model"].id, request)
-    from apps.api.app.calculation_sensitivity_service import (
-        _rank_top_impact_drivers,
-    )
-
-    first, second = response.drivers
-    ranked = _rank_top_impact_drivers(
-        [
-            second.model_copy(update={"impact": "4"}),
-            first.model_copy(update={"impact": "4"}),
-            first.model_copy(update={"impact": None}),
-        ]
+    service = _service(context)
+    _make_driver_impacts_unavailable(
+        monkeypatch,
+        service,
+        unavailable_driver.id,
     )
 
-    assert [driver.target.identity for driver in ranked] == [
-        second.target.identity,
-        first.target.identity,
-    ]
+    response = service.analyze(context["model"].id, request)
+
+    assert [driver.impact for driver in response.drivers] == ["4", "3", None]
+    assert response.two_way is not None
+    assert response.two_way.row_target.identity == (
+        "parameter",
+        context["parameter"].id,
+    )
+    assert response.two_way.column_target.identity == (
+        "parameter",
+        second_parameter.id,
+    )
+    assert len(response.two_way.cells) == 25
+
+
+def test_top_impact_breaks_tied_impacts_by_request_order_in_response_grid(
+    sensitivity_context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = sensitivity_context
+    second_parameter = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_cell="A2",
+        value=3,
+        data_type="n",
+        label="Unit price",
+    )
+    unavailable_driver = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_sheet="Calc",
+        source_cell="A1",
+        value=2026,
+        data_type="n",
+        label="Unavailable impact driver",
+    )
+    prepared, _baseline = _prepare_with_baseline(context)
+    request = _top_impact_request(
+        context,
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        second_parameter.id,
+        driver_specs=[
+            (second_parameter.id, "1", "4"),
+            (context["parameter"].id, "1", "4"),
+            (unavailable_driver.id, "1", "2"),
+        ],
+    )
+    service = _service(context)
+    _make_driver_impacts_unavailable(
+        monkeypatch,
+        service,
+        unavailable_driver.id,
+    )
+
+    response = service.analyze(context["model"].id, request)
+
+    assert [driver.impact for driver in response.drivers] == ["3", "3", None]
+    assert response.two_way is not None
+    assert response.two_way.row_target.identity == (
+        "parameter",
+        second_parameter.id,
+    )
+    assert response.two_way.column_target.identity == (
+        "parameter",
+        context["parameter"].id,
+    )
+    assert len(response.two_way.cells) == 25
 
 
 def test_top_impact_persists_twenty_five_linear_cartesian_cases(

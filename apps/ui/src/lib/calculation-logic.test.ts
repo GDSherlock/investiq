@@ -1782,7 +1782,7 @@ test('sensitivity request uses canonical targets, changed overrides, driver cap,
   assert.doesNotMatch(JSON.stringify(request), /sheet_name|cell_address|cell:/);
 });
 
-test('top-impact request omits explicit axes regardless of stored selections', () => {
+test('one-driver request uses explicit mode and omits axes regardless of stored selections', () => {
   const assumptions = [
     numericAssumption('zero', '0'),
     numericAssumption('one', '1'),
@@ -1795,29 +1795,28 @@ test('top-impact request omits explicit axes regardless of stored selections', (
     tornadoDriverKeys: ['parameter:one'],
   };
 
-  assert.equal(
-    buildSensitivityRequest({
-      ...common,
-      rowDriverKey: null,
-      columnDriverKey: 'parameter:one',
-    }).two_way,
-    null,
-  );
+  const request = buildSensitivityRequest({
+    ...common,
+    rowDriverKey: null,
+    columnDriverKey: 'parameter:one',
+  });
+  assert.equal(request.two_way_mode, 'explicit');
+  assert.equal(request.two_way, null);
   assert.equal(
     buildSensitivityRequest({
       ...common,
       rowDriverKey: 'parameter:one',
       columnDriverKey: 'parameter:one',
-    }).two_way,
-    null,
+    }).two_way_mode,
+    'explicit',
   );
   assert.equal(
     buildSensitivityRequest({
       ...common,
       rowDriverKey: 'parameter:zero',
       columnDriverKey: 'parameter:one',
-    }).two_way,
-    null,
+    }).two_way_mode,
+    'explicit',
   );
 });
 

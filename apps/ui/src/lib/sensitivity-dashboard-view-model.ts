@@ -1,4 +1,8 @@
-import type { SensitivityAssumption, SensitivityTornadoRow } from './sensitivity-analysis';
+import type { CalculationSensitivityResponse } from './calculation-api-types';
+import type {
+  SensitivityAssumption,
+  SensitivityTornadoRow,
+} from './sensitivity-analysis';
 import type { SensitivityKpi } from './sensitivity-output-adapter';
 
 export const FIXED_DASHBOARD_SLOT_KEYS = [
@@ -146,6 +150,28 @@ export function resolveFixedDashboardCalculationMode(
 ): FixedDashboardCalculationMode {
   void _driverCount;
   return irrOutputId === null ? 'calculation' : 'sensitivity';
+}
+
+export function resolveFixedDashboardAnalysis(
+  analysis: CalculationSensitivityResponse | null,
+  resolvedIrrOutputId: string | null,
+): CalculationSensitivityResponse | null {
+  return analysis?.selected_output.output_id === resolvedIrrOutputId
+    ? analysis
+    : null;
+}
+
+export function resolveFixedDashboardTwoWayUnavailableReason(
+  analysis: CalculationSensitivityResponse | null,
+): string | null {
+  if (
+    analysis === null ||
+    analysis.two_way !== null ||
+    !analysis.warnings.includes('TOP_IMPACT_TWO_WAY_UNAVAILABLE')
+  ) {
+    return null;
+  }
+  return 'TOP_IMPACT_TWO_WAY_UNAVAILABLE: Fewer than two drivers returned usable IRR impacts, so no two-way matrix was generated.';
 }
 
 export function visibleFixedDashboardAssumptions(

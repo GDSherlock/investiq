@@ -25,6 +25,7 @@ interface FixedSensitivityDashboardProps {
   calculationRunId: string;
   analysisOutputLabel: string;
   analysisUnavailableReason: string | null;
+  twoWayUnavailableReason: string | null;
   onToggleExpanded: () => void;
   onValueChange: (targetKey: string, value: string) => void;
   onReset: (targetKey: string) => void;
@@ -104,6 +105,7 @@ export function FixedSensitivityDashboard({
   calculationRunId,
   analysisOutputLabel,
   analysisUnavailableReason,
+  twoWayUnavailableReason,
   onToggleExpanded,
   onValueChange,
   onReset,
@@ -452,6 +454,7 @@ export function FixedSensitivityDashboard({
                   <SensitivityTwoWayMatrix
                     matrix={matrix}
                     outputLabel={analysisOutputLabel}
+                    unavailableReason={twoWayUnavailableReason}
                     formatAxisValue={formatAxisValue}
                     formatOutputValue={formatAnalyzedOutputValue}
                   />

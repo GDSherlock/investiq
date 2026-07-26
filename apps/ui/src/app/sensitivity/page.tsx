@@ -47,7 +47,9 @@ import {
 import {
   orderFixedDashboardAssumptions,
   promoteFixedDashboardDriver,
+  resolveFixedDashboardAnalysis,
   resolveFixedDashboardCalculationMode,
+  resolveFixedDashboardTwoWayUnavailableReason,
   resolveFixedDashboardViewModel,
 } from '@/lib/sensitivity-dashboard-view-model';
 import { buildSensitivityOutputView } from '@/lib/sensitivity-output-adapter';
@@ -550,7 +552,10 @@ export default function SensitivityPage() {
         selectedOutputId: nextSelectedOutputId,
         rowDriverKey: null,
         columnDriverKey: null,
-        analysis,
+        analysis: resolveFixedDashboardAnalysis(
+          analysis,
+          nextSelectedOutputId,
+        ),
         outputs,
       };
       if (!guardedStorage.matchesCurrent()) {
@@ -756,6 +761,8 @@ export default function SensitivityPage() {
     dashboard.irrOutputId === null
       ? 'Neither Project IRR nor Equity IRR is available as a numeric canonical output. KPI cards still recalculate, while IRR sensitivity cases are not generated.'
       : null;
+  const twoWayUnavailableReason =
+    resolveFixedDashboardTwoWayUnavailableReason(workbench.analysis);
   const impactsByTarget = useMemo(
     () =>
       Object.fromEntries(
@@ -868,6 +875,7 @@ export default function SensitivityPage() {
         calculationRunId={outputView.calculationRunId}
         analysisOutputLabel={analyzedOutputLabel}
         analysisUnavailableReason={analysisUnavailableReason}
+        twoWayUnavailableReason={twoWayUnavailableReason}
         onToggleExpanded={() =>
           setAssumptionsExpanded((current) => !current)
         }

@@ -6,6 +6,7 @@ import TestRenderer, { act } from 'react-test-renderer';
 
 import { FixedSensitivityDashboard } from '../components/sensitivity/FixedSensitivityDashboard';
 import { SensitivityAssumptionPanel } from '../components/sensitivity/SensitivityAssumptionPanel';
+import { SensitivityTwoWayMatrix } from '../components/sensitivity/SensitivityTwoWayMatrix';
 
 import {
   getCalculationInputs,
@@ -60,7 +61,9 @@ import {
 import {
   orderFixedDashboardAssumptions,
   promoteFixedDashboardDriver,
+  resolveFixedDashboardAnalysis,
   resolveFixedDashboardCalculationMode,
+  resolveFixedDashboardTwoWayUnavailableReason,
   resolveFixedDashboardViewModel,
   visibleFixedDashboardAssumptions,
 } from './sensitivity-dashboard-view-model';
@@ -1158,6 +1161,7 @@ test('fixed dashboard renders the stable workbench, eight default sliders, and n
         calculationRunId: outputView.calculationRunId,
         analysisOutputLabel: 'IRR',
         analysisUnavailableReason: null,
+        twoWayUnavailableReason: null,
         onToggleExpanded: () => {
           expandRequested = true;
         },
@@ -1242,6 +1246,7 @@ test('fixed dashboard renders the stable workbench, eight default sliders, and n
         calculationRunId: outputView.calculationRunId,
         analysisOutputLabel: 'IRR',
         analysisUnavailableReason: null,
+        twoWayUnavailableReason: null,
         onToggleExpanded: () => {},
         onValueChange: () => {},
         onReset: () => {},
@@ -1282,6 +1287,69 @@ test('fixed dashboard uses ordinary calculation only when IRR sensitivity cannot
   );
   assert.equal(resolveFixedDashboardCalculationMode(null, 8), 'calculation');
   assert.equal(resolveFixedDashboardCalculationMode(null, 0), 'calculation');
+});
+
+test('fixed dashboard discards an analysis when the resolved IRR output role changes', () => {
+  const projectIrrAnalysis = sensitivityResponse();
+
+  assert.strictEqual(
+    resolveFixedDashboardAnalysis(
+      projectIrrAnalysis,
+      'project-irr-output',
+    ),
+    projectIrrAnalysis,
+  );
+  assert.equal(
+    resolveFixedDashboardAnalysis(
+      projectIrrAnalysis,
+      'equity-irr-output',
+    ),
+    null,
+  );
+  assert.equal(
+    resolveFixedDashboardAnalysis(projectIrrAnalysis, null),
+    null,
+  );
+});
+
+test('fixed dashboard surfaces the typed top-impact warning when no matrix is returned', () => {
+  const warning =
+    'TOP_IMPACT_TWO_WAY_UNAVAILABLE: Fewer than two drivers returned usable IRR impacts, so no two-way matrix was generated.';
+  const response = sensitivityResponse({
+    warnings: ['TOP_IMPACT_TWO_WAY_UNAVAILABLE'],
+    two_way: null,
+  });
+
+  assert.equal(
+    resolveFixedDashboardTwoWayUnavailableReason(response),
+    warning,
+  );
+  assert.equal(
+    resolveFixedDashboardTwoWayUnavailableReason(
+      sensitivityResponse({ warnings: [] }),
+    ),
+    null,
+  );
+
+  let renderer!: TestRenderer.ReactTestRenderer;
+  act(() => {
+    renderer = TestRenderer.create(
+      createElement(SensitivityTwoWayMatrix, {
+        matrix: null,
+        outputLabel: 'IRR',
+        unavailableReason: warning,
+        formatAxisValue: (_targetKey: string, value: string) => value,
+        formatOutputValue: (value: number | null) =>
+          value === null ? 'Unavailable' : String(value),
+      }),
+    );
+  });
+  const renderedText = JSON.stringify(renderer.toJSON());
+  assert.match(renderedText, /TOP_IMPACT_TWO_WAY_UNAVAILABLE/);
+  assert.doesNotMatch(renderedText, /Run an analysis/);
+  act(() => {
+    renderer.unmount();
+  });
 });
 
 test('ordinary fixed-dashboard calculation submits the complete canonical override set', () => {

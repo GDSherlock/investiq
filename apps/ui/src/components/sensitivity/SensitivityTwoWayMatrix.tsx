@@ -3,6 +3,7 @@ import type { SensitivityMatrixView } from '@/lib/sensitivity-analysis';
 interface SensitivityTwoWayMatrixProps {
   matrix: SensitivityMatrixView | null;
   outputLabel: string;
+  unavailableReason?: string | null;
   formatAxisValue: (targetKey: string, value: string) => string;
   formatOutputValue: (value: number | null) => string;
 }
@@ -10,14 +11,15 @@ interface SensitivityTwoWayMatrixProps {
 export function SensitivityTwoWayMatrix({
   matrix,
   outputLabel,
+  unavailableReason = null,
   formatAxisValue,
   formatOutputValue,
 }: SensitivityTwoWayMatrixProps) {
   if (matrix === null) {
     return (
       <p className="rounded border border-d-border bg-d-bg p-4 text-sm text-d-muted">
-        Run an analysis to build the automatic matrix from the two highest
-        impact assumptions.
+        {unavailableReason ??
+          'Run an analysis to build the automatic matrix from the two highest impact assumptions.'}
       </p>
     );
   }

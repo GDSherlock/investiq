@@ -82,6 +82,10 @@ export function SensitivityTwoWayMatrix({
                 const reason = cell.unavailableReason
                   ? `; ${cell.unavailableReason}`
                   : '';
+                const warnings =
+                  cell.warnings.length > 0
+                    ? `; ${cell.warnings.join('; ')}`
+                    : '';
                 return (
                   <td
                     key={`${cell.rowValue}:${cell.columnValue}`}
@@ -93,27 +97,17 @@ export function SensitivityTwoWayMatrix({
                     style={{
                       backgroundColor: heatBackground(cell.numericValue),
                     }}
-                    title={`${metadata}${reason}`}
+                    title={`${metadata}${reason}${warnings}`}
                     aria-label={`${matrix.rowLabel} ${formatAxisValue(
                       matrix.rowTargetKey,
                       row.value,
                     )}, ${matrix.columnLabel} ${formatAxisValue(
                       matrix.columnTargetKey,
                       cell.columnValue,
-                    )}: ${value}. ${metadata}${reason}`}
+                    )}: ${value}. ${metadata}${reason}${warnings}`}
                   >
                     <span>
                       {cell.numericValue === null ? 'Unavailable' : value}
-                    </span>
-                    <span
-                      data-testid="sensitivity-matrix-cell-provenance"
-                      className="sr-only"
-                    >
-                      Case details. {metadata}
-                      {reason}
-                      {cell.warnings.length > 0
-                        ? `; ${cell.warnings.join('; ')}`
-                        : ''}
                     </span>
                   </td>
                 );

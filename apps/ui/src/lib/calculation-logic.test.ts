@@ -1402,7 +1402,7 @@ test('assumption panel renders eight compact desktop rows with controls kept tog
   });
 });
 
-test('two-way matrix keeps case provenance accessible without adding visible cell rows', () => {
+test('two-way matrix keeps case provenance on cells without offscreen descendants', () => {
   let renderer!: TestRenderer.ReactTestRenderer;
 
   act(() => {
@@ -1443,14 +1443,16 @@ test('two-way matrix keeps case provenance accessible without adding visible cel
   assert.match(cell.props.className, /\bpy-2\b/);
   assert.doesNotMatch(cell.props.className, /\bpy-3\b/);
   assert.equal(cell.findAllByType('details').length, 0);
-  const provenance = cell.findByProps({
-    'data-testid': 'sensitivity-matrix-cell-provenance',
-  });
-  assert.match(provenance.props.className, /\bsr-only\b/);
-  assert.match(JSON.stringify(provenance.children), /Case details/);
-  assert.match(JSON.stringify(provenance.children), /Run matrix-case-run/);
+  assert.equal(
+    cell.findAllByProps({
+      'data-testid': 'sensitivity-matrix-cell-provenance',
+    }).length,
+    0,
+  );
   assert.match(cell.props.title, /Run matrix-case-run/);
+  assert.match(cell.props.title, /reviewed/);
   assert.match(cell.props['aria-label'], /Run matrix-case-run/);
+  assert.match(cell.props['aria-label'], /reviewed/);
 
   act(() => {
     renderer.unmount();
@@ -3369,7 +3371,6 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
   );
   assert.match(tornadoSource, /Case provenance/);
   assert.match(tornadoSource, /formatDelta/);
-  assert.match(matrixSource, /Case details/);
   assert.doesNotMatch(matrixSource, /normalized \* 0\.64/);
 });
 

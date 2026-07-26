@@ -57,6 +57,12 @@ import {
   selectSensitivityRunId,
 } from './sensitivity-output-adapter';
 import {
+  orderFixedDashboardAssumptions,
+  promoteFixedDashboardDriver,
+  resolveFixedDashboardViewModel,
+  visibleFixedDashboardAssumptions,
+} from './sensitivity-dashboard-view-model';
+import {
   buildSensitivityRequest,
   buildTornadoRows,
   buildTwoWayMatrix,
@@ -916,6 +922,178 @@ test('unsupported outputs stay unavailable and missing KPI roles are not fabrica
   assert.equal(view.kpis[0].current.numericValue, null);
   assert.equal(view.kpis[0].current.unavailableReason, 'unsupported');
   assert.equal(view.kpis.some((kpi) => kpi.businessRole === 'npv'), false);
+});
+
+test('fixed dashboard keeps five controlled KPI slots and resolves only approved numeric roles', () => {
+  const view = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'project-irr-unavailable',
+          entity_kind: 'scalar',
+          business_role: 'project_irr',
+          label: 'Project return in workbook',
+          unit: '%',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'unsupported',
+          number_format: '0.0%',
+          availability_status: 'unavailable',
+          baseline: unavailableProjection('blocked'),
+          current: unavailableProjection('blocked'),
+        },
+        {
+          output_id: 'equity-irr-output',
+          entity_kind: 'scalar',
+          business_role: 'equity_irr',
+          label: 'Owner return',
+          unit: '%',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0%',
+          availability_status: 'available',
+          baseline: projectedNumber('0.1'),
+          current: projectedNumber('0.12'),
+        },
+        {
+          output_id: 'npv-output',
+          entity_kind: 'scalar',
+          business_role: 'npv',
+          label: 'Net present value',
+          unit: 'USD M',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0',
+          availability_status: 'available',
+          baseline: projectedNumber('100'),
+          current: projectedNumber('120'),
+        },
+        {
+          output_id: 'misleading-output',
+          entity_kind: 'scalar',
+          business_role: 'free_cash_flow',
+          label: 'IRR and DSCR headline',
+          unit: '%',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0%',
+          availability_status: 'available',
+          baseline: projectedNumber('0.3'),
+          current: projectedNumber('0.31'),
+        },
+      ],
+    }),
+  );
+
+  const dashboard = resolveFixedDashboardViewModel(
+    view.kpis,
+    'npv-output',
+  );
+
+  assert.deepEqual(
+    dashboard.slots.map((slot) => ({
+      key: slot.key,
+      outputId: slot.kpi?.outputId ?? null,
+      label: slot.displayLabel,
+      unavailable: slot.unavailable,
+    })),
+    [
+      {
+        key: 'irr',
+        outputId: 'equity-irr-output',
+        label: 'IRR · Equity IRR',
+        unavailable: false,
+      },
+      {
+        key: 'npv',
+        outputId: 'npv-output',
+        label: 'NPV',
+        unavailable: false,
+      },
+      { key: 'payback', outputId: null, label: 'Payback', unavailable: true },
+      { key: 'dscr', outputId: null, label: 'DSCR', unavailable: true },
+      {
+        key: 'equity_multiple',
+        outputId: null,
+        label: 'Equity ×',
+        unavailable: true,
+      },
+    ],
+  );
+  assert.equal(dashboard.irrOutputId, 'equity-irr-output');
+});
+
+test('fixed dashboard assumption helpers preserve canonical order, impact ranking, cap, and deterministic promotion', () => {
+  const assumptions = Array.from({ length: 14 }, (_, index) =>
+    numericAssumption(`driver-${index + 1}`, `${index + 1}.000`),
+  );
+
+  assert.deepEqual(
+    visibleFixedDashboardAssumptions(assumptions, false).map(
+      (assumption) => assumption.targetKey,
+    ),
+    assumptions.slice(0, 8).map((assumption) => assumption.targetKey),
+  );
+  assert.deepEqual(
+    visibleFixedDashboardAssumptions(assumptions, true).map(
+      (assumption) => assumption.targetKey,
+    ),
+    assumptions.map((assumption) => assumption.targetKey),
+  );
+  assert.deepEqual(
+    orderFixedDashboardAssumptions(assumptions, [
+      { targetKey: 'parameter:driver-3', impact: 2 },
+      { targetKey: 'parameter:driver-1', impact: 2 },
+      { targetKey: 'parameter:driver-2', impact: 5 },
+    ]).slice(0, 4).map((assumption) => assumption.targetKey),
+    [
+      'parameter:driver-2',
+      'parameter:driver-1',
+      'parameter:driver-3',
+      'parameter:driver-4',
+    ],
+  );
+  assert.deepEqual(
+    promoteFixedDashboardDriver({
+      assumptions,
+      currentDriverKeys: assumptions.slice(0, 12).map((assumption) => assumption.targetKey),
+      changedTargetKey: 'parameter:driver-13',
+      impactsByTarget: {
+        'parameter:driver-1': 7,
+        'parameter:driver-2': 1,
+      },
+    }),
+    [
+      'parameter:driver-1',
+      'parameter:driver-3',
+      'parameter:driver-4',
+      'parameter:driver-5',
+      'parameter:driver-6',
+      'parameter:driver-7',
+      'parameter:driver-8',
+      'parameter:driver-9',
+      'parameter:driver-10',
+      'parameter:driver-11',
+      'parameter:driver-12',
+      'parameter:driver-13',
+    ],
+  );
+  assert.deepEqual(
+    promoteFixedDashboardDriver({
+      assumptions,
+      currentDriverKeys: assumptions.slice(0, 12).map((assumption) => assumption.targetKey),
+      changedTargetKey: 'parameter:driver-14',
+      impactsByTarget: {},
+    }).slice(-2),
+    ['parameter:driver-11', 'parameter:driver-14'],
+  );
 });
 
 test('partial outputs preserve baseline and current unavailability independently', () => {

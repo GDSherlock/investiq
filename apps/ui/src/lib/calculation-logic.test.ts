@@ -1618,10 +1618,17 @@ test('expanded assumption sliders keep the eight-row card height and scroll the 
         value === null ? 'Unavailable' : String(value),
       formatAnalyzedOutputDelta: (value: number) => String(value),
     });
+  const scrollRegionElement = { scrollTop: 0 };
   let renderer!: TestRenderer.ReactTestRenderer;
 
   act(() => {
-    renderer = TestRenderer.create(renderDashboard(false));
+    renderer = TestRenderer.create(renderDashboard(false), {
+      createNodeMock: (element) =>
+        element.props['data-testid'] ===
+        'fixed-sensitivity-assumption-scroll-region'
+          ? scrollRegionElement
+          : {},
+    });
   });
   const collapsedCard = renderer.root.findByProps({
     'data-testid': 'fixed-sensitivity-assumption-card',
@@ -1633,6 +1640,12 @@ test('expanded assumption sliders keep the eight-row card height and scroll the 
       'data-testid': 'fixed-sensitivity-assumption-scroll-region',
     }).length,
     1,
+  );
+  assert.equal(
+    renderer.root.findAllByProps({
+      'data-testid': 'sensitivity-assumption-row',
+    }).length,
+    8,
   );
 
   act(() => {
@@ -1659,9 +1672,22 @@ test('expanded assumption sliders keep the eight-row card height and scroll the 
     }).length,
     1,
   );
-  for (const input of scrollRegion.findAllByType('input')) {
-    assert.notEqual(input.props.tabIndex, -1);
-  }
+  scrollRegionElement.scrollTop = 240;
+
+  act(() => {
+    renderer.update(renderDashboard(false));
+  });
+  assert.equal(
+    scrollRegionElement.scrollTop,
+    0,
+    'collapsing returns the slider viewport to its first focused control',
+  );
+  assert.equal(
+    renderer.root.findAllByProps({
+      'data-testid': 'sensitivity-assumption-row',
+    }).length,
+    8,
+  );
 
   act(() => {
     renderer.unmount();

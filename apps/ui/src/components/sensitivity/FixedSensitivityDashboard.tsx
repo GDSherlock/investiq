@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
+
 import type { FixedDashboardViewModel } from '../../lib/sensitivity-dashboard-view-model';
 import { visibleFixedDashboardAssumptions } from '../../lib/sensitivity-dashboard-view-model';
 import type {
@@ -129,6 +131,12 @@ export function FixedSensitivityDashboard({
     assumptions,
     expanded,
   );
+  const assumptionScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!expanded && assumptionScrollRef.current) {
+      assumptionScrollRef.current.scrollTop = 0;
+    }
+  }, [expanded]);
   const irrSlot = dashboard.slots.find((slot) => slot.key === 'irr') ?? null;
   const irrKpi = irrSlot?.kpi ?? null;
   const liveSlots = dashboard.slots.slice(0, 4);
@@ -380,6 +388,7 @@ export function FixedSensitivityDashboard({
                   Editable canonical assumptions
                 </legend>
                 <div
+                  ref={assumptionScrollRef}
                   data-testid="fixed-sensitivity-assumption-scroll-region"
                   className="min-h-0 flex-1 overflow-y-auto pr-1"
                 >

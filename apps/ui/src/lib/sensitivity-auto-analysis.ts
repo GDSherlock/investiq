@@ -1,6 +1,140 @@
 import type { CalculationSensitivityResponse } from './calculation-api-types';
 import { sensitivityTargetKey } from './sensitivity-analysis';
 
+/**
+ * A persisted, exact calculation snapshot eligible for automatic analysis.
+ * Estimated KPI previews intentionally have no representation in this type.
+ */
+export interface AutomaticSensitivityAnalysisSnapshot {
+  revision: number;
+  actionKey: string;
+  currentRunId: string;
+  selectedOutputId: string;
+  overridesByTarget: Record<string, string>;
+  tornadoDriverKeys: string[];
+}
+
+export interface AutomaticSensitivityAnalysisSnapshotInput
+  extends AutomaticSensitivityAnalysisSnapshot {}
+
+export type AutomaticSensitivityAnalysisTransition =
+  | { kind: 'start'; snapshot: AutomaticSensitivityAnalysisSnapshot }
+  | { kind: 'queued'; snapshot: AutomaticSensitivityAnalysisSnapshot }
+  | { kind: 'joined'; snapshot: AutomaticSensitivityAnalysisSnapshot }
+  | { kind: 'idle' }
+  | { kind: 'ignored' };
+
+export interface AutomaticSensitivityAnalysisSchedulerState {
+  running: AutomaticSensitivityAnalysisSnapshot | null;
+  pending: AutomaticSensitivityAnalysisSnapshot | null;
+  error: Error | null;
+}
+
+function sameAutomaticSensitivityAction(
+  left: AutomaticSensitivityAnalysisSnapshot,
+  right: AutomaticSensitivityAnalysisSnapshot,
+): boolean {
+  return left.actionKey === right.actionKey;
+}
+
+export function buildAutomaticSensitivityAnalysisSnapshot(
+  input: AutomaticSensitivityAnalysisSnapshotInput,
+): AutomaticSensitivityAnalysisSnapshot {
+  return {
+    revision: input.revision,
+    actionKey: input.actionKey,
+    currentRunId: input.currentRunId,
+    selectedOutputId: input.selectedOutputId,
+    overridesByTarget: { ...input.overridesByTarget },
+    tornadoDriverKeys: [...input.tornadoDriverKeys],
+  };
+}
+
+/**
+ * Serializes automatic analysis requests. A newer exact snapshot replaces the
+ * pending slot; callers retain/persist artifacts only after a current success.
+ */
+export class AutomaticSensitivityAnalysisScheduler {
+  private running: AutomaticSensitivityAnalysisSnapshot | null = null;
+  private pending: AutomaticSensitivityAnalysisSnapshot | null = null;
+  private error: Error | null = null;
+
+  get state(): AutomaticSensitivityAnalysisSchedulerState {
+    return {
+      running: this.running,
+      pending: this.pending,
+      error: this.error,
+    };
+  }
+
+  enqueue(
+    snapshot: AutomaticSensitivityAnalysisSnapshot,
+  ): AutomaticSensitivityAnalysisTransition {
+    if (this.running === null) {
+      this.running = snapshot;
+      this.error = null;
+      return { kind: 'start', snapshot };
+    }
+    if (sameAutomaticSensitivityAction(this.running, snapshot)) {
+      return { kind: 'joined', snapshot: this.running };
+    }
+    if (
+      this.pending !== null &&
+      sameAutomaticSensitivityAction(this.pending, snapshot)
+    ) {
+      return { kind: 'joined', snapshot: this.pending };
+    }
+    this.pending = snapshot;
+    this.error = null;
+    return { kind: 'queued', snapshot };
+  }
+
+  succeed(
+    snapshot: AutomaticSensitivityAnalysisSnapshot,
+    isCurrent: (snapshot: AutomaticSensitivityAnalysisSnapshot) => boolean,
+  ): AutomaticSensitivityAnalysisTransition {
+    if (this.running === null || !sameAutomaticSensitivityAction(this.running, snapshot)) {
+      return { kind: 'ignored' };
+    }
+    this.running = null;
+    if (isCurrent(snapshot)) {
+      this.error = null;
+    }
+    return this.startLatestPending(isCurrent);
+  }
+
+  fail(
+    snapshot: AutomaticSensitivityAnalysisSnapshot,
+    error: Error,
+    isCurrent: (snapshot: AutomaticSensitivityAnalysisSnapshot) => boolean,
+  ): AutomaticSensitivityAnalysisTransition {
+    if (this.running === null || !sameAutomaticSensitivityAction(this.running, snapshot)) {
+      return { kind: 'ignored' };
+    }
+    this.running = null;
+    if (isCurrent(snapshot)) {
+      this.error = error;
+    }
+    return this.startLatestPending(isCurrent);
+  }
+
+  private startLatestPending(
+    isCurrent: (snapshot: AutomaticSensitivityAnalysisSnapshot) => boolean,
+  ): AutomaticSensitivityAnalysisTransition {
+    const next = this.pending;
+    this.pending = null;
+    if (next === null) {
+      return { kind: 'idle' };
+    }
+    if (!isCurrent(next)) {
+      return { kind: 'idle' };
+    }
+    this.running = next;
+    this.error = null;
+    return { kind: 'start', snapshot: next };
+  }
+}
+
 export type InitialSensitivityAnalysisAction =
   | 'waiting_for_current_run'
   | 'unavailable'

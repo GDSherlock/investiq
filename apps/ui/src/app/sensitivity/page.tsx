@@ -60,12 +60,15 @@ import {
 import { buildSensitivityOutputView } from '@/lib/sensitivity-output-adapter';
 import { estimateSensitivityKpis } from '@/lib/sensitivity-output-adapter';
 import {
+  AutomaticSensitivityAnalysisScheduler,
   buildInitialSensitivityActionKey,
+  buildAutomaticSensitivityAnalysisSnapshot,
   canJoinInitialSensitivityAction,
   canJoinInitialSensitivityAnalysis,
   initialSensitivityAnalysisStatusLabel,
   resolveInitialSensitivityAnalysis,
   shouldStartInitialSensitivityAction,
+  type AutomaticSensitivityAnalysisSnapshot,
   type InitialSensitivityAnalysisAction,
   type InitialSensitivityActionInFlight,
 } from '@/lib/sensitivity-auto-analysis';
@@ -218,6 +221,10 @@ export default function SensitivityPage() {
     useRef<InitialSensitivityActionInFlight | null>(null);
   const initialAnalysisInFlightRef =
     useRef<InitialSensitivityActionInFlight | null>(null);
+  const automaticAnalysisSchedulerRef = useRef(
+    new AutomaticSensitivityAnalysisScheduler(),
+  );
+  const automaticAnalysisSnapshotRevisionRef = useRef(0);
 
   function invalidatePersistedIdentity() {
     activeIdentityRef.current = null;
@@ -628,18 +635,20 @@ export default function SensitivityPage() {
       currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
     };
     setInitialAnalysisAction('build');
-    try {
-      const completed = await refreshSensitivityAnalysis(actionKey);
+    const queued = queueSensitivityAnalysis(
+      workbenchSnapshotRef.current,
+      actionKey,
+    );
+    if (!queued) {
+      if (initialAnalysisInFlightRef.current?.actionKey === actionKey) {
+        initialAnalysisInFlightRef.current = null;
+      }
       if (
         bootstrapRevision === bootstrapRevisionRef.current &&
         activeIdentityRef.current?.modelVersionId === identity.modelVersionId &&
         activeIdentityRef.current.graphVersionId === identity.graphVersionId
       ) {
-        setInitialAnalysisAction(completed ? 'ready' : 'error');
-      }
-    } finally {
-      if (initialAnalysisInFlightRef.current?.actionKey === actionKey) {
-        initialAnalysisInFlightRef.current = null;
+        setInitialAnalysisAction('error');
       }
     }
   }
@@ -726,16 +735,21 @@ export default function SensitivityPage() {
     pendingExactCalculationRef.current = null;
     exactCalculationInFlightRef.current = true;
     setRecalculating(true);
+    let completed = false;
     try {
-      const completed = await executeExactCalculation(
+      completed =
+        (await executeExactCalculation(
         job.revision,
         job.identity,
         readPersistedCalculationState(window.localStorage),
         job.workbench,
-      );
-      job.onSettled?.(completed === true);
+      )) === true;
+      job.onSettled?.(completed);
     } finally {
       exactCalculationInFlightRef.current = false;
+      if (completed) {
+        queueSensitivityAnalysis();
+      }
       if (pendingExactCalculationRef.current !== null) {
         void drainExactCalculationQueue();
       } else {
@@ -942,60 +956,169 @@ export default function SensitivityPage() {
     }
   }
 
-  async function refreshSensitivityAnalysis(
-    automaticActionKey?: string,
-  ): Promise<boolean> {
+  function currentAutomaticAnalysisSnapshot(
+    requestWorkbench: WorkbenchState,
+    actionKeyOverride?: string,
+  ): AutomaticSensitivityAnalysisSnapshot | null {
     const identity = activeIdentityRef.current;
-    const requestWorkbench = workbenchSnapshotRef.current;
     const persisted = readPersistedCalculationState(window.localStorage);
-    const currentRunId =
-      persisted.overrideRunId ?? persisted.baselineRunId;
+    const currentRunId = persisted.overrideRunId ?? persisted.baselineRunId;
     if (
       identity === null ||
+      persisted.baselineRunId === null ||
       currentRunId === null ||
       requestWorkbench.selectedOutputId === null ||
       requestWorkbench.tornadoDriverKeys.length === 0 ||
       !overridesEqual(
         requestWorkbench.overridesByTarget,
         persistedWorkbenchRef.current.overridesByTarget,
-      ) ||
+      )
+    ) {
+      return null;
+    }
+    const actionKey =
+      actionKeyOverride ??
+      buildInitialSensitivityActionKey({
+        modelVersionId: identity.modelVersionId,
+        graphVersionId: identity.graphVersionId,
+        comparisonBaselineRunId: persisted.baselineRunId,
+        currentRunId,
+        selectedOutputId: requestWorkbench.selectedOutputId,
+        currentOverridesByTarget: requestWorkbench.overridesByTarget,
+        tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
+      });
+    return buildAutomaticSensitivityAnalysisSnapshot({
+      revision: ++automaticAnalysisSnapshotRevisionRef.current,
+      actionKey,
+      currentRunId,
+      selectedOutputId: requestWorkbench.selectedOutputId,
+      overridesByTarget: requestWorkbench.overridesByTarget,
+      tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
+    });
+  }
+
+  function isCurrentAutomaticAnalysisSnapshot(
+    snapshot: AutomaticSensitivityAnalysisSnapshot,
+  ): boolean {
+    const identity = activeIdentityRef.current;
+    const current = workbenchSnapshotRef.current;
+    const persisted = readPersistedCalculationState(window.localStorage);
+    const currentRunId = persisted.overrideRunId ?? persisted.baselineRunId;
+    return (
+      identity !== null &&
+      persisted.baselineRunId !== null &&
+      currentRunId === snapshot.currentRunId &&
+      current.selectedOutputId === snapshot.selectedOutputId &&
+      overridesEqual(current.overridesByTarget, snapshot.overridesByTarget) &&
+      current.tornadoDriverKeys.length === snapshot.tornadoDriverKeys.length &&
+      current.tornadoDriverKeys.every(
+        (key, index) => key === snapshot.tornadoDriverKeys[index],
+      ) &&
+      overridesEqual(
+        current.overridesByTarget,
+        persistedWorkbenchRef.current.overridesByTarget,
+      ) &&
+      buildInitialSensitivityActionKey({
+        modelVersionId: identity.modelVersionId,
+        graphVersionId: identity.graphVersionId,
+        comparisonBaselineRunId: persisted.baselineRunId,
+        currentRunId,
+        selectedOutputId: current.selectedOutputId,
+        currentOverridesByTarget: current.overridesByTarget,
+        tornadoDriverKeys: current.tornadoDriverKeys,
+      }) === snapshot.actionKey
+    );
+  }
+
+  function updateAutomaticAnalysisSchedulingState() {
+    const state = automaticAnalysisSchedulerRef.current.state;
+    setAnalysisRefreshing(state.running !== null || state.pending !== null);
+  }
+
+  function settleAutomaticSensitivityAnalysis(
+    snapshot: AutomaticSensitivityAnalysisSnapshot,
+    error: Error | null,
+  ) {
+    const transition =
+      error === null
+        ? automaticAnalysisSchedulerRef.current.succeed(
+            snapshot,
+            isCurrentAutomaticAnalysisSnapshot,
+          )
+        : automaticAnalysisSchedulerRef.current.fail(
+            snapshot,
+            error,
+            isCurrentAutomaticAnalysisSnapshot,
+          );
+    if (initialAnalysisInFlightRef.current?.actionKey === snapshot.actionKey) {
+      initialAnalysisInFlightRef.current = null;
+    }
+    updateAutomaticAnalysisSchedulingState();
+    if (transition.kind === 'start') {
+      void executeAutomaticSensitivityAnalysis(transition.snapshot);
+    }
+  }
+
+  function queueSensitivityAnalysis(
+    requestWorkbench = workbenchSnapshotRef.current,
+    actionKeyOverride?: string,
+  ): boolean {
+    if (
       recalculating ||
       exactCalculationInFlightRef.current ||
-      pendingExactCalculationRef.current !== null ||
-      (initialAnalysisInFlightRef.current !== null &&
-        initialAnalysisInFlightRef.current.actionKey !== automaticActionKey)
+      pendingExactCalculationRef.current !== null
     ) {
       return false;
     }
-    const revision = ++requestRevisionRef.current;
-    const stillCurrent = () =>
-      revision === requestRevisionRef.current &&
-      activeIdentityRef.current?.modelVersionId ===
-        identity.modelVersionId &&
-      activeIdentityRef.current.graphVersionId ===
-        identity.graphVersionId;
+    const snapshot = currentAutomaticAnalysisSnapshot(
+      requestWorkbench,
+      actionKeyOverride,
+    );
+    if (snapshot === null) {
+      return false;
+    }
+    const transition = automaticAnalysisSchedulerRef.current.enqueue(snapshot);
+    updateAutomaticAnalysisSchedulingState();
+    if (transition.kind === 'start') {
+      setInitialAnalysisAction('build');
+      setError(null);
+      void executeAutomaticSensitivityAnalysis(transition.snapshot);
+    }
+    return transition.kind !== 'idle' && transition.kind !== 'ignored';
+  }
+
+  async function executeAutomaticSensitivityAnalysis(
+    snapshot: AutomaticSensitivityAnalysisSnapshot,
+  ) {
+    const identity = activeIdentityRef.current;
+    const requestWorkbench = workbenchSnapshotRef.current;
+    const persisted = readPersistedCalculationState(window.localStorage);
     const guardedStorage = createGuardedSensitivityStorage(
       window.localStorage,
       persisted,
-      stillCurrent,
+      () => isCurrentAutomaticAnalysisSnapshot(snapshot),
     );
-    setAnalysisRefreshing(true);
-    setInitialAnalysisAction('build');
-    setError(null);
+    let failure: Error | null = null;
     try {
-      if (!guardedStorage.matchesCurrent()) {
-        invalidatePersistedIdentity();
-        return false;
+      if (
+        identity === null ||
+        persisted.baselineRunId === null ||
+        requestWorkbench.selectedOutputId === null ||
+        !isCurrentAutomaticAnalysisSnapshot(snapshot) ||
+        !guardedStorage.matchesCurrent()
+      ) {
+        return;
       }
       const request = buildSensitivityRequest({
         graphVersionId: identity.graphVersionId,
-        outputId: requestWorkbench.selectedOutputId,
+        outputId: snapshot.selectedOutputId,
         assumptions: requestWorkbench.assumptions,
-        overridesByTarget: requestWorkbench.overridesByTarget,
-        tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
+        overridesByTarget: snapshot.overridesByTarget,
+        tornadoDriverKeys: snapshot.tornadoDriverKeys,
         rowDriverKey: null,
         columnDriverKey: null,
       });
+      const currentRunId = snapshot.currentRunId;
       request.current_run_id = currentRunId;
       const analysis = await runCalculationSensitivity(
         identity.modelVersionId,
@@ -1003,49 +1126,46 @@ export default function SensitivityPage() {
       );
       if (
         !canApplySensitivityResponse(analysis, {
-          requestRevision: revision,
-          currentRevision: requestRevisionRef.current,
+          requestRevision: snapshot.revision,
+          currentRevision: snapshot.revision,
           modelVersionId: identity.modelVersionId,
           graphVersionId: identity.graphVersionId,
           outputId: request.output_id,
         }) ||
-        analysis.current_run_id !== currentRunId ||
-        analysis.comparison_baseline_run_id !==
-          persisted.baselineRunId ||
-        !stillCurrent()
+        analysis.current_run_id !== snapshot.currentRunId ||
+        analysis.comparison_baseline_run_id !== persisted.baselineRunId ||
+        !isCurrentAutomaticAnalysisSnapshot(snapshot) ||
+        !guardedStorage.matchesCurrent()
       ) {
-        return false;
+        return;
       }
-      const analysisOverridesByTarget = {
-        ...requestWorkbench.overridesByTarget,
-      };
+      const analysisOverridesByTarget = { ...snapshot.overridesByTarget };
       const appliedWorkbench: WorkbenchState = {
         ...requestWorkbench,
         analysis,
         analysisOverridesByTarget,
-        analysisTornadoDriverKeys: [...requestWorkbench.tornadoDriverKeys],
+        analysisTornadoDriverKeys: [...snapshot.tornadoDriverKeys],
       };
       const persistence = await persistSensitivityWorkbenchState(
         window.localStorage,
         {
           expectedIdentity: persisted,
-          expectedDocumentRevision:
-            workbenchDocumentRevisionRef.current,
+          expectedDocumentRevision: workbenchDocumentRevisionRef.current,
           nextDocumentRevision: createWorkbenchDocumentRevision(),
           response: analysis,
           document: {
             modelVersionId: identity.modelVersionId,
             graphVersionId: identity.graphVersionId,
-            overridesByTarget: requestWorkbench.overridesByTarget,
-            tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
-            selectedOutputId: requestWorkbench.selectedOutputId,
+            overridesByTarget: snapshot.overridesByTarget,
+            tornadoDriverKeys: snapshot.tornadoDriverKeys,
+            selectedOutputId: snapshot.selectedOutputId,
             rowDriverKey: null,
             columnDriverKey: null,
             analysisId: analysis.analysis_id ?? null,
             analysisOverridesByTarget,
-            analysisTornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
+            analysisTornadoDriverKeys: snapshot.tornadoDriverKeys,
           },
-          isCurrent: stillCurrent,
+          isCurrent: () => isCurrentAutomaticAnalysisSnapshot(snapshot),
         },
       );
       if (persistence.status !== 'persisted') {
@@ -1061,25 +1181,23 @@ export default function SensitivityPage() {
       workbenchSnapshotRef.current = appliedWorkbench;
       setWorkbench(() => appliedWorkbench);
       setInitialAnalysisAction('ready');
-      return true;
     } catch (caught) {
-      if (stillCurrent()) {
-        setError(
-          caught instanceof Error
-            ? caught
-            : new Error('Sensitivity analysis failed.'),
-        );
+      failure =
+        caught instanceof Error
+          ? caught
+          : new Error('Sensitivity analysis failed.');
+      if (isCurrentAutomaticAnalysisSnapshot(snapshot)) {
+        setError(failure);
+        setInitialAnalysisAction('error');
       }
-      setInitialAnalysisAction('error');
-      return false;
     } finally {
-      setAnalysisRefreshing(false);
+      settleAutomaticSensitivityAnalysis(snapshot, failure);
     }
   }
 
   async function persistTornadoDriverSelection(
     nextWorkbench: WorkbenchState,
-  ) {
+  ): Promise<boolean> {
     const identity = activeIdentityRef.current;
     const persisted = readPersistedCalculationState(window.localStorage);
     const currentRunId = persisted.overrideRunId ?? persisted.baselineRunId;
@@ -1088,7 +1206,7 @@ export default function SensitivityPage() {
       persisted.baselineRunId === null ||
       currentRunId === null
     ) {
-      return;
+      return false;
     }
     const stillCurrent = () =>
       activeIdentityRef.current?.modelVersionId === identity.modelVersionId &&
@@ -1126,14 +1244,14 @@ export default function SensitivityPage() {
     if (persistence.status === 'persisted') {
       workbenchDocumentRevisionRef.current = persistence.revision;
       persistedWorkbenchRef.current = nextWorkbench;
-      return;
+      return true;
     }
     if (persistence.status === 'superseded' || !stillCurrent()) {
-      return;
+      return false;
     }
     if (persistence.status === 'conflict') {
       await bootstrapWorkbench();
-      return;
+      return false;
     }
     const previousWorkbench = persistedWorkbenchRef.current;
     workbenchSnapshotRef.current = previousWorkbench;
@@ -1143,6 +1261,7 @@ export default function SensitivityPage() {
         'The Tornado driver selection could not be saved. The last persisted selection was restored.',
       ),
     );
+    return false;
   }
 
   function applyUserUpdate(
@@ -1155,7 +1274,11 @@ export default function SensitivityPage() {
     workbenchSnapshotRef.current = nextWorkbench;
     setWorkbench(() => nextWorkbench);
     if (options.persistDrivers) {
-      void persistTornadoDriverSelection(nextWorkbench);
+      void persistTornadoDriverSelection(nextWorkbench).then((persisted) => {
+        if (persisted && workbenchSnapshotRef.current === nextWorkbench) {
+          queueSensitivityAnalysis(nextWorkbench);
+        }
+      });
     }
     if (options.scheduleCalculation !== false) {
       scheduleExactCalculation(nextWorkbench);
@@ -1529,7 +1652,7 @@ export default function SensitivityPage() {
           }))
         }
         onRefresh={() => void bootstrapWorkbench()}
-        onRunAnalysis={() => void refreshSensitivityAnalysis()}
+        onRunAnalysis={() => void queueSensitivityAnalysis()}
         formatAxisValue={formatAxisValue}
         formatAnalyzedOutputValue={formatAnalyzedOutputValue}
         formatAnalyzedOutputDelta={formatAnalyzedOutputDelta}

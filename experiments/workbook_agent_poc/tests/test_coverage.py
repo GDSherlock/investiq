@@ -287,7 +287,7 @@ def test_hard_caps_defaults():
     assert caps.max_tool_calls > 0
     assert caps.max_iterations > 0
     assert caps.max_repeated_identical > 0
-    assert caps.deadline_seconds > 0
+    assert caps.deadline_seconds == 30 * 60
     assert caps.max_internal_chunks_per_request > 0
     assert caps.max_internal_chunks_per_run >= caps.max_internal_chunks_per_request
     assert caps.max_observed_bytes_per_run > 0

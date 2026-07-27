@@ -19,7 +19,7 @@ class HardCaps:
     max_tool_calls: int = 60
     max_iterations: int = 40
     max_range_cells: int = 500
-    deadline_seconds: int = 500
+    deadline_seconds: int = 30 * 60
     max_repeated_identical: int = 6
     max_internal_chunks_per_request: int = 64
     max_internal_chunks_per_run: int = 256

@@ -62,6 +62,7 @@ import { estimateSensitivityKpis } from '@/lib/sensitivity-output-adapter';
 import {
   buildInitialSensitivityActionKey,
   canJoinInitialSensitivityAction,
+  canJoinInitialSensitivityAnalysis,
   initialSensitivityAnalysisStatusLabel,
   resolveInitialSensitivityAnalysis,
   shouldStartInitialSensitivityAction,
@@ -239,24 +240,20 @@ export default function SensitivityPage() {
     if (
       persisted.modelVersionId !== null &&
       persisted.graphVersionId !== null &&
-      (canJoinInitialSensitivityAction(initialExactRunInFlightRef.current, {
+      canJoinInitialSensitivityAction(initialExactRunInFlightRef.current, {
         modelVersionId: persisted.modelVersionId,
         graphVersionId: persisted.graphVersionId,
         baselineRunId: persisted.baselineRunId,
         currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
-      }) ||
-        canJoinInitialSensitivityAction(initialAnalysisInFlightRef.current, {
-          modelVersionId: persisted.modelVersionId,
-          graphVersionId: persisted.graphVersionId,
-          baselineRunId: persisted.baselineRunId,
-          currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
-        }))
+      })
     ) {
       return 'applied';
     }
     const bootstrapRevision = ++bootstrapRevisionRef.current;
     const previousActiveIdentity = activeIdentityRef.current;
-    requestRevisionRef.current += 1;
+    if (initialAnalysisInFlightRef.current === null) {
+      requestRevisionRef.current += 1;
+    }
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -345,6 +342,9 @@ export default function SensitivityPage() {
         window.localStorage,
       );
       if (outputs === null) {
+        if (initialAnalysisInFlightRef.current !== null) {
+          requestRevisionRef.current += 1;
+        }
         const { tornadoDriverKeys } = resolveSensitivitySelections({
           assumptions,
           overridesByTarget: {},
@@ -509,6 +509,28 @@ export default function SensitivityPage() {
               artifact: null,
             })
           : restoredAnalysisAction;
+      const initialActionKey =
+        initialAction === 'build'
+          ? buildInitialSensitivityActionKey({
+              modelVersionId: identity.modelVersionId,
+              graphVersionId: identity.graphVersionId,
+              comparisonBaselineRunId: restoredPersisted.baselineRunId as string,
+              currentRunId: restoredCurrentRunId,
+              selectedOutputId,
+              currentOverridesByTarget: overridesByTarget,
+              tornadoDriverKeys,
+            })
+          : null;
+      const joinsInitialAnalysis =
+        storageLockAvailable &&
+        initialActionKey !== null &&
+        canJoinInitialSensitivityAnalysis(
+          initialAnalysisInFlightRef.current?.actionKey ?? null,
+          initialActionKey,
+        );
+      if (!joinsInitialAnalysis) {
+        requestRevisionRef.current += 1;
+      }
       setInitialAnalysisAction(initialAction);
       if (!storageLockAvailable) {
         setInitialAnalysisAction('unavailable');
@@ -522,6 +544,7 @@ export default function SensitivityPage() {
           bootstrapRevision,
           identity,
           initialAction,
+          initialActionKey,
         );
       }
       return 'applied';
@@ -548,6 +571,7 @@ export default function SensitivityPage() {
     bootstrapRevision: number,
     identity: ActiveIdentity,
     action: InitialSensitivityAnalysisAction,
+    bootstrapActionKey: string | null = null,
   ) {
     if (
       bootstrapRevision !== bootstrapRevisionRef.current ||
@@ -577,15 +601,17 @@ export default function SensitivityPage() {
       return;
     }
     const persisted = readPersistedCalculationState(window.localStorage);
-    const actionKey = buildInitialSensitivityActionKey({
-      modelVersionId: identity.modelVersionId,
-      graphVersionId: identity.graphVersionId,
-      comparisonBaselineRunId: persisted.baselineRunId as string,
-      currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
-      selectedOutputId: workbenchSnapshotRef.current.selectedOutputId,
-      currentOverridesByTarget: workbenchSnapshotRef.current.overridesByTarget,
-      tornadoDriverKeys: workbenchSnapshotRef.current.tornadoDriverKeys,
-    });
+    const actionKey =
+      bootstrapActionKey ??
+      buildInitialSensitivityActionKey({
+        modelVersionId: identity.modelVersionId,
+        graphVersionId: identity.graphVersionId,
+        comparisonBaselineRunId: persisted.baselineRunId as string,
+        currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
+        selectedOutputId: workbenchSnapshotRef.current.selectedOutputId,
+        currentOverridesByTarget: workbenchSnapshotRef.current.overridesByTarget,
+        tornadoDriverKeys: workbenchSnapshotRef.current.tornadoDriverKeys,
+      });
     if (
       !shouldStartInitialSensitivityAction(
         initialAnalysisInFlightRef.current?.actionKey ?? null,

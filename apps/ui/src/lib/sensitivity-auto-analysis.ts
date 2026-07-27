@@ -125,6 +125,13 @@ export function shouldStartInitialSensitivityAction(
   return inFlightActionKey !== actionKey;
 }
 
+export function canJoinInitialSensitivityAnalysis(
+  inFlightActionKey: string | null,
+  actionKey: string,
+): boolean {
+  return inFlightActionKey === actionKey;
+}
+
 export function canJoinInitialSensitivityAction(
   inFlight: InitialSensitivityActionInFlight | null,
   current: InitialSensitivityActionIdentity,

@@ -94,6 +94,7 @@ import {
 import {
   buildInitialSensitivityActionKey,
   canJoinInitialSensitivityAction,
+  canJoinInitialSensitivityAnalysis,
   resolveInitialSensitivityAnalysis,
   shouldStartInitialSensitivityAction,
   type InitialSensitivityAnalysisInput,
@@ -3534,6 +3535,50 @@ test('same-key bootstrap joins interrupted exact and analysis actions without re
   );
 });
 
+test('analysis join requires the full output, override, and ordered-driver action key', () => {
+  const base = {
+    modelVersionId: 'model-version',
+    graphVersionId: 'graph-version',
+    comparisonBaselineRunId: 'baseline-run',
+    currentRunId: 'override-run',
+    selectedOutputId: 'project-irr-output',
+    currentOverridesByTarget: { 'parameter:a': '10' },
+    tornadoDriverKeys: ['parameter:a', 'parameter:b'],
+  };
+  const actionKey = buildInitialSensitivityActionKey(base);
+  assert.equal(canJoinInitialSensitivityAnalysis(actionKey, actionKey), true);
+  assert.equal(
+    canJoinInitialSensitivityAnalysis(
+      actionKey,
+      buildInitialSensitivityActionKey({
+        ...base,
+        currentOverridesByTarget: { 'parameter:a': '11' },
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    canJoinInitialSensitivityAnalysis(
+      actionKey,
+      buildInitialSensitivityActionKey({
+        ...base,
+        tornadoDriverKeys: ['parameter:b', 'parameter:a'],
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    canJoinInitialSensitivityAnalysis(
+      actionKey,
+      buildInitialSensitivityActionKey({
+        ...base,
+        selectedOutputId: 'equity-irr-output',
+      }),
+    ),
+    false,
+  );
+});
+
 test('transient refresh may retain only the matching active model and graph identity', () => {
   const persisted = {
     workbookVersionId: null,
@@ -3980,6 +4025,8 @@ test('initial sensitivity bootstrap GET-restores compatible artifacts and builds
   assert.match(pageSource, /initialSensitivityAnalysisStatusLabel/);
   assert.match(pageSource, /initialAnalysisInFlightRef/);
   assert.match(pageSource, /canJoinInitialSensitivityAction/);
+  assert.match(pageSource, /canJoinInitialSensitivityAnalysis/);
+  assert.match(bootstrapSource, /const initialActionKey =[\s\S]*buildInitialSensitivityActionKey/);
   assert.match(autoAnalysisSource, /Waiting for exact current scenario…/);
   assert.match(autoAnalysisSource, /Building Tornado and 5×5 matrix…/);
   assert.match(

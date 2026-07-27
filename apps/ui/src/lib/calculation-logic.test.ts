@@ -1586,6 +1586,88 @@ test('assumption panel renders eight compact desktop rows with controls kept tog
   });
 });
 
+test('expanded assumption sliders keep the eight-row card height and scroll the extra rows', () => {
+  const assumptions = Array.from({ length: 10 }, (_, index) =>
+    numericAssumption(`fixed-height-driver-${index + 1}`, `${index + 1}`, {
+      label: `Fixed height driver ${index + 1}`,
+      category: 'Operating assumptions',
+    }),
+  );
+  const renderDashboard = (expanded: boolean) =>
+    createElement(FixedSensitivityDashboard, {
+      dashboard: resolveFixedDashboardViewModel([]),
+      assumptions,
+      overridesByTarget: {},
+      tornadoRows: [],
+      matrix: null,
+      expanded,
+      recalculating: false,
+      errorMessage: null,
+      controlsDisabled: false,
+      calculationRunId: 'fixed-height-run',
+      analysisOutputLabel: 'IRR',
+      analysisUnavailableReason: null,
+      twoWayUnavailableReason: null,
+      onToggleExpanded: () => {},
+      onValueChange: () => {},
+      onReset: () => {},
+      onResetAll: () => {},
+      onRefresh: () => {},
+      formatAxisValue: (_targetKey: string, value: string) => value,
+      formatAnalyzedOutputValue: (value: number | null) =>
+        value === null ? 'Unavailable' : String(value),
+      formatAnalyzedOutputDelta: (value: number) => String(value),
+    });
+  let renderer!: TestRenderer.ReactTestRenderer;
+
+  act(() => {
+    renderer = TestRenderer.create(renderDashboard(false));
+  });
+  const collapsedCard = renderer.root.findByProps({
+    'data-testid': 'fixed-sensitivity-assumption-card',
+  });
+  const collapsedHeight = collapsedCard.props.className;
+  assert.match(collapsedHeight, /h-\[38rem\]/);
+  assert.equal(
+    renderer.root.findAllByProps({
+      'data-testid': 'fixed-sensitivity-assumption-scroll-region',
+    }).length,
+    1,
+  );
+
+  act(() => {
+    renderer.update(renderDashboard(true));
+  });
+  const expandedCard = renderer.root.findByProps({
+    'data-testid': 'fixed-sensitivity-assumption-card',
+  });
+  const scrollRegion = renderer.root.findByProps({
+    'data-testid': 'fixed-sensitivity-assumption-scroll-region',
+  });
+  assert.equal(expandedCard.props.className, collapsedHeight);
+  assert.match(scrollRegion.props.className, /\boverflow-y-auto\b/);
+  assert.match(scrollRegion.props.className, /\bmin-h-0\b/);
+  assert.equal(
+    scrollRegion.findAllByProps({
+      'data-testid': 'sensitivity-assumption-row',
+    }).length,
+    10,
+  );
+  assert.equal(
+    renderer.root.findAllByProps({
+      'aria-label': 'Show first 8 assumptions',
+    }).length,
+    1,
+  );
+  for (const input of scrollRegion.findAllByType('input')) {
+    assert.notEqual(input.props.tabIndex, -1);
+  }
+
+  act(() => {
+    renderer.unmount();
+  });
+});
+
 test('two-way matrix keeps case provenance on cells without offscreen descendants', () => {
   let renderer!: TestRenderer.ReactTestRenderer;
 

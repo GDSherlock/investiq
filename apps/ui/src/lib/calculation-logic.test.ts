@@ -13,6 +13,7 @@ import {
   getCalculationReadiness,
   getCalculationRun,
   getCalculationRunOutputs,
+  getCalculationSensitivityAnalysis,
   getModel,
   prepareCalculation,
   runCalculation,
@@ -2682,7 +2683,7 @@ test('standard auto-analysis request keeps eight ordered drivers in top-impact m
   );
 });
 
-test('one-driver request uses explicit mode and omits axes regardless of stored selections', () => {
+test('one-driver automatic analysis requests typed top-impact unavailability and renders it', () => {
   const assumptions = [
     numericAssumption('zero', '0'),
     numericAssumption('one', '1'),
@@ -2700,7 +2701,7 @@ test('one-driver request uses explicit mode and omits axes regardless of stored 
     rowDriverKey: null,
     columnDriverKey: 'parameter:one',
   });
-  assert.equal(request.two_way_mode, 'explicit');
+  assert.equal(request.two_way_mode, 'top_impact');
   assert.equal(request.two_way, null);
   assert.equal(
     buildSensitivityRequest({
@@ -2708,7 +2709,7 @@ test('one-driver request uses explicit mode and omits axes regardless of stored 
       rowDriverKey: 'parameter:one',
       columnDriverKey: 'parameter:one',
     }).two_way_mode,
-    'explicit',
+    'top_impact',
   );
   assert.equal(
     buildSensitivityRequest({
@@ -2716,8 +2717,55 @@ test('one-driver request uses explicit mode and omits axes regardless of stored 
       rowDriverKey: 'parameter:zero',
       columnDriverKey: 'parameter:one',
     }).two_way_mode,
-    'explicit',
+    'top_impact',
   );
+
+  const response = sensitivityResponse({
+    drivers: [
+      {
+        target: assumptions[1].target,
+        low_case: {
+          input_value: { value_type: 'number', value: '0.5' },
+          calculation_run_id: null,
+          output: projectedNumber('0.1'),
+          warnings: [],
+        },
+        high_case: {
+          input_value: { value_type: 'number', value: '1.5' },
+          calculation_run_id: null,
+          output: projectedNumber('0.2'),
+          warnings: [],
+        },
+        impact: '0.1',
+        warnings: [],
+      },
+    ],
+    two_way: null,
+    warnings: ['TOP_IMPACT_TWO_WAY_UNAVAILABLE'],
+  });
+  const unavailableReason =
+    resolveFixedDashboardTwoWayUnavailableReason(response);
+  assert.match(unavailableReason ?? '', /^TOP_IMPACT_TWO_WAY_UNAVAILABLE:/);
+
+  let renderer!: TestRenderer.ReactTestRenderer;
+  act(() => {
+    renderer = TestRenderer.create(
+      createElement(SensitivityTwoWayMatrix, {
+        matrix: null,
+        outputLabel: 'IRR',
+        unavailableReason,
+        formatAxisValue: (_targetKey: string, value: string) => value,
+        formatOutputValue: (value: number | null) =>
+          value === null ? 'Unavailable' : String(value),
+      }),
+    );
+  });
+  const renderedText = JSON.stringify(renderer.toJSON());
+  assert.match(renderedText, /TOP_IMPACT_TWO_WAY_UNAVAILABLE/);
+  assert.doesNotMatch(renderedText, /Run an analysis/);
+  act(() => {
+    renderer.unmount();
+  });
 });
 
 test('stored driver and axis selections require current non-zero effective values', () => {
@@ -3496,6 +3544,159 @@ test('initial sensitivity analysis restores only a fully compatible artifact and
     }),
     'unavailable',
   );
+});
+
+test('legacy v2 workbench GET-restores its matching artifact without a POST fallback', async () => {
+  const driverA =
+    'parameter:11111111-1111-4111-8111-111111111111';
+  const driverB =
+    'parameter:22222222-2222-4222-8222-222222222222';
+  const storage = new MemoryStorage();
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+    JSON.stringify({
+      version: SENSITIVITY_WORKBENCH_VERSION,
+      revision: 'legacy-v2',
+      modelVersionId: 'model-version',
+      graphVersionId: 'graph-version',
+      comparisonBaselineRunId: 'baseline-run',
+      currentRunId: 'override-run',
+      analysisId: 'analysis-id',
+      analysisOverridesByTarget: { [driverA]: '12.5' },
+      overridesByTarget: { [driverA]: '12.5' },
+      tornadoDriverKeys: [driverA, driverB],
+      selectedOutputId: 'project-irr-output',
+      rowDriverKey: null,
+      columnDriverKey: null,
+    }),
+  );
+  const document = readSensitivityWorkbenchDocument(
+    storage,
+    'model-version',
+    'graph-version',
+    'baseline-run',
+    'override-run',
+  );
+  assert.ok(document);
+  assert.equal(document.analysisTornadoDriverKeys, undefined);
+
+  const artifact = sensitivityResponse({
+    drivers: [
+      {
+        target: {
+          kind: 'parameter',
+          parameter_id: driverA.slice('parameter:'.length),
+        },
+        low_case: {
+          input_value: { value_type: 'number', value: '10' },
+          calculation_run_id: null,
+          output: projectedNumber('0.11'),
+          warnings: [],
+        },
+        high_case: {
+          input_value: { value_type: 'number', value: '15' },
+          calculation_run_id: null,
+          output: projectedNumber('0.13'),
+          warnings: [],
+        },
+        impact: '0.02',
+        warnings: [],
+      },
+      {
+        target: {
+          kind: 'parameter',
+          parameter_id: driverB.slice('parameter:'.length),
+        },
+        low_case: {
+          input_value: { value_type: 'number', value: '20' },
+          calculation_run_id: null,
+          output: projectedNumber('0.10'),
+          warnings: [],
+        },
+        high_case: {
+          input_value: { value_type: 'number', value: '30' },
+          calculation_run_id: null,
+          output: projectedNumber('0.14'),
+          warnings: [],
+        },
+        impact: '0.04',
+        warnings: [],
+      },
+    ],
+  });
+  const methods: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (
+    _input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    const method = init?.method ?? 'GET';
+    methods.push(method);
+    return new Response(JSON.stringify(artifact), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const fetched = await getCalculationSensitivityAnalysis(
+      document.analysisId as string,
+    );
+    let action: ReturnType<typeof resolveInitialSensitivityAnalysis>;
+    try {
+      action = resolveInitialSensitivityAnalysis({
+        modelVersionId: 'model-version',
+        graphVersionId: 'graph-version',
+        comparisonBaselineRunId: 'baseline-run',
+        currentRunId: 'override-run',
+        selectedOutputId: 'project-irr-output',
+        currentOverridesByTarget: { [driverA]: '12.5' },
+        tornadoDriverKeys: [driverA, driverB],
+        artifact: {
+          response: fetched,
+          analysisOverridesByTarget:
+            document.analysisOverridesByTarget ?? {},
+          analysisTornadoDriverKeys:
+            document.analysisTornadoDriverKeys,
+        },
+      });
+    } catch {
+      action = 'build';
+    }
+    if (action === 'build') {
+      await runCalculationSensitivity('model-version', {
+        graph_version_id: 'graph-version',
+        output_id: 'project-irr-output',
+        current_run_id: 'override-run',
+        two_way_mode: 'top_impact',
+        current_overrides: [],
+        drivers: [
+          {
+            target: {
+              kind: 'parameter',
+              parameter_id: driverA.slice('parameter:'.length),
+            },
+            low: { value_type: 'number', value: '10' },
+            high: { value_type: 'number', value: '15' },
+          },
+          {
+            target: {
+              kind: 'parameter',
+              parameter_id: driverB.slice('parameter:'.length),
+            },
+            low: { value_type: 'number', value: '20' },
+            high: { value_type: 'number', value: '30' },
+          },
+        ],
+        two_way: null,
+      });
+    }
+
+    assert.equal(action, 'restore');
+    assert.deepEqual(methods, ['GET']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('initial analysis action keys single-flight an automatic fallback without blocking manual retry', () => {

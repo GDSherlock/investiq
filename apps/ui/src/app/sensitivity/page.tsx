@@ -483,7 +483,7 @@ export default function SensitivityPage() {
               analysisOverridesByTarget:
                 storedDocument.analysisOverridesByTarget ?? {},
               analysisTornadoDriverKeys:
-                storedDocument.analysisTornadoDriverKeys ?? [],
+                storedDocument.analysisTornadoDriverKeys,
             },
           });
           if (restoredAnalysisAction === 'restore') {

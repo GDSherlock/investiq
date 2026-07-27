@@ -831,7 +831,7 @@ export function buildSensitivityRequest(
   return {
     graph_version_id: input.graphVersionId,
     output_id: input.outputId,
-    two_way_mode: drivers.length >= 2 ? 'top_impact' : 'explicit',
+    two_way_mode: 'top_impact',
     current_overrides,
     drivers,
     two_way: null,

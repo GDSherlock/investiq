@@ -440,11 +440,6 @@ class CalculationSensitivityRequest(_CalculationDTO):
                 raise ValueError(
                     "Top-impact two-way mode does not accept explicit axes"
                 )
-            if len(self.drivers) < 2:
-                raise ValueError(
-                    "Top-impact two-way mode requires at least two one-way "
-                    "drivers"
-                )
             two_way_cases = 25
         else:
             two_way_cases = (

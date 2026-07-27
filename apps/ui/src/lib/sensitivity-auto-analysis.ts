@@ -198,7 +198,7 @@ export type InitialSensitivityAnalysisAction =
 export interface InitialSensitivityAnalysisArtifact {
   response: CalculationSensitivityResponse;
   analysisOverridesByTarget: Record<string, string>;
-  analysisTornadoDriverKeys: string[];
+  analysisTornadoDriverKeys?: string[];
 }
 
 export interface InitialSensitivityAnalysisInput {
@@ -264,6 +264,12 @@ export function resolveInitialSensitivityAnalysis(
     return 'unavailable';
   }
   const artifact = input.artifact;
+  const responseDriverKeys =
+    artifact?.response.drivers.map((driver) =>
+      sensitivityTargetKey(driver.target),
+    ) ?? [];
+  const analyzedDriverKeys =
+    artifact?.analysisTornadoDriverKeys ?? responseDriverKeys;
   if (
     artifact === null ||
     artifact.response.model_version_id !== input.modelVersionId ||
@@ -277,11 +283,11 @@ export function resolveInitialSensitivityAnalysis(
       input.currentOverridesByTarget,
     ) ||
     !orderedKeysEqual(
-      artifact.analysisTornadoDriverKeys,
+      analyzedDriverKeys,
       input.tornadoDriverKeys,
     ) ||
     !orderedKeysEqual(
-      artifact.response.drivers.map((driver) => sensitivityTargetKey(driver.target)),
+      responseDriverKeys,
       input.tornadoDriverKeys,
     )
   ) {

@@ -108,10 +108,6 @@ def test_sensitivity_contract_defaults_to_explicit_two_way_mode() -> None:
             ),
             "Top-impact two-way mode does not accept explicit axes",
         ),
-        (
-            lambda payload: payload.update({"two_way_mode": "top_impact"}),
-            "Top-impact two-way mode requires at least two one-way drivers",
-        ),
     ],
 )
 def test_top_impact_contract_rejects_incompatible_shapes(
@@ -148,6 +144,26 @@ def test_top_impact_contract_keeps_existing_driver_and_case_bounds() -> None:
 
     with pytest.raises(ValidationError):
         CalculationSensitivityRequest.model_validate(payload)
+
+
+def test_top_impact_one_driver_returns_typed_two_way_unavailable_warning(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    prepared, _baseline = _prepare_with_baseline(context)
+    payload = _sensitivity_request(
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        context["parameter"].id,
+    ).model_dump(mode="json")
+    payload["two_way_mode"] = "top_impact"
+    request = CalculationSensitivityRequest.model_validate(payload)
+
+    response = _service(context).analyze(context["model"].id, request)
+
+    assert len(response.drivers) == 1
+    assert response.two_way is None
+    assert response.warnings == ["TOP_IMPACT_TWO_WAY_UNAVAILABLE"]
 
 
 def test_top_impact_linear_values_preserve_thirty_two_significant_digits() -> None:

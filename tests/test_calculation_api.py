@@ -243,6 +243,10 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
             "/api/v1/models/{model_version_id}/calculation/sensitivity",
             "post",
         ),
+        (
+            "/api/v1/calculation-sensitivity-analyses/{analysis_id}",
+            "get",
+        ),
         ("/api/v1/models/{model_version_id}/calculations", "post"),
         ("/api/v1/calculation-runs/{calculation_run_id}", "get"),
         ("/api/v1/calculation-runs/{calculation_run_id}/outputs", "get"),
@@ -423,6 +427,78 @@ def test_sensitivity_http_runs_real_persisted_cases(api_context) -> None:
     assert payload["drivers"][0]["low_case"]["output"]["value"]["value"] == "4"
     assert payload["drivers"][0]["high_case"]["output"]["value"]["value"] == "7"
     assert payload["drivers"][0]["impact"] == "3"
+
+
+def test_sensitivity_http_compact_analysis_can_be_reloaded_by_get(
+    api_context,
+) -> None:
+    context = api_context
+    client = context["client"]
+    prepared = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculation/prepare",
+        json={},
+    ).json()
+    baseline = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculations",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    ).json()
+    current = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculations",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "overrides": [
+                {
+                    "target": {
+                        "kind": "parameter",
+                        "parameter_id": context["parameter_id"],
+                    },
+                    "value": {"value_type": "number", "value": "10"},
+                }
+            ],
+            "idempotency_key": None,
+        },
+    ).json()
+    outputs = client.get(
+        f"/api/v1/models/{context['model_version_id']}/calculation/outputs"
+    ).json()
+    scalar = next(
+        item
+        for item in outputs["outputs"]
+        if item["entity_kind"] == "scalar"
+    )
+    request = _sensitivity_api_payload(
+        context,
+        prepared["graph_version_id"],
+        scalar["output_id"],
+    )
+    request["current_run_id"] = current["calculation_run_id"]
+
+    response = client.post(
+        f"/api/v1/models/{context['model_version_id']}"
+        "/calculation/sensitivity",
+        json=request,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["comparison_baseline_run_id"] == baseline[
+        "calculation_run_id"
+    ]
+    assert payload["case_count"] == 2
+    assert (
+        payload["drivers"][0]["low_case"]["calculation_run_id"]
+        is None
+    )
+    reload = client.get(
+        "/api/v1/calculation-sensitivity-analyses/"
+        f"{payload['analysis_id']}"
+    )
+    assert reload.status_code == 200
+    assert reload.json() == payload
 
 
 def test_sensitivity_http_preserves_structured_domain_failure(

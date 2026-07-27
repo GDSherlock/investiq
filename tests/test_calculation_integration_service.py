@@ -53,6 +53,16 @@ from apps.api.app.workbook_storage import DatabaseWorkbookStorage
 
 @pytest.fixture
 def integration_context(tmp_path: Path, request):
+    parameter = getattr(request, "param", True)
+    if isinstance(parameter, dict):
+        include_calculation_properties = parameter.get(
+            "include_calculation_properties",
+            True,
+        )
+        include_kpi_formulas = parameter.get("include_kpi_formulas", False)
+    else:
+        include_calculation_properties = parameter
+        include_kpi_formulas = False
     engine, session_factory = create_sqlite_session_factory(
         sqlite_file_url(tmp_path / "calculation-integration.db")
     )
@@ -61,7 +71,8 @@ def integration_context(tmp_path: Path, request):
     storage, workbook, model, parameter, series, series_value = (
         create_materialized_rule_model(
             session,
-            include_calculation_properties=getattr(request, "param", True),
+            include_calculation_properties=include_calculation_properties,
+            include_kpi_formulas=include_kpi_formulas,
         )
     )
     other_model = ModelVersion(
@@ -249,9 +260,9 @@ def test_fresh_session_reloads_persisted_graph_metadata(integration_context) -> 
     assert graph.graph_version_id == compiled.graph_version_id
     assert graph.workbook_version_id == context["workbook"].id
     assert graph.ir_version == "calc-ir-v2"
-    assert graph.compiler_version == "formula-compiler-v2"
-    assert graph.function_registry_version == "calc-functions-v2"
-    assert graph.semantics_profile == "excel-compatible-v2"
+    assert graph.compiler_version == "formula-compiler-v3"
+    assert graph.function_registry_version == "calc-functions-v3"
+    assert graph.semantics_profile == "excel-compatible-kpi-v1"
 
 
 def _calculation_artifact_counts(session) -> tuple[int, ...]:
@@ -362,10 +373,10 @@ def test_readiness_maps_persisted_state_without_creating_artifacts(
     )
     assert readiness.versions.phase1_ir == "calc-ir-v1"
     assert readiness.versions.phase2_ir == "calc-ir-v2"
-    assert readiness.versions.compiler == "formula-compiler-v2"
-    assert readiness.versions.engine == "calc-engine-v2"
-    assert readiness.versions.registry == "calc-functions-v2"
-    assert readiness.versions.semantics == "excel-compatible-v2"
+    assert readiness.versions.compiler == "formula-compiler-v3"
+    assert readiness.versions.engine == "calc-engine-v3"
+    assert readiness.versions.registry == "calc-functions-v3"
+    assert readiness.versions.semantics == "excel-compatible-kpi-v1"
     if with_graph:
         assert readiness.summary.graph_nodes == 10
     if phase1_status == "failed":
@@ -1313,6 +1324,92 @@ def test_run_outputs_isolate_missing_mapping_from_available_outputs(
     assert by_role["total_project_cost"].current.value.value == "5"
 
 
+@pytest.mark.parametrize(
+    "integration_context",
+    [{"include_kpi_formulas": True}],
+    indirect=True,
+)
+def test_numeric_canonical_kpi_formulas_project_without_derived_fallbacks(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    id_factory = FinancialEntityIdFactory(context["model"].id)
+    definitions = (
+        ("C1", "Project IRR", "project_irr", "%", "=IRR(Inputs!C1:C2)"),
+        ("C2", "NPV", "npv", "USD", "=NPV(10%,Inputs!D1:D2)"),
+        (
+            "C3",
+            "Minimum DSCR",
+            "minimum_dscr",
+            "x",
+            '=MINIFS(Inputs!E1:E3,Inputs!E1:E3,">0")',
+        ),
+        ("C4", "Payback", "payback_period", "years", "=Inputs!F1"),
+        (
+            "C5",
+            "Equity Multiple",
+            "equity_multiple",
+            "x",
+            "=Inputs!G2/Inputs!G1",
+        ),
+    )
+    for cell, label, role, unit, formula in definitions:
+        context["session"].add(
+            CanonicalOutput(
+                id=id_factory.output_id("Calc", cell),
+                model_version_id=context["model"].id,
+                entity_kind="canonical_output",
+                label=label,
+                business_role=role,
+                submitted_role="formula_output",
+                validated_role="formula_output",
+                raw_value_json=999,
+                unit=unit,
+                scenario="base",
+                source_sheet="Calc",
+                source_cell=cell,
+                exact_formula=formula,
+                formula_status="formula_cached",
+                source_validation_status="validated",
+                role_validation_status="validated",
+                validation_status="validated",
+                data_type="f",
+                number_format="General",
+            )
+        )
+    context["session"].commit()
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+
+    projection = facade.get_run_outputs(baseline.calculation_run_id)
+    by_role = {item.business_role: item for item in projection.outputs}
+
+    expected = {
+        "project_irr": 0.1,
+        "npv": 104.13223140495867,
+        "minimum_dscr": 1.2,
+        "payback_period": 5.0,
+        "equity_multiple": 2.5,
+    }
+    for role, expected_value in expected.items():
+        output = by_role[role]
+        assert output.availability_status == "available"
+        assert output.current.execution_status == "executed"
+        assert float(output.current.value.value) == pytest.approx(expected_value)
+        assert float(output.baseline.value.value) == pytest.approx(expected_value)
+    assert "missing_kpi" not in by_role
+
+
 def test_run_outputs_use_persisted_expression_support_not_latest_rule(
     integration_context,
 ) -> None:
@@ -1607,11 +1704,72 @@ def test_fresh_session_reloads_completed_baseline_and_override_without_rerun(
     assert after == before
     assert reloaded[baseline.calculation_run_id]["versions"] == {
         "phase2_ir": "calc-ir-v2",
+        "compiler": "formula-compiler-v3",
+        "engine": "calc-engine-v3",
+        "registry": "calc-functions-v3",
+        "semantics": "excel-compatible-kpi-v1",
+    }
+
+
+def test_fresh_session_reloads_legacy_v2_run_versions_without_rerun(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"], context["read_service"]
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    graph = context["session"].get(
+        CalculationGraphVersionRecord,
+        prepared.graph_version_id,
+    )
+    run = context["session"].get(
+        CalculationRunRecord,
+        baseline.calculation_run_id,
+    )
+    graph.compiler_version = "formula-compiler-v2"
+    graph.function_registry_version = "calc-functions-v2"
+    graph.semantics_profile = "excel-compatible-v2"
+    run.engine_version = "calc-engine-v2"
+    run.function_registry_version = "calc-functions-v2"
+    run.semantics_profile = "excel-compatible-v2"
+    context["session"].commit()
+    expected_values = baseline.values
+    context["session"].close()
+
+    restarted = context["session_factory"]()
+    try:
+        before = _calculation_artifact_counts(restarted)
+        reloaded = CalculationIntegrationService(
+            restarted,
+            ModelExtractionReadService(
+                restarted,
+                DatabaseWorkbookStorage(restarted),
+            ),
+            phase2_service=_CalculationMustNotRun(),
+        ).get_run(baseline.calculation_run_id)
+        after = _calculation_artifact_counts(restarted)
+    finally:
+        restarted.close()
+
+    assert reloaded.status == baseline.status
+    assert reloaded.values == expected_values
+    assert reloaded.versions.model_dump(mode="json") == {
+        "phase2_ir": "calc-ir-v2",
         "compiler": "formula-compiler-v2",
         "engine": "calc-engine-v2",
         "registry": "calc-functions-v2",
         "semantics": "excel-compatible-v2",
     }
+    assert after == before
 
 
 def test_fresh_session_reloads_projected_outputs_without_rerun_or_writes(
@@ -1715,7 +1873,7 @@ def test_persisted_running_and_failed_runs_reload_without_values(
     assert failed.status == "failed"
     assert failed.values == []
     assert failed.graph_version_id == prepared.graph_version_id
-    assert failed.versions.compiler == "formula-compiler-v2"
+    assert failed.versions.compiler == "formula-compiler-v3"
     assert _run_row_counts(context["session"]) == counts_before
 
 

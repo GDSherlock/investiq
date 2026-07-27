@@ -345,17 +345,26 @@ def test_alembic_upgrades_downgrades_and_reupgrades_sqlite(tmp_path: Path) -> No
     script = ScriptDirectory.from_config(config)
     engine = create_engine(f"sqlite:///{database_path}")
     try:
-        assert script.get_current_head() == "20260720_0005"
+        assert script.get_current_head() == "20260727_0006"
         assert PHASE2_TABLES <= set(inspect(engine).get_table_names())
         assert "canonical_outputs" in inspect(engine).get_table_names()
+        assert (
+            "calculation_sensitivity_analyses"
+            in inspect(engine).get_table_names()
+        )
 
         command.downgrade(config, "20260715_0003")
         downgraded = set(inspect(engine).get_table_names())
         assert not (PHASE2_TABLES & downgraded)
+        assert "calculation_sensitivity_analyses" not in downgraded
         assert "calculation_rule_extractions" in downgraded
 
         command.upgrade(config, "head")
         assert PHASE2_TABLES <= set(inspect(engine).get_table_names())
         assert "canonical_outputs" in inspect(engine).get_table_names()
+        assert (
+            "calculation_sensitivity_analyses"
+            in inspect(engine).get_table_names()
+        )
     finally:
         engine.dispose()

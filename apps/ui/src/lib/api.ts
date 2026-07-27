@@ -215,6 +215,20 @@ export async function runCalculationSensitivity(
   );
 }
 
+export async function getCalculationSensitivityAnalysis(
+  analysisId: string,
+): Promise<CalculationSensitivityResponse> {
+  return parseJsonResponse<CalculationSensitivityResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/calculation-sensitivity-analyses/${encodeURIComponent(analysisId)}`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
 export function isUsableLegacyModelId(
   modelId: string | null | undefined,
 ): modelId is string {

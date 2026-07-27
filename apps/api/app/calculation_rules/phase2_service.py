@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any, Mapping, Sequence
 import uuid
 
@@ -51,6 +53,59 @@ class _CompiledWorkbook:
     catalog: WorkbookCatalog
     compilations: tuple[FormulaCompilation, ...]
     graph: CalculationGraphVersion
+
+
+@dataclass(frozen=True)
+class EphemeralCalculationValue:
+    formula_cell_id: str
+    execution_status: str
+    value: ScalarValue | None
+    engine_error_code: str | None
+    validation_status: str | None
+    warnings: tuple[str, ...]
+
+
+class _CompiledRuntimeCache:
+    def __init__(self, max_entries: int = 8) -> None:
+        self._max_entries = max_entries
+        self._entries: OrderedDict[
+            tuple[str, str],
+            _CompiledWorkbook,
+        ] = OrderedDict()
+        self._lock = RLock()
+
+    def get(
+        self,
+        workbook_version_id: str,
+        configuration_hash: str,
+    ) -> _CompiledWorkbook | None:
+        key = (workbook_version_id, configuration_hash)
+        with self._lock:
+            compiled = self._entries.get(key)
+            if compiled is not None:
+                self._entries.move_to_end(key)
+            return compiled
+
+    def put(
+        self,
+        workbook_version_id: str,
+        configuration_hash: str,
+        compiled: _CompiledWorkbook,
+    ) -> None:
+        key = (workbook_version_id, configuration_hash)
+        with self._lock:
+            self._entries[key] = compiled
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
+
+
+_COMPILED_RUNTIME_CACHE = _CompiledRuntimeCache()
+_GROUPED_RULE_CACHE: OrderedDict[
+    tuple[str, str, str],
+    tuple[Any, ...],
+] = OrderedDict()
+_GROUPED_RULE_CACHE_LOCK = RLock()
 
 
 class InternalCalculationEngineService:
@@ -107,12 +162,33 @@ class InternalCalculationEngineService:
         if graph_version_id is not None and graph_version_id != compiled.graph.id:
             self._session.rollback()
             raise ValueError("Requested graph version does not match the workbook")
-        groups = BusinessRuleGrouper(configuration).group(
+        group_cache_key = (
             model_version_id,
-            compiled.catalog,
-            compiled.compilations,
+            compiled.graph.id,
+            configuration.grouping_profile,
         )
-        self._repository.save_groups(compiled.graph.id, groups)
+        with _GROUPED_RULE_CACHE_LOCK:
+            groups = _GROUPED_RULE_CACHE.get(group_cache_key)
+            if groups is not None:
+                _GROUPED_RULE_CACHE.move_to_end(group_cache_key)
+        if groups is None:
+            groups = tuple(
+                BusinessRuleGrouper(configuration).group(
+                    model_version_id,
+                    compiled.catalog,
+                    compiled.compilations,
+                )
+            )
+            with _GROUPED_RULE_CACHE_LOCK:
+                _GROUPED_RULE_CACHE[group_cache_key] = groups
+                _GROUPED_RULE_CACHE.move_to_end(group_cache_key)
+                while len(_GROUPED_RULE_CACHE) > 32:
+                    _GROUPED_RULE_CACHE.popitem(last=False)
+        if not self._repository.has_groups(
+            model_version_id,
+            compiled.graph.id,
+        ):
+            self._repository.save_groups(compiled.graph.id, groups)
         resolved_values, override_payload = self._resolve_overrides(
             model_version_id,
             compiled.catalog,
@@ -251,11 +327,143 @@ class InternalCalculationEngineService:
             configuration,
         )
 
+    def evaluate_sensitivity_cases(
+        self,
+        *,
+        model_version_id: str,
+        graph_version_id: str,
+        current_run_id: str,
+        current_overrides: Sequence[CalculationOverride],
+        case_overrides: Sequence[Sequence[CalculationOverride]],
+        configuration: Phase2CalculationConfiguration | None = None,
+    ) -> tuple[dict[str, EphemeralCalculationValue], ...]:
+        """Evaluate independent cases against one persisted current anchor."""
+        configuration = configuration or Phase2CalculationConfiguration()
+        model = self._read_service.load_model_version(
+            model_version_id,
+            require_materialized=True,
+        )
+        compiled = self._compile_workbook(
+            model.workbook_version_id,
+            configuration,
+        )
+        if compiled.graph.id != graph_version_id:
+            raise ValueError(
+                "Requested graph version does not match the workbook"
+            )
+        current = self._repository.load_run(current_run_id)
+        if (
+            current.model_version_id != model_version_id
+            or current.graph_version_id != graph_version_id
+            or current.status not in {"completed", "completed_with_warning"}
+            or current.engine_version != configuration.engine_version
+            or current.function_registry_version
+            != configuration.function_registry_version
+            or current.semantics_profile != configuration.semantics_profile
+        ):
+            raise ValueError(
+                "Current calculation run is not compatible with sensitivity"
+            )
+        _current_values, current_payload = self._resolve_overrides(
+            model_version_id,
+            compiled.catalog,
+            current_overrides,
+        )
+        if tuple(current.overrides) != current_payload:
+            raise ValueError(
+                "Current calculation run overrides do not match sensitivity"
+            )
+
+        prior_by_ref = self._prior_values_by_ref(
+            compiled.catalog.workbook_version_id,
+            current,
+        )
+        formula_by_ref = compiled.catalog.formula_by_ref()
+        results: list[dict[str, EphemeralCalculationValue]] = []
+        for overrides in case_overrides:
+            resolved_values, override_payload = self._resolve_overrides(
+                model_version_id,
+                compiled.catalog,
+                overrides,
+            )
+            changed_cells = self._changed_cells(
+                compiled.catalog.workbook_version_id,
+                override_payload,
+                current.overrides,
+            )
+            dirty = DirtyPropagator().plan(
+                compiled.graph,
+                changed_cells=changed_cells,
+                has_compatible_prior_run=True,
+            )
+            reusable = {
+                reference
+                for reference in dirty.reusable_formula_cells
+                if (
+                    reference in prior_by_ref
+                    and prior_by_ref[reference].value is not None
+                )
+            }
+            evaluation_cells = set(dirty.dirty_formula_cells) | (
+                set(dirty.reusable_formula_cells) - reusable
+            )
+            executions = self._evaluator.execute(
+                compiled.graph.base_plan,
+                compiled.catalog,
+                compiled.compilations,
+                configuration,
+                evaluation_cells=tuple(evaluation_cells),
+                initial_calculated_values={
+                    reference: prior_by_ref[reference].value
+                    for reference in reusable
+                    if prior_by_ref[reference].value is not None
+                },
+                input_values=resolved_values,
+            )
+            values: dict[str, EphemeralCalculationValue] = {}
+            for reference, formula in formula_by_ref.items():
+                if reference in reusable:
+                    prior_value = prior_by_ref[reference]
+                    values[formula.id] = EphemeralCalculationValue(
+                        formula_cell_id=formula.id,
+                        execution_status="reused",
+                        value=prior_value.value,
+                        engine_error_code=prior_value.engine_error_code,
+                        validation_status=prior_value.validation_status,
+                        warnings=("reused_current_anchor_value",),
+                    )
+                    continue
+                execution = executions[reference]
+                values[formula.id] = EphemeralCalculationValue(
+                    formula_cell_id=formula.id,
+                    execution_status=execution.status,
+                    value=execution.value,
+                    engine_error_code=(
+                        execution.error_code
+                        if execution.status == "execution_error"
+                        else None
+                    ),
+                    validation_status="not_comparable",
+                    warnings=execution.warnings,
+                )
+            results.append(values)
+        return tuple(results)
+
     def _compile_workbook(
         self,
         workbook_version_id: str,
         configuration: Phase2CalculationConfiguration,
     ) -> _CompiledWorkbook:
+        cached = _COMPILED_RUNTIME_CACHE.get(
+            workbook_version_id,
+            configuration.configuration_hash,
+        )
+        if (
+            cached is not None
+            and self._repository.load_graph_metadata(cached.graph.id)
+            is not None
+        ):
+            return cached
         workbook = self._read_service.load_workbook_version(workbook_version_id)
         inventory = self._inventory or WorkbookFormulaInventory(configuration)
         catalog = inventory.scan(workbook.content_bytes, workbook_version_id)
@@ -281,7 +489,13 @@ class InternalCalculationEngineService:
             base_graph,
         )
         self._repository.save_graph(graph, configuration)
-        return _CompiledWorkbook(catalog, compilations, graph)
+        compiled = _CompiledWorkbook(catalog, compilations, graph)
+        _COMPILED_RUNTIME_CACHE.put(
+            workbook_version_id,
+            configuration.configuration_hash,
+            compiled,
+        )
+        return compiled
 
     def _resolve_overrides(
         self,

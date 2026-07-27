@@ -15,10 +15,10 @@ from .types import normalize_a1
 
 PHASE2_INVENTORY_VERSION = "formula-inventory-v1"
 PHASE2_IR_VERSION = "calc-ir-v2"
-PHASE2_COMPILER_VERSION = "formula-compiler-v2"
-PHASE2_ENGINE_VERSION = "calc-engine-v2"
-PHASE2_FUNCTION_REGISTRY_VERSION = "calc-functions-v2"
-PHASE2_SEMANTICS_PROFILE = "excel-compatible-v2"
+PHASE2_COMPILER_VERSION = "formula-compiler-v3"
+PHASE2_ENGINE_VERSION = "calc-engine-v3"
+PHASE2_FUNCTION_REGISTRY_VERSION = "calc-functions-v3"
+PHASE2_SEMANTICS_PROFILE = "excel-compatible-kpi-v1"
 PHASE2_GROUPING_PROFILE = "relative-ast-v1"
 
 

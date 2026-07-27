@@ -5,6 +5,7 @@ from pathlib import Path
 import uuid
 
 from openpyxl import Workbook
+import pytest
 
 from apps.api.app.calculation_rules.compiler import FormulaCompiler
 from apps.api.app.calculation_rules.evaluator import SafeCalculationEvaluator, ScalarValue
@@ -54,6 +55,30 @@ def _compile(configuration, registry):
     return catalog, compilations
 
 
+def _compile_formula(formula: str):
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = -100
+    inputs["A2"] = 110
+    inputs["B1"] = 0
+    inputs["B2"] = 0
+    calc = workbook.create_sheet("Calc")
+    calc["A1"] = formula
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    configuration, registry = _phase2_contracts()
+    catalog = WorkbookFormulaInventory(configuration).scan(
+        buffer.getvalue(),
+        str(uuid.uuid4()),
+    )
+    return FormulaCompiler(
+        configuration,
+        function_registry=registry,
+    ).compile(catalog.formulas[0], catalog)
+
+
 def test_v2_compiler_emits_additive_envelope_and_v1_remains_exact() -> None:
     v1_configuration = CalculationRuleExtractionConfiguration()
     v1_catalog = WorkbookFormulaInventory(v1_configuration).scan(
@@ -91,7 +116,7 @@ def test_v2_compiler_emits_additive_envelope_and_v1_remains_exact() -> None:
     assert v2.support_status == "supported"
     assert v2.ir_json is not None
     assert v2.ir_json["ir_version"] == "calc-ir-v2"
-    assert v2.ir_json["required_registry_version"] == "calc-functions-v2"
+    assert v2.ir_json["required_registry_version"] == "calc-functions-v3"
     assert v2.ir_json["capabilities"] == ["conditional-aggregation"]
     assert v2.ir_json["limits"]["node_count"] > 0
     assert v2.ir_json["limits"]["max_depth"] > 0
@@ -101,10 +126,10 @@ def test_phase2_registry_is_closed_versioned_and_additive() -> None:
     configuration, registry = _phase2_contracts()
 
     assert configuration.ir_version == "calc-ir-v2"
-    assert configuration.compiler_version == "formula-compiler-v2"
-    assert configuration.engine_version == "calc-engine-v2"
-    assert configuration.function_registry_version == "calc-functions-v2"
-    assert configuration.semantics_profile == "excel-compatible-v2"
+    assert configuration.compiler_version == "formula-compiler-v3"
+    assert configuration.engine_version == "calc-engine-v3"
+    assert configuration.function_registry_version == "calc-functions-v3"
+    assert configuration.semantics_profile == "excel-compatible-kpi-v1"
     assert set(registry) == {
         "SUM",
         "AVERAGE",
@@ -116,10 +141,48 @@ def test_phase2_registry_is_closed_versioned_and_additive() -> None:
         "COUNT",
         "COUNTA",
         "COUNTIF",
+        "IFERROR",
+        "AND",
+        "MINIFS",
+        "IRR",
+        "NPV",
     }
     assert registry["COUNTIF"].minimum_arguments == 2
     assert registry["COUNTIF"].maximum_arguments == 2
     assert registry["COUNTIF"].implementation_version == "countif-v2"
+    assert registry["IFERROR"].lazy is True
+    assert registry["MINIFS"].minimum_arguments == 3
+    assert registry["MINIFS"].maximum_arguments == 253
+    assert registry["IRR"].maximum_arguments == 2
+    assert registry["NPV"].maximum_arguments == 255
+
+
+@pytest.mark.parametrize(
+    ("formula", "capabilities"),
+    [
+        ("=IFERROR(1/0,0)", ["error-handling"]),
+        ("=AND(TRUE,FALSE)", ["logical"]),
+        (
+            '=MINIFS(Inputs!A1:A2,Inputs!A1:A2,">0")',
+            ["conditional-aggregation"],
+        ),
+        ("=IRR(Inputs!A1:A2)", ["financial"]),
+        ("=NPV(10%,Inputs!A1:A2)", ["financial"]),
+        (
+            "=IRR(Inputs!A1:A2+Inputs!B1:B2)",
+            ["financial", "range-arithmetic"],
+        ),
+    ],
+)
+def test_kpi_function_ir_records_required_capabilities(
+    formula: str,
+    capabilities: list[str],
+) -> None:
+    compilation = _compile_formula(formula)
+
+    assert compilation.support_status == "supported"
+    assert compilation.ir_json is not None
+    assert compilation.ir_json["capabilities"] == capabilities
 
 
 def test_v2_count_functions_execute_typed_range_semantics() -> None:

@@ -800,6 +800,8 @@ class _FormulaParser:
             raise _UnsupportedFormula(f"unsupported_function:{function_name}")
         if not definition.minimum_arguments <= len(arguments) <= definition.maximum_arguments:
             raise _UnsupportedFormula(f"invalid_arity:{function_name}")
+        if function_name == "MINIFS" and len(arguments) % 2 == 0:
+            raise _UnsupportedFormula("invalid_arity:MINIFS")
         return self._node(
             "function_call",
             (name_token.start, closing.end),
@@ -1186,6 +1188,8 @@ class CalculationExpressionValidator:
                 raise ValueError("Function arguments are invalid")
             if not definition.minimum_arguments <= len(arguments) <= definition.maximum_arguments:
                 raise ValueError("Function arity is invalid")
+            if function_name == "MINIFS" and len(arguments) % 2 == 0:
+                raise ValueError("MINIFS criteria arguments are not paired")
             for child in arguments:
                 self._validate_node(
                     child,
@@ -1388,11 +1392,23 @@ def _expression_capabilities(root: dict[str, Any]) -> list[str]:
     stack = [root]
     while stack:
         node = stack.pop()
+        if node.get("node_type") == "function_call":
+            function_name = node.get("function_name")
+            if function_name in {"COUNTIF", "MINIFS"}:
+                capabilities.add("conditional-aggregation")
+            elif function_name == "IFERROR":
+                capabilities.add("error-handling")
+            elif function_name == "AND":
+                capabilities.add("logical")
+            elif function_name in {"IRR", "NPV"}:
+                capabilities.add("financial")
         if (
-            node.get("node_type") == "function_call"
-            and node.get("function_name") == "COUNTIF"
+            node.get("node_type") == "binary_operation"
+            and node.get("operator") in {"add", "subtract"}
+            and node.get("left", {}).get("node_type") == "range_reference"
+            and node.get("right", {}).get("node_type") == "range_reference"
         ):
-            capabilities.add("conditional-aggregation")
+            capabilities.add("range-arithmetic")
         for value in node.values():
             if isinstance(value, dict) and "node_type" in value:
                 stack.append(value)

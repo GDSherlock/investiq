@@ -59,16 +59,38 @@ def service_context(tmp_path: Path):
         engine.dispose()
 
 
-def test_compile_workbook_is_idempotent_and_additive(service_context) -> None:
+def test_compile_workbook_is_idempotent_and_additive(
+    service_context,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apps.api.app.calculation_rules.inventory import (
+        WorkbookFormulaInventory,
+    )
+    from apps.api.app.calculation_rules.phase2_types import (
+        Phase2CalculationConfiguration,
+    )
+
     context = service_context
+    inventory = WorkbookFormulaInventory(Phase2CalculationConfiguration())
+    scan_count = 0
+    original_scan = inventory.scan
+
+    def count_scan(*args, **kwargs):
+        nonlocal scan_count
+        scan_count += 1
+        return original_scan(*args, **kwargs)
+
+    monkeypatch.setattr(inventory, "scan", count_scan)
+    context["service"]._inventory = inventory
 
     first = context["service"].compile_workbook(context["workbook"].id)
     second = context["service"].compile_workbook(context["workbook"].id)
 
+    assert scan_count == 1
     assert first.graph_version_id == second.graph_version_id
     assert first.ir_version == "calc-ir-v2"
-    assert first.compiler_version == "formula-compiler-v2"
-    assert first.function_registry_version == "calc-functions-v2"
+    assert first.compiler_version == "formula-compiler-v3"
+    assert first.function_registry_version == "calc-functions-v3"
     assert first.formula_cells_total == 10
     assert first.formula_cells_supported == 9
     assert first.formula_cells_unsupported == 1

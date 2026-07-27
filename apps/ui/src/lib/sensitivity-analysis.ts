@@ -65,8 +65,8 @@ export interface SensitivityTornadoRow {
   lowDelta: number | null;
   highDelta: number | null;
   impact: number | null;
-  lowRunId: string;
-  highRunId: string;
+  lowRunId: string | null;
+  highRunId: string | null;
   unavailableReason: string | null;
   warnings: string[];
 }

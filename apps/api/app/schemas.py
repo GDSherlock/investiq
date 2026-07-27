@@ -413,6 +413,7 @@ class CalculationSensitivityTwoWayRequest(_CalculationDTO):
 class CalculationSensitivityRequest(_CalculationDTO):
     graph_version_id: UUIDString
     output_id: UUIDString
+    current_run_id: UUIDString | None = None
     two_way_mode: Literal["explicit", "top_impact"] = "explicit"
     current_overrides: list[CalculationSensitivityOverrideRequest] = Field(
         default_factory=list,
@@ -471,10 +472,24 @@ class CalculationSensitivitySelectedOutput(_CalculationDTO):
     current: CalculationProjectedValueItem
 
 
+class CalculationSensitivityCaseOutput(_CalculationDTO):
+    output_id: UUIDString
+    business_role: str
+    label: str
+    unit: str | None = None
+    scenario: str | None = None
+    number_format: str | None = None
+    value: CalculationProjectedValueItem
+
+
 class CalculationSensitivityCase(_CalculationDTO):
+    case_id: UUIDString | None = None
     input_value: CalculationNumberValue
-    calculation_run_id: UUIDString
+    calculation_run_id: UUIDString | None
     output: CalculationProjectedValueItem
+    outputs: list[CalculationSensitivityCaseOutput] = Field(
+        default_factory=list
+    )
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -487,10 +502,14 @@ class CalculationSensitivityDriverResult(_CalculationDTO):
 
 
 class CalculationSensitivityTwoWayCell(_CalculationDTO):
+    case_id: UUIDString | None = None
     row_value: CalculationNumberValue
     column_value: CalculationNumberValue
-    calculation_run_id: UUIDString
+    calculation_run_id: UUIDString | None
     output: CalculationProjectedValueItem
+    outputs: list[CalculationSensitivityCaseOutput] = Field(
+        default_factory=list
+    )
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -501,11 +520,17 @@ class CalculationSensitivityTwoWayResult(_CalculationDTO):
 
 
 class CalculationSensitivityResponse(_CalculationDTO):
+    analysis_id: UUIDString | None = None
+    request_hash: StrictStr | None = None
+    case_count: int = 0
     model_version_id: UUIDString
     graph_version_id: UUIDString
     comparison_baseline_run_id: UUIDString
     current_run_id: UUIDString
     selected_output: CalculationSensitivitySelectedOutput
+    current_outputs: list[CalculationSensitivityCaseOutput] = Field(
+        default_factory=list
+    )
     drivers: list[CalculationSensitivityDriverResult]
     two_way: CalculationSensitivityTwoWayResult | None = None
     warnings: list[str] = Field(default_factory=list)

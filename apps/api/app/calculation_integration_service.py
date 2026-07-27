@@ -759,6 +759,51 @@ class CalculationIntegrationService:
                 resource_id=calculation_run_id,
             ) from exc
 
+    def evaluate_sensitivity_cases(
+        self,
+        *,
+        model_version_id: str,
+        graph_version_id: str,
+        current_run_id: str,
+        current_overrides,
+        case_overrides,
+    ):
+        """Evaluate compact sensitivity cases without persisting run rows."""
+        try:
+            return self._phase2_service.evaluate_sensitivity_cases(
+                model_version_id=model_version_id,
+                graph_version_id=graph_version_id,
+                current_run_id=current_run_id,
+                current_overrides=[
+                    self._internal_override(model_version_id, override)
+                    for override in current_overrides
+                ],
+                case_overrides=[
+                    [
+                        self._internal_override(model_version_id, override)
+                        for override in overrides
+                    ]
+                    for overrides in case_overrides
+                ],
+            )
+        except CalculationIntegrationError:
+            raise
+        except ValueError as exc:
+            raise CalculationIntegrationError(
+                "SENSITIVITY_CURRENT_RUN_MISMATCH",
+                "Current run does not match the model, graph, or normalized "
+                "sensitivity overrides.",
+                status_code=409,
+                resource_id=current_run_id,
+            ) from exc
+        except Exception as exc:
+            raise CalculationIntegrationError(
+                "SENSITIVITY_BATCH_CALCULATION_FAILED",
+                "Compact sensitivity calculation failed.",
+                status_code=500,
+                resource_id=model_version_id,
+            ) from exc
+
     @staticmethod
     def _projected_value(
         persisted,

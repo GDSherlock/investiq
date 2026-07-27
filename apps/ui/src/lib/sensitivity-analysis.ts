@@ -605,7 +605,7 @@ export function eligibleSensitivityDriverKeys(
       // A malformed stored value is not a selectable Tornado driver.
     }
   }
-  return [...eligible];
+  return Array.from(eligible);
 }
 
 function uniqueEligibleDriverKeys(

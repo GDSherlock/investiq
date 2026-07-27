@@ -56,6 +56,7 @@ import {
 } from './calculation-value-utils';
 import {
   buildSensitivityOutputView,
+  estimateSensitivityKpis,
   selectSensitivityRunId,
 } from './sensitivity-output-adapter';
 import {
@@ -235,6 +236,105 @@ function sensitivityResponse(
     ...overrides,
   };
 }
+
+test('estimated KPI preview uses piecewise endpoint slopes and adds driver deltas', () => {
+  const exact = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'npv-output',
+          entity_kind: 'scalar',
+          business_role: 'npv',
+          label: 'NPV',
+          unit: 'USD',
+          scenario: null,
+          formula_cell_id: 'formula-npv',
+          number_format: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          availability_status: 'available',
+          baseline: projectedNumber('90'),
+          current: projectedNumber('100'),
+        },
+      ],
+    }),
+  ).kpis;
+  const assumptions = [
+    numericAssumption('driver-a', '10'),
+    numericAssumption('driver-b', '20'),
+  ];
+  const caseOutput = (value: string) => ({
+    output_id: 'npv-output',
+    business_role: 'npv',
+    label: 'NPV',
+    unit: 'USD',
+    scenario: null,
+    number_format: null,
+    value: projectedNumber(value),
+  });
+  const analysis = sensitivityResponse({
+    current_outputs: [caseOutput('100')],
+    drivers: [
+      {
+        target: assumptions[0].target,
+        low_case: {
+          case_id: 'a-low',
+          input_value: { value_type: 'number', value: '0' },
+          calculation_run_id: null,
+          output: projectedNumber('80'),
+          outputs: [caseOutput('80')],
+          warnings: [],
+        },
+        high_case: {
+          case_id: 'a-high',
+          input_value: { value_type: 'number', value: '20' },
+          calculation_run_id: null,
+          output: projectedNumber('140'),
+          outputs: [caseOutput('140')],
+          warnings: [],
+        },
+        impact: '60',
+        warnings: [],
+      },
+      {
+        target: assumptions[1].target,
+        low_case: {
+          case_id: 'b-low',
+          input_value: { value_type: 'number', value: '10' },
+          calculation_run_id: null,
+          output: projectedNumber('90'),
+          outputs: [caseOutput('90')],
+          warnings: [],
+        },
+        high_case: {
+          case_id: 'b-high',
+          input_value: { value_type: 'number', value: '30' },
+          calculation_run_id: null,
+          output: projectedNumber('130'),
+          outputs: [caseOutput('130')],
+          warnings: [],
+        },
+        impact: '40',
+        warnings: [],
+      },
+    ],
+  });
+
+  const preview = estimateSensitivityKpis({
+    kpis: exact,
+    analysis,
+    assumptions,
+    analysisOverridesByTarget: {},
+    previewOverridesByTarget: {
+      'parameter:driver-a': '15',
+      'parameter:driver-b': '25',
+    },
+  });
+
+  assert.deepEqual(preview.estimatedOutputIds, ['npv-output']);
+  assert.equal(preview.kpis[0].current.numericValue, 135);
+  assert.equal(preview.kpis[0].absoluteChange, 45);
+});
 
 function numericAssumption(
   targetId: string,
@@ -938,6 +1038,40 @@ test('unsupported outputs stay unavailable and missing KPI roles are not fabrica
     /unsupported/,
   );
   assert.equal(dashboard.irrOutputId, null);
+});
+
+test('fixed dashboard includes typed engine errors in unavailable KPI detail', () => {
+  const failedIrr = {
+    ...unavailableProjection('execution_error'),
+    engine_error_code: '#NUM!',
+  };
+  const view = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'project-irr-error',
+          entity_kind: 'scalar',
+          business_role: 'project_irr',
+          label: 'Project IRR',
+          unit: '%',
+          scenario: null,
+          formula_cell_id: 'formula-project-irr',
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0%',
+          availability_status: 'unavailable',
+          baseline: failedIrr,
+          current: failedIrr,
+        },
+      ],
+    }),
+  );
+
+  assert.equal(view.kpis[0].current.engineErrorCode, '#NUM!');
+  const dashboard = resolveFixedDashboardViewModel(view.kpis);
+  const irrSlot = dashboard.slots.find((slot) => slot.key === 'irr');
+  assert.match(irrSlot?.unavailableDetail ?? '', /#NUM!/);
+  assert.match(irrSlot?.unavailableDetail ?? '', /execution_error/);
 });
 
 test('fixed dashboard keeps five controlled KPI slots and resolves only approved numeric roles', () => {
@@ -2531,6 +2665,8 @@ test('versioned sensitivity workbench round-trips only for the matching model an
     graphVersionId: 'graph-version',
     comparisonBaselineRunId: 'baseline-run',
     currentRunId: 'current-run',
+    analysisId: 'analysis-id',
+    analysisOverridesByTarget: { [driverKey]: '10' },
     overridesByTarget: { [driverKey]: '12.5' },
     tornadoDriverKeys: [driverKey],
     selectedOutputId: 'output-id',
@@ -3204,7 +3340,8 @@ test('sensitivity workbench composes canonical APIs and dynamic components witho
     'selectedOutputId',
     'tornadoDriverKeys',
     'resolveFixedDashboardViewModel',
-    'resolveFixedDashboardCalculationMode',
+    'estimateSensitivityKpis',
+    'getCalculationSensitivityAnalysis',
     'promoteFixedDashboardDriver',
     'MAX_TORNADO_DRIVERS = 12',
   ]) {
@@ -3240,10 +3377,12 @@ test('sensitivity workbench composes canonical APIs and dynamic components witho
   assert.doesNotMatch(allSource, /new\s+(Map|Set)\s*\(\s*\[[\s\S]*IRR/i);
 });
 
-test('sensitivity bootstrap is GET-only and output reload follows a guarded sensitivity response', () => {
+test('sensitivity bootstrap restores analysis by GET while exact and batch submissions stay separate', () => {
   const pageSource = readFileSync('src/app/sensitivity/page.tsx', 'utf8');
   const bootstrapStart = pageSource.indexOf('async function bootstrapWorkbench');
-  const schedulerStart = pageSource.indexOf('function scheduleAnalysis');
+  const schedulerStart = pageSource.indexOf(
+    'function scheduleExactCalculation',
+  );
 
   assert.ok(bootstrapStart >= 0, 'bootstrap function must be explicit');
   assert.ok(
@@ -3267,6 +3406,7 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
     bootstrapSource,
     /readSensitivityWorkbenchDocument\(\s*bootstrapStorage,/,
   );
+  assert.match(bootstrapSource, /getCalculationSensitivityAnalysis/);
   assert.match(
     bootstrapSource,
     /catch \(caught\)[\s\S]*activeIdentityRef\.current = null;[\s\S]*return 'failed'/,
@@ -3279,26 +3419,34 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   assert.doesNotMatch(bootstrapSource, /runCalculation\(/);
   assert.doesNotMatch(bootstrapSource, /method:\s*['"]POST['"]/);
 
-  const postIndex = pageSource.indexOf('await runCalculationSensitivity(');
-  const preflightLockIndex = pageSource.lastIndexOf(
-    'if (!isCalculationStorageLockAvailable())',
-    postIndex,
-  );
-  const responseGuardIndex = pageSource.indexOf(
-    'canApplySensitivityResponse(',
-    postIndex,
+  const exactPostIndex = pageSource.indexOf(
+    'const calculation = await runCalculation(',
   );
   const outputGetIndex = pageSource.indexOf(
     'getCalculationRunOutputs(currentRunId)',
-    responseGuardIndex,
+    exactPostIndex,
   );
   const outputIdentityIndex = pageSource.indexOf(
     'outputs.calculation_run_id !== currentRunId',
     outputGetIndex,
   );
-  const persistenceIndex = pageSource.indexOf(
+  const exactPersistenceIndex = pageSource.indexOf(
     'persistSensitivityWorkbenchState(',
     outputIdentityIndex,
+  );
+  assert.ok(exactPostIndex >= 0, 'exact current POST must exist');
+  assert.ok(outputGetIndex > exactPostIndex);
+  assert.ok(outputIdentityIndex > outputGetIndex);
+  assert.ok(exactPersistenceIndex > outputIdentityIndex);
+
+  const postIndex = pageSource.indexOf('await runCalculationSensitivity(');
+  const responseGuardIndex = pageSource.indexOf(
+    'canApplySensitivityResponse(',
+    postIndex,
+  );
+  const persistenceIndex = pageSource.indexOf(
+    'persistSensitivityWorkbenchState(',
+    responseGuardIndex,
   );
   const appliedStateIndex = pageSource.indexOf(
     'setWorkbench(() => appliedWorkbench)',
@@ -3306,22 +3454,10 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   );
 
   assert.ok(postIndex >= 0, 'analysis POST must exist');
-  assert.ok(
-    preflightLockIndex >= 0 && preflightLockIndex < postIndex,
-    'exclusive storage lock capability must be checked before POST',
-  );
   assert.ok(responseGuardIndex > postIndex, 'POST response must be guarded');
   assert.ok(
-    outputGetIndex > responseGuardIndex,
-    'current outputs must load only after the guarded calculation branch',
-  );
-  assert.ok(
-    outputIdentityIndex > outputGetIndex,
-    'output reload must verify the explicit current run identity',
-  );
-  assert.ok(
-    persistenceIndex > outputIdentityIndex,
-    'storage writes must follow both guarded successes',
+    persistenceIndex > responseGuardIndex,
+    'artifact storage must follow the guarded analysis response',
   );
   assert.ok(
     appliedStateIndex > persistenceIndex,
@@ -3339,18 +3475,10 @@ test('sensitivity bootstrap is GET-only and output reload follows a guarded sens
   assert.match(pageSource, /requestRevisionRef\.current/);
   assert.match(pageSource, /clearTimeout/);
   assert.match(pageSource, /matchesCurrent\(\)/);
-  assert.match(
-    pageSource,
-    /calculationMode === 'sensitivity'[\s\S]*nextWorkbench\.tornadoDriverKeys\.length === 0/,
-  );
-  assert.match(
-    pageSource,
-    /request\.drivers\.length\s*===\s*0/,
-  );
-  assert.match(
-    pageSource,
-    /calculationMode === 'sensitivity'[\s\S]*runCalculationSensitivity[\s\S]*else \{[\s\S]*runCalculation\(/,
-  );
+  assert.match(pageSource, /current_run_id = currentRunId/);
+  assert.match(pageSource, /pendingExactCalculationRef/);
+  assert.match(pageSource, /exactCalculationInFlightRef/);
+  assert.match(pageSource, /analysisOverridesByTarget/);
   assert.match(
     pageSource,
     /buildCanonicalOverrideCalculationRequest\([\s\S]*requestWorkbench\.overridesByTarget/,

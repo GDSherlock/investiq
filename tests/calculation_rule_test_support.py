@@ -43,6 +43,7 @@ def without_calculation_properties(content_bytes: bytes) -> bytes:
 def calculation_workbook_bytes(
     *,
     include_calculation_properties: bool = True,
+    include_kpi_formulas: bool = False,
 ) -> bytes:
     workbook = Workbook()
     inputs = workbook.active
@@ -61,6 +62,22 @@ def calculation_workbook_bytes(
     calc["B6"] = "=B5+1"
     calc["B7"] = "='[rates.xlsx]Inputs'!A1+1"
     calc["B8"] = "=IF(TRUE,B2,1/0)"
+    if include_kpi_formulas:
+        inputs["C1"] = -100
+        inputs["C2"] = 110
+        inputs["D1"] = 60
+        inputs["D2"] = 60
+        inputs["E1"] = 1.4
+        inputs["E2"] = 1.2
+        inputs["E3"] = 0
+        inputs["F1"] = 5
+        inputs["G1"] = 100
+        inputs["G2"] = 250
+        calc["C1"] = "=IRR(Inputs!C1:C2)"
+        calc["C2"] = "=NPV(10%,Inputs!D1:D2)"
+        calc["C3"] = '=MINIFS(Inputs!E1:E3,Inputs!E1:E3,">0")'
+        calc["C4"] = "=Inputs!F1"
+        calc["C5"] = "=Inputs!G2/Inputs!G1"
 
     hidden = workbook.create_sheet("Hidden")
     hidden.sheet_state = "hidden"
@@ -82,11 +99,13 @@ def create_materialized_rule_model(
     session,
     *,
     include_calculation_properties: bool = True,
+    include_kpi_formulas: bool = False,
 ):
     storage = DatabaseWorkbookStorage(session)
     workbook = WorkbookVersionRepository(session, storage).get_or_create(
         calculation_workbook_bytes(
-            include_calculation_properties=include_calculation_properties
+            include_calculation_properties=include_calculation_properties,
+            include_kpi_formulas=include_kpi_formulas,
         ),
         "calculation-rules.xlsx",
     )

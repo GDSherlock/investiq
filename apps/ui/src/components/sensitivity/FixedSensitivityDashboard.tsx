@@ -20,6 +20,10 @@ interface FixedSensitivityDashboardProps {
   matrix: SensitivityMatrixView | null;
   expanded: boolean;
   recalculating: boolean;
+  analysisRefreshing?: boolean;
+  analysisStale?: boolean;
+  analysisRunDisabled?: boolean;
+  estimatedOutputIds?: string[];
   errorMessage: string | null;
   controlsDisabled: boolean;
   calculationRunId: string;
@@ -31,6 +35,7 @@ interface FixedSensitivityDashboardProps {
   onReset: (targetKey: string) => void;
   onResetAll: () => void;
   onRefresh: () => void;
+  onRunAnalysis?: () => void;
   formatAxisValue: (targetKey: string, value: string) => string;
   formatAnalyzedOutputValue: (value: number | null) => string;
   formatAnalyzedOutputDelta: (value: number) => string;
@@ -100,6 +105,10 @@ export function FixedSensitivityDashboard({
   matrix,
   expanded,
   recalculating,
+  analysisRefreshing = false,
+  analysisStale = false,
+  analysisRunDisabled = false,
+  estimatedOutputIds = [],
   errorMessage,
   controlsDisabled,
   calculationRunId,
@@ -111,6 +120,7 @@ export function FixedSensitivityDashboard({
   onReset,
   onResetAll,
   onRefresh,
+  onRunAnalysis = () => undefined,
   formatAxisValue,
   formatAnalyzedOutputValue,
   formatAnalyzedOutputDelta,
@@ -122,6 +132,17 @@ export function FixedSensitivityDashboard({
   const irrSlot = dashboard.slots.find((slot) => slot.key === 'irr') ?? null;
   const irrKpi = irrSlot?.kpi ?? null;
   const liveSlots = dashboard.slots.slice(0, 4);
+  const estimatedIds = new Set(estimatedOutputIds);
+  const analysisButtonLabel = analysisRefreshing
+    ? 'Running analysis…'
+    : tornadoRows.length > 0
+      ? 'Refresh analysis'
+      : 'Run analysis';
+  const analysisDisabled =
+    controlsDisabled ||
+    recalculating ||
+    analysisRefreshing ||
+    analysisRunDisabled;
 
   return (
     <div className="min-w-0 space-y-5" data-testid="fixed-sensitivity-dashboard">
@@ -149,6 +170,11 @@ export function FixedSensitivityDashboard({
                   )
                 : 'Unavailable'}
             </p>
+            {irrKpi && estimatedIds.has(irrKpi.outputId) ? (
+              <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300">
+                Estimated
+              </p>
+            ) : null}
             <p className="mt-3 text-sm font-medium text-amber-200">
               Threshold unavailable
             </p>
@@ -181,6 +207,11 @@ export function FixedSensitivityDashboard({
                         )
                       : 'Unavailable'}
                   </dd>
+                  {slot.kpi && estimatedIds.has(slot.kpi.outputId) ? (
+                    <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300">
+                      Estimated
+                    </p>
+                  ) : null}
                   {slot.unavailableDetail ? (
                     <p
                       className="mt-1 line-clamp-2 text-[10px] text-amber-200"
@@ -307,6 +338,11 @@ export function FixedSensitivityDashboard({
                       : 'Unavailable'}
                   </span>
                 </p>
+                {slot.kpi && estimatedIds.has(slot.kpi.outputId) ? (
+                  <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-sky-300">
+                    Estimated
+                  </p>
+                ) : null}
                 {slot.unavailableDetail ? (
                   <p
                     className="mt-2 line-clamp-2 text-[10px] leading-4 text-amber-200"
@@ -327,7 +363,8 @@ export function FixedSensitivityDashboard({
                     Assumption sliders
                   </h2>
                   <p className="mt-1 text-xs text-d-muted">
-                    Drag to simulate — settled changes persist after 400ms
+                    Drag for an Estimated preview — one exact current run starts
+                    after 400ms
                   </p>
                 </div>
               </div>
@@ -373,9 +410,21 @@ export function FixedSensitivityDashboard({
                     Ranked by impact · {analysisOutputLabel}
                   </p>
                 </div>
-                <span className="rounded border border-d-border px-2 py-1 text-[11px] text-slate-200">
-                  ±20% endpoints
-                </span>
+                <div className="flex items-center gap-2">
+                  {analysisStale ? (
+                    <span className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200">
+                      Out of date
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={onRunAnalysis}
+                    disabled={analysisDisabled}
+                    className="rounded border border-d-border px-2 py-1 text-[11px] text-slate-200 transition hover:border-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {analysisButtonLabel}
+                  </button>
+                </div>
               </div>
               <div className="mt-4">
                 {analysisUnavailableReason ? (
@@ -457,9 +506,21 @@ export function FixedSensitivityDashboard({
                 <h2 className="text-base font-semibold text-white">
                   Two-way sensitivity
                 </h2>
-                <span className="text-[11px] text-d-muted">
-                  {analysisOutputLabel}
-                </span>
+                <div className="flex items-center gap-2">
+                  {analysisStale ? (
+                    <span className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200">
+                      Out of date
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={onRunAnalysis}
+                    disabled={analysisDisabled}
+                    className="rounded border border-d-border px-2 py-1 text-[11px] text-slate-200 transition hover:border-gold-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {analysisButtonLabel}
+                  </button>
+                </div>
               </div>
               <div className="mt-4">
                 {analysisUnavailableReason ? (

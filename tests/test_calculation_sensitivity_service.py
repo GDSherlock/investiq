@@ -15,7 +15,10 @@ from apps.api.app.calculation_integration_service import (
     CalculationIntegrationError,
     CalculationIntegrationService,
 )
-from apps.api.app.calculation_rules.phase2_models import CalculationRunRecord
+from apps.api.app.calculation_rules.phase2_models import (
+    CalculationRunRecord,
+    CalculationSensitivityAnalysisRecord,
+)
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
     CanonicalOutput,
@@ -67,9 +70,11 @@ def _contract_request() -> dict[str, object]:
 
 def test_sensitivity_contract_preserves_decimal_strings() -> None:
     payload = _contract_request()
+    payload["current_run_id"] = str(uuid.uuid4())
 
     request = CalculationSensitivityRequest.model_validate(payload)
 
+    assert request.current_run_id == payload["current_run_id"]
     assert request.current_overrides[0].value.value == "3.000"
     assert request.drivers[0].low.value == "1.00"
     assert request.drivers[0].high.value == "2.00"
@@ -613,6 +618,143 @@ def test_one_way_runs_are_persisted_and_use_real_engine_values(
             projection.comparison_baseline_run_id
             == baseline.calculation_run_id
         )
+
+
+def test_current_run_anchor_uses_compact_cases_without_new_runs(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    _add_output(
+        context["session"],
+        context["model"].id,
+        source_cell="B8",
+        business_role="project_irr",
+        label="Project IRR",
+    )
+    _add_output(
+        context["session"],
+        context["model"].id,
+        source_cell="B2",
+        business_role="equity_irr",
+        label="Equity IRR",
+    )
+    _add_output(
+        context["session"],
+        context["model"].id,
+        source_cell="B3",
+        business_role="average_dscr",
+        label="Average DSCR",
+    )
+    _add_output(
+        context["session"],
+        context["model"].id,
+        source_cell="B4",
+        business_role="minimum_dscr",
+        label="Minimum DSCR",
+    )
+    prepared, _baseline = _prepare_with_baseline(context)
+    current = context["facade"].calculate(
+        context["model"].id,
+        CalculationRequest(
+            graph_version_id=prepared.graph_version_id,
+            overrides=[
+                {
+                    "target": _parameter_target(context["parameter"].id),
+                    "value": _number("10"),
+                }
+            ],
+            idempotency_key=None,
+        ),
+    )
+    request_payload = _sensitivity_request(
+        prepared.graph_version_id,
+        _output_id(context["model"].id, "B8"),
+        context["parameter"].id,
+    ).model_dump(mode="json")
+    request_payload["current_run_id"] = current.calculation_run_id
+    request = CalculationSensitivityRequest.model_validate(request_payload)
+    run_count_before = _run_count(context)
+
+    response = _service(context).analyze(context["model"].id, request)
+
+    assert response.analysis_id
+    assert len(response.request_hash) == 64
+    assert response.case_count == 2
+    assert response.current_run_id == current.calculation_run_id
+    assert _run_count(context) == run_count_before
+    assert response.drivers[0].low_case.case_id
+    assert response.drivers[0].low_case.calculation_run_id is None
+    assert response.drivers[0].high_case.case_id
+    assert response.drivers[0].high_case.calculation_run_id is None
+    assert response.current_outputs[0].output_id == request.output_id
+    assert (
+        response.drivers[0].low_case.outputs[0].output_id
+        == request.output_id
+    )
+    compact_roles = {
+        output.business_role for output in response.current_outputs
+    }
+    assert "project_irr" in compact_roles
+    assert "equity_irr" not in compact_roles
+    assert "average_dscr" in compact_roles
+    assert "minimum_dscr" not in compact_roles
+    assert {
+        output.business_role
+        for output in response.drivers[0].low_case.outputs
+    } == compact_roles
+    assert context["session"].scalar(
+        select(func.count()).select_from(
+            CalculationSensitivityAnalysisRecord
+        )
+    ) == 1
+
+    replay = _service(context).analyze(context["model"].id, request)
+
+    assert replay == response
+    assert _run_count(context) == run_count_before
+    assert context["session"].scalar(
+        select(func.count()).select_from(
+            CalculationSensitivityAnalysisRecord
+        )
+    ) == 1
+    assert _service(context).get_analysis(response.analysis_id) == response
+
+
+def test_current_run_anchor_rejects_mismatched_normalized_overrides(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    prepared, _baseline = _prepare_with_baseline(context)
+    current = context["facade"].calculate(
+        context["model"].id,
+        CalculationRequest(
+            graph_version_id=prepared.graph_version_id,
+            overrides=[],
+            idempotency_key=None,
+        ),
+    )
+    payload = _sensitivity_request(
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        context["parameter"].id,
+    ).model_dump(mode="json")
+    payload["current_run_id"] = current.calculation_run_id
+    run_count_before = _run_count(context)
+
+    with pytest.raises(CalculationIntegrationError) as captured:
+        _service(context).analyze(
+            context["model"].id,
+            CalculationSensitivityRequest.model_validate(payload),
+        )
+
+    assert captured.value.code == "SENSITIVITY_CURRENT_RUN_MISMATCH"
+    assert _run_count(context) == run_count_before
+    failed = context["session"].scalar(
+        select(CalculationSensitivityAnalysisRecord)
+    )
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.error_code == "SENSITIVITY_CURRENT_RUN_MISMATCH"
 
 
 def test_unrelated_unsupported_input_does_not_block_valid_sensitivity(
@@ -1221,6 +1363,68 @@ def test_top_impact_persists_twenty_five_linear_cartesian_cases(
     assert len(response.two_way.cells) == 25
     assert len({cell.calculation_run_id for cell in response.two_way.cells}) == 25
     assert _run_count(context) == 31
+
+
+def test_top_impact_current_anchor_creates_compact_matrix_without_case_runs(
+    sensitivity_context,
+) -> None:
+    context = sensitivity_context
+    second_parameter = _add_parameter(
+        context["session"],
+        context["model"].id,
+        source_cell="A2",
+        value=3,
+        data_type="n",
+        label="Unit price",
+    )
+    prepared, _baseline = _prepare_with_baseline(context)
+    legacy_request = _top_impact_request(
+        context,
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        second_parameter.id,
+    )
+    current = context["facade"].calculate(
+        context["model"].id,
+        CalculationRequest.model_validate(
+            {
+                "graph_version_id": prepared.graph_version_id,
+                "overrides": [
+                    override.model_dump(mode="json")
+                    for override in legacy_request.current_overrides
+                ],
+                "idempotency_key": None,
+            }
+        ),
+    )
+    payload = legacy_request.model_dump(mode="json")
+    payload["current_run_id"] = current.calculation_run_id
+    request = CalculationSensitivityRequest.model_validate(payload)
+    run_count_before = _run_count(context)
+
+    response = _service(context).analyze(context["model"].id, request)
+
+    assert response.case_count == 29
+    assert response.two_way is not None
+    assert len(response.two_way.cells) == 25
+    assert all(
+        case.calculation_run_id is None
+        for driver in response.drivers
+        for case in (driver.low_case, driver.high_case)
+    )
+    assert all(
+        cell.calculation_run_id is None
+        for cell in response.two_way.cells
+    )
+    assert len(
+        {
+            case.case_id
+            for driver in response.drivers
+            for case in (driver.low_case, driver.high_case)
+        }
+        | {cell.case_id for cell in response.two_way.cells}
+    ) == 29
+    assert _run_count(context) == run_count_before
 
 
 def test_top_impact_returns_typed_warning_when_fewer_than_two_impacts_are_usable(

@@ -133,6 +133,8 @@ class CalculationExecutionContext:
 @dataclass(frozen=True)
 class _RangeValue:
     values: tuple[ScalarValue, ...]
+    rows: int
+    columns: int
 
 
 class SafeCalculationEvaluator:
@@ -255,10 +257,16 @@ class SafeCalculationEvaluator:
             return _finite_number(number)
         if node_type == "binary_operation":
             left_value = self._evaluate_node(node["left"], context, trace)
+            right_value = self._evaluate_node(node["right"], context, trace)
+            if isinstance(left_value, _RangeValue) or isinstance(right_value, _RangeValue):
+                return _range_binary_operation(
+                    left_value,
+                    right_value,
+                    node["operator"],
+                )
             left = _coerce_numeric(left_value)
             if isinstance(left, ScalarValue):
                 return left
-            right_value = self._evaluate_node(node["right"], context, trace)
             right = _coerce_numeric(right_value)
             if isinstance(right, ScalarValue):
                 return right
@@ -309,17 +317,59 @@ class SafeCalculationEvaluator:
         if definition is None:
             raise ValueError(f"Unregistered calculation function: {name}")
         if definition.lazy:
-            if name != "IF":
-                raise ValueError(f"Unsupported lazy calculation function: {name}")
-            condition = self._evaluate_node(arguments[0], context, trace)
-            truth = _truthy(condition)
-            if isinstance(truth, ScalarValue):
-                return truth
-            selected = arguments[1] if truth else arguments[2] if len(arguments) == 3 else None
-            if selected is None:
-                return ScalarValue.boolean(False)
-            value = self._evaluate_node(selected, context, trace)
-            return value if isinstance(value, ScalarValue) else ScalarValue.error("#VALUE!")
+            if name == "IF":
+                condition = self._evaluate_node(arguments[0], context, trace)
+                truth = _truthy(condition)
+                if isinstance(truth, ScalarValue):
+                    return truth
+                selected = arguments[1] if truth else arguments[2] if len(arguments) == 3 else None
+                if selected is None:
+                    return ScalarValue.boolean(False)
+                value = self._evaluate_node(selected, context, trace)
+                return value if isinstance(value, ScalarValue) else ScalarValue.error("#VALUE!")
+            if name == "IFERROR":
+                value = self._evaluate_node(arguments[0], context, trace)
+                if isinstance(value, _RangeValue):
+                    return ScalarValue.error("#VALUE!")
+                if value.kind != "error":
+                    return value
+                fallback = self._evaluate_node(arguments[1], context, trace)
+                return (
+                    fallback
+                    if isinstance(fallback, ScalarValue)
+                    else ScalarValue.error("#VALUE!")
+                )
+            raise ValueError(f"Unsupported lazy calculation function: {name}")
+
+        if name == "AND":
+            result = True
+            found_logical = False
+            for argument in arguments:
+                value = self._evaluate_node(argument, context, trace)
+                if isinstance(value, _RangeValue):
+                    for item in value.values:
+                        if item.kind == "error":
+                            return item
+                        if item.kind in {"text", "blank"}:
+                            continue
+                        truth = _truthy(item)
+                        if isinstance(truth, ScalarValue):
+                            return truth
+                        found_logical = True
+                        result = result and truth
+                    continue
+                if value.kind == "error":
+                    return value
+                if value.kind in {"text", "blank"}:
+                    return ScalarValue.error("#VALUE!")
+                truth = _truthy(value)
+                if isinstance(truth, ScalarValue):
+                    return truth
+                found_logical = True
+                result = result and truth
+            if not found_logical:
+                return ScalarValue.error("#VALUE!")
+            return ScalarValue.boolean(result)
 
         if name in {"COUNT", "COUNTA"}:
             count = 0
@@ -350,6 +400,83 @@ class SafeCalculationEvaluator:
                     return matched
                 count += int(matched)
             return ScalarValue.number(count)
+
+        if name == "MINIFS":
+            if len(arguments) < 3 or len(arguments) % 2 == 0:
+                return ScalarValue.error("#VALUE!")
+            minimum_range = self._evaluate_node(arguments[0], context, trace)
+            if not isinstance(minimum_range, _RangeValue):
+                return ScalarValue.error("#VALUE!")
+            criteria_pairs: list[tuple[_RangeValue, ScalarValue]] = []
+            for index in range(1, len(arguments), 2):
+                criteria_range = self._evaluate_node(arguments[index], context, trace)
+                criteria = self._evaluate_node(arguments[index + 1], context, trace)
+                if (
+                    not isinstance(criteria_range, _RangeValue)
+                    or isinstance(criteria, _RangeValue)
+                    or criteria_range.rows != minimum_range.rows
+                    or criteria_range.columns != minimum_range.columns
+                ):
+                    return ScalarValue.error("#VALUE!")
+                criteria_pairs.append((criteria_range, criteria))
+            matched_values: list[float] = []
+            for value_index, candidate in enumerate(minimum_range.values):
+                matched = True
+                for criteria_range, criteria in criteria_pairs:
+                    criterion_match = _countif_match(
+                        criteria_range.values[value_index],
+                        criteria,
+                    )
+                    if isinstance(criterion_match, ScalarValue):
+                        return criterion_match
+                    if not criterion_match:
+                        matched = False
+                        break
+                if not matched:
+                    continue
+                if candidate.kind == "error":
+                    return candidate
+                if candidate.kind in {"number", "date_serial"}:
+                    matched_values.append(candidate.number_value)
+            if not matched_values:
+                return ScalarValue.number(0)
+            return _finite_number(min(matched_values))
+
+        if name == "IRR":
+            values = self._evaluate_node(arguments[0], context, trace)
+            if not isinstance(values, _RangeValue):
+                return ScalarValue.error("#VALUE!")
+            cash_flows = _numeric_range_values(values)
+            if isinstance(cash_flows, ScalarValue):
+                return cash_flows
+            guess = 0.1
+            if len(arguments) == 2:
+                guess_value = self._evaluate_node(arguments[1], context, trace)
+                guess_number = _coerce_numeric(guess_value)
+                if isinstance(guess_number, ScalarValue):
+                    return guess_number
+                guess = guess_number
+            return _irr(cash_flows, guess)
+
+        if name == "NPV":
+            rate_value = self._evaluate_node(arguments[0], context, trace)
+            rate = _coerce_numeric(rate_value)
+            if isinstance(rate, ScalarValue):
+                return rate
+            cash_flows: list[float] = []
+            for argument in arguments[1:]:
+                value = self._evaluate_node(argument, context, trace)
+                if isinstance(value, _RangeValue):
+                    range_values = _numeric_range_values(value)
+                    if isinstance(range_values, ScalarValue):
+                        return range_values
+                    cash_flows.extend(range_values)
+                    continue
+                number = _coerce_numeric(value)
+                if isinstance(number, ScalarValue):
+                    return number
+                cash_flows.append(number)
+            return _npv(rate, cash_flows)
 
         if name in {"SUM", "AVERAGE", "MIN", "MAX"}:
             numeric_values: list[float] = []
@@ -452,7 +579,11 @@ class SafeCalculationEvaluator:
                 cell = dict(start)
                 cell["cell_address"] = f"{get_column_letter(column)}{row}"
                 values.append(self._cell_value(cell, context, trace))
-        return _RangeValue(tuple(values))
+        return _RangeValue(
+            tuple(values),
+            rows=end_row - start_row + 1,
+            columns=end_column - start_column + 1,
+        )
 
 
 def _scalar_from_fact(fact: WorkbookCellFact, date_system: str) -> ScalarValue:
@@ -497,6 +628,106 @@ def _coerce_numeric(value: ScalarValue | _RangeValue) -> float | ScalarValue:
     if value.kind == "boolean":
         return 1.0 if value.value else 0.0
     return ScalarValue.error("#VALUE!")
+
+
+def _range_binary_operation(
+    left: ScalarValue | _RangeValue,
+    right: ScalarValue | _RangeValue,
+    operator: str,
+) -> ScalarValue | _RangeValue:
+    if (
+        not isinstance(left, _RangeValue)
+        or not isinstance(right, _RangeValue)
+        or operator not in {"add", "subtract"}
+        or (left.rows > 1 and left.columns > 1)
+        or (right.rows > 1 and right.columns > 1)
+        or left.rows != right.rows
+        or left.columns != right.columns
+    ):
+        return ScalarValue.error("#VALUE!")
+    results: list[ScalarValue] = []
+    for left_item, right_item in zip(left.values, right.values):
+        left_number = _coerce_numeric(left_item)
+        if isinstance(left_number, ScalarValue):
+            results.append(left_number)
+            continue
+        right_number = _coerce_numeric(right_item)
+        if isinstance(right_number, ScalarValue):
+            results.append(right_number)
+            continue
+        result = (
+            left_number + right_number
+            if operator == "add"
+            else left_number - right_number
+        )
+        results.append(_finite_number(result))
+    return _RangeValue(tuple(results), rows=left.rows, columns=left.columns)
+
+
+def _numeric_range_values(
+    value: _RangeValue,
+) -> list[float] | ScalarValue:
+    numbers: list[float] = []
+    for item in value.values:
+        if item.kind == "error":
+            return item
+        if item.kind in {"number", "date_serial"}:
+            numbers.append(item.number_value)
+    return numbers
+
+
+def _irr(cash_flows: Sequence[float], guess: float) -> ScalarValue:
+    if (
+        len(cash_flows) < 2
+        or not any(value > 0 for value in cash_flows)
+        or not any(value < 0 for value in cash_flows)
+        or not math.isfinite(guess)
+    ):
+        return ScalarValue.error("#NUM!")
+    rate = guess
+    for _iteration in range(20):
+        if rate <= -1.0:
+            return ScalarValue.error("#NUM!")
+        try:
+            base = 1.0 + rate
+            value = math.fsum(
+                cash_flow / (base**period)
+                for period, cash_flow in enumerate(cash_flows)
+            )
+            derivative = math.fsum(
+                -period * cash_flow / (base ** (period + 1))
+                for period, cash_flow in enumerate(cash_flows)
+                if period
+            )
+        except (ArithmeticError, OverflowError, ValueError):
+            return ScalarValue.error("#NUM!")
+        if (
+            not math.isfinite(value)
+            or not math.isfinite(derivative)
+            or abs(derivative) <= 1e-15
+        ):
+            return ScalarValue.error("#NUM!")
+        next_rate = rate - value / derivative
+        if not math.isfinite(next_rate):
+            return ScalarValue.error("#NUM!")
+        if abs(next_rate - rate) <= 1e-7:
+            return _finite_number(next_rate)
+        rate = next_rate
+    return ScalarValue.error("#NUM!")
+
+
+def _npv(rate: float, cash_flows: Sequence[float]) -> ScalarValue:
+    if rate == -1.0:
+        return ScalarValue.error("#DIV/0!")
+    try:
+        base = 1.0 + rate
+        value = math.fsum(
+            cash_flow / (base**period)
+            for period, cash_flow in enumerate(cash_flows, start=1)
+        )
+    except (ArithmeticError, OverflowError, ValueError):
+        return ScalarValue.error("#NUM!")
+    return _finite_number(value)
 
 
 def _finite_number(value: float) -> ScalarValue:

@@ -12,6 +12,7 @@ import {
 import FloatingAssistant from '../FloatingAssistant';
 import { FixedSensitivityDashboard } from '@/components/sensitivity/FixedSensitivityDashboard';
 import {
+  getCalculationSensitivityAnalysis,
   getCalculationReadiness,
   getCalculationRunOutputs,
   runCalculation,
@@ -48,11 +49,11 @@ import {
   orderFixedDashboardAssumptions,
   promoteFixedDashboardDriver,
   resolveFixedDashboardAnalysis,
-  resolveFixedDashboardCalculationMode,
   resolveFixedDashboardTwoWayUnavailableReason,
   resolveFixedDashboardViewModel,
 } from '@/lib/sensitivity-dashboard-view-model';
 import { buildSensitivityOutputView } from '@/lib/sensitivity-output-adapter';
+import { estimateSensitivityKpis } from '@/lib/sensitivity-output-adapter';
 
 const MAX_TORNADO_DRIVERS = 12;
 const SENSITIVITY_DEBOUNCE_MS = 400;
@@ -67,6 +68,7 @@ interface WorkbenchState {
   columnDriverKey: string | null;
   outputs: CalculationRunOutputsResponse | null;
   analysis: CalculationSensitivityResponse | null;
+  analysisOverridesByTarget: Record<string, string>;
 }
 
 type BootstrapWorkbenchResult = 'applied' | 'superseded' | 'failed';
@@ -87,7 +89,14 @@ const EMPTY_WORKBENCH: WorkbenchState = {
   columnDriverKey: null,
   outputs: null,
   analysis: null,
+  analysisOverridesByTarget: {},
 };
+
+interface PendingExactCalculation {
+  revision: number;
+  identity: ActiveIdentity;
+  workbench: WorkbenchState;
+}
 
 function isPercentage(
   unit: string | null,
@@ -121,6 +130,21 @@ function finiteDecimal(value: string): boolean {
   return value.trim() !== '' && Number.isFinite(Number(value));
 }
 
+function overridesEqual(
+  left: Readonly<Record<string, string>>,
+  right: Readonly<Record<string, string>>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  return (
+    leftKeys.length === Object.keys(right).length &&
+    leftKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(right, key) &&
+        Number(left[key]) === Number(right[key]),
+    )
+  );
+}
+
 function createWorkbenchDocumentRevision(): string {
   if (typeof window.crypto?.randomUUID === 'function') {
     return window.crypto.randomUUID();
@@ -151,6 +175,7 @@ export default function SensitivityPage() {
   const [assumptionsExpanded, setAssumptionsExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
+  const [analysisRefreshing, setAnalysisRefreshing] = useState(false);
   const [emptyReason, setEmptyReason] = useState<EmptyReason>(null);
   const [error, setError] = useState<Error | null>(null);
 
@@ -158,6 +183,9 @@ export default function SensitivityPage() {
   const storageReconciliationTimerRef =
     useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestRevisionRef = useRef(0);
+  const exactCalculationInFlightRef = useRef(false);
+  const pendingExactCalculationRef =
+    useRef<PendingExactCalculation | null>(null);
   const bootstrapRevisionRef = useRef(0);
   const activeIdentityRef = useRef<ActiveIdentity | null>(null);
   const workbenchSnapshotRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
@@ -168,6 +196,8 @@ export default function SensitivityPage() {
     activeIdentityRef.current = null;
     workbenchDocumentRevisionRef.current = null;
     setRecalculating(false);
+    setAnalysisRefreshing(false);
+    pendingExactCalculationRef.current = null;
     setError(
       new Error(
         'The persisted model or run selection changed. Refresh before editing this workbench.',
@@ -185,6 +215,7 @@ export default function SensitivityPage() {
     }
     setLoading(true);
     setRecalculating(false);
+    setAnalysisRefreshing(false);
     setError(null);
     setEmptyReason(null);
 
@@ -325,6 +356,25 @@ export default function SensitivityPage() {
         storedColumnDriverKey: null,
         maxDrivers: MAX_TORNADO_DRIVERS,
       });
+      let restoredAnalysis: CalculationSensitivityResponse | null = null;
+      if (storedDocument?.analysisId) {
+        try {
+          const candidate = await getCalculationSensitivityAnalysis(
+            storedDocument.analysisId,
+          );
+          if (
+            candidate.model_version_id === identity.modelVersionId &&
+            candidate.graph_version_id === identity.graphVersionId &&
+            candidate.comparison_baseline_run_id ===
+              restoredPersisted.baselineRunId &&
+            candidate.selected_output.output_id === selectedOutputId
+          ) {
+            restoredAnalysis = candidate;
+          }
+        } catch {
+          restoredAnalysis = null;
+        }
+      }
 
       const nextWorkbench: WorkbenchState = {
         assumptions,
@@ -334,7 +384,9 @@ export default function SensitivityPage() {
         rowDriverKey: null,
         columnDriverKey: null,
         outputs,
-        analysis: null,
+        analysis: restoredAnalysis,
+        analysisOverridesByTarget:
+          storedDocument?.analysisOverridesByTarget ?? {},
       };
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
         return 'superseded';
@@ -373,7 +425,7 @@ export default function SensitivityPage() {
     }
   }
 
-  function scheduleAnalysis(nextWorkbench: WorkbenchState) {
+  function scheduleExactCalculation(nextWorkbench: WorkbenchState) {
     const identity = activeIdentityRef.current;
     const persisted = readPersistedCalculationState(window.localStorage);
     const revision = ++requestRevisionRef.current;
@@ -383,15 +435,7 @@ export default function SensitivityPage() {
     }
     setError(null);
 
-    const calculationMode = resolveFixedDashboardCalculationMode(
-      nextWorkbench.selectedOutputId,
-      nextWorkbench.tornadoDriverKeys.length,
-    );
-    if (
-      identity === null ||
-      (calculationMode === 'sensitivity' &&
-        nextWorkbench.tornadoDriverKeys.length === 0)
-    ) {
+    if (identity === null) {
       setRecalculating(false);
       return;
     }
@@ -404,19 +448,49 @@ export default function SensitivityPage() {
       return;
     }
 
-    setRecalculating(true);
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
-      void executeAnalysis(
+      enqueueExactCalculation({
         revision,
         identity,
-        persisted,
-        nextWorkbench,
-      );
+        workbench: nextWorkbench,
+      });
     }, SENSITIVITY_DEBOUNCE_MS);
   }
 
-  async function executeAnalysis(
+  function enqueueExactCalculation(job: PendingExactCalculation) {
+    pendingExactCalculationRef.current = job;
+    if (!exactCalculationInFlightRef.current) {
+      void drainExactCalculationQueue();
+    }
+  }
+
+  async function drainExactCalculationQueue() {
+    const job = pendingExactCalculationRef.current;
+    if (job === null || exactCalculationInFlightRef.current) {
+      return;
+    }
+    pendingExactCalculationRef.current = null;
+    exactCalculationInFlightRef.current = true;
+    setRecalculating(true);
+    try {
+      await executeExactCalculation(
+        job.revision,
+        job.identity,
+        readPersistedCalculationState(window.localStorage),
+        job.workbench,
+      );
+    } finally {
+      exactCalculationInFlightRef.current = false;
+      if (pendingExactCalculationRef.current !== null) {
+        void drainExactCalculationQueue();
+      } else {
+        setRecalculating(false);
+      }
+    }
+  }
+
+  async function executeExactCalculation(
     revision: number,
     identity: ActiveIdentity,
     persisted: ReturnType<typeof readPersistedCalculationState>,
@@ -451,67 +525,25 @@ export default function SensitivityPage() {
         return;
       }
 
-      const calculationMode = resolveFixedDashboardCalculationMode(
-        requestWorkbench.selectedOutputId,
-        requestWorkbench.tornadoDriverKeys.length,
-      );
-      let analysis: CalculationSensitivityResponse | null = null;
-      let currentRunId: string;
-
-      if (calculationMode === 'sensitivity') {
-        const request = buildSensitivityRequest({
+      const calculation = await runCalculation(
+        identity.modelVersionId,
+        buildCanonicalOverrideCalculationRequest({
           graphVersionId: identity.graphVersionId,
-          outputId: requestWorkbench.selectedOutputId as string,
           assumptions: requestWorkbench.assumptions,
           overridesByTarget: requestWorkbench.overridesByTarget,
-          tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
-          rowDriverKey: null,
-          columnDriverKey: null,
-        });
-        if (request.drivers.length === 0) {
-          throw new Error(
-            'At least one non-zero tornado driver is required.',
-          );
-        }
-        analysis = await runCalculationSensitivity(
-          identity.modelVersionId,
-          request,
-        );
-        if (
-          !canApplySensitivityResponse(analysis, {
-            requestRevision: revision,
-            currentRevision: requestRevisionRef.current,
-            modelVersionId: identity.modelVersionId,
-            graphVersionId: identity.graphVersionId,
-            outputId: request.output_id,
-          }) ||
-          analysis.comparison_baseline_run_id !== persisted.baselineRunId ||
-          !stillCurrent()
-        ) {
-          return;
-        }
-        currentRunId = analysis.current_run_id;
-      } else {
-        const calculation = await runCalculation(
-          identity.modelVersionId,
-          buildCanonicalOverrideCalculationRequest({
-            graphVersionId: identity.graphVersionId,
-            assumptions: requestWorkbench.assumptions,
-            overridesByTarget: requestWorkbench.overridesByTarget,
-          }),
-        );
-        if (
-          !stillCurrent() ||
-          calculation.model_version_id !== identity.modelVersionId ||
-          calculation.graph_version_id !== identity.graphVersionId ||
-          !['completed', 'completed_with_warning'].includes(
-            calculation.status,
-          )
-        ) {
-          return;
-        }
-        currentRunId = calculation.calculation_run_id;
+        }),
+      );
+      if (
+        !stillCurrent() ||
+        calculation.model_version_id !== identity.modelVersionId ||
+        calculation.graph_version_id !== identity.graphVersionId ||
+        !['completed', 'completed_with_warning'].includes(
+          calculation.status,
+        )
+      ) {
+        return;
       }
+      const currentRunId = calculation.calculation_run_id;
       if (!guardedStorage.matchesCurrent()) {
         invalidatePersistedIdentity();
         return;
@@ -546,6 +578,9 @@ export default function SensitivityPage() {
         selectedOutputId: nextSelectedOutputId,
         rowDriverKey: null,
         columnDriverKey: null,
+        analysisId: requestWorkbench.analysis?.analysis_id ?? null,
+        analysisOverridesByTarget:
+          requestWorkbench.analysisOverridesByTarget,
       };
       const appliedWorkbench: WorkbenchState = {
         ...requestWorkbench,
@@ -553,7 +588,7 @@ export default function SensitivityPage() {
         rowDriverKey: null,
         columnDriverKey: null,
         analysis: resolveFixedDashboardAnalysis(
-          analysis,
+          requestWorkbench.analysis,
           nextSelectedOutputId,
         ),
         outputs,
@@ -637,12 +672,132 @@ export default function SensitivityPage() {
       setError(
         caught instanceof Error
           ? caught
-          : new Error('Sensitivity analysis failed.'),
+          : new Error('Current scenario calculation failed.'),
       );
-    } finally {
-      if (stillCurrent()) {
-        setRecalculating(false);
+    }
+  }
+
+  async function refreshSensitivityAnalysis() {
+    const identity = activeIdentityRef.current;
+    const requestWorkbench = workbenchSnapshotRef.current;
+    const persisted = readPersistedCalculationState(window.localStorage);
+    const currentRunId =
+      persisted.overrideRunId ?? persisted.baselineRunId;
+    if (
+      identity === null ||
+      currentRunId === null ||
+      requestWorkbench.selectedOutputId === null ||
+      requestWorkbench.tornadoDriverKeys.length === 0 ||
+      !overridesEqual(
+        requestWorkbench.overridesByTarget,
+        persistedWorkbenchRef.current.overridesByTarget,
+      ) ||
+      recalculating ||
+      exactCalculationInFlightRef.current ||
+      pendingExactCalculationRef.current !== null
+    ) {
+      return;
+    }
+    const revision = ++requestRevisionRef.current;
+    const stillCurrent = () =>
+      revision === requestRevisionRef.current &&
+      activeIdentityRef.current?.modelVersionId ===
+        identity.modelVersionId &&
+      activeIdentityRef.current.graphVersionId ===
+        identity.graphVersionId;
+    const guardedStorage = createGuardedSensitivityStorage(
+      window.localStorage,
+      persisted,
+      stillCurrent,
+    );
+    setAnalysisRefreshing(true);
+    setError(null);
+    try {
+      if (!guardedStorage.matchesCurrent()) {
+        invalidatePersistedIdentity();
+        return;
       }
+      const request = buildSensitivityRequest({
+        graphVersionId: identity.graphVersionId,
+        outputId: requestWorkbench.selectedOutputId,
+        assumptions: requestWorkbench.assumptions,
+        overridesByTarget: requestWorkbench.overridesByTarget,
+        tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
+        rowDriverKey: null,
+        columnDriverKey: null,
+      });
+      request.current_run_id = currentRunId;
+      const analysis = await runCalculationSensitivity(
+        identity.modelVersionId,
+        request,
+      );
+      if (
+        !canApplySensitivityResponse(analysis, {
+          requestRevision: revision,
+          currentRevision: requestRevisionRef.current,
+          modelVersionId: identity.modelVersionId,
+          graphVersionId: identity.graphVersionId,
+          outputId: request.output_id,
+        }) ||
+        analysis.current_run_id !== currentRunId ||
+        analysis.comparison_baseline_run_id !==
+          persisted.baselineRunId ||
+        !stillCurrent()
+      ) {
+        return;
+      }
+      const analysisOverridesByTarget = {
+        ...requestWorkbench.overridesByTarget,
+      };
+      const appliedWorkbench: WorkbenchState = {
+        ...requestWorkbench,
+        analysis,
+        analysisOverridesByTarget,
+      };
+      const persistence = await persistSensitivityWorkbenchState(
+        window.localStorage,
+        {
+          expectedIdentity: persisted,
+          expectedDocumentRevision:
+            workbenchDocumentRevisionRef.current,
+          nextDocumentRevision: createWorkbenchDocumentRevision(),
+          response: analysis,
+          document: {
+            modelVersionId: identity.modelVersionId,
+            graphVersionId: identity.graphVersionId,
+            overridesByTarget: requestWorkbench.overridesByTarget,
+            tornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
+            selectedOutputId: requestWorkbench.selectedOutputId,
+            rowDriverKey: null,
+            columnDriverKey: null,
+            analysisId: analysis.analysis_id ?? null,
+            analysisOverridesByTarget,
+          },
+          isCurrent: stillCurrent,
+        },
+      );
+      if (persistence.status !== 'persisted') {
+        if (persistence.status === 'conflict') {
+          await bootstrapWorkbench();
+        }
+        throw new Error(
+          'Sensitivity analysis completed, but its artifact could not be saved in this workbench.',
+        );
+      }
+      workbenchDocumentRevisionRef.current = persistence.revision;
+      persistedWorkbenchRef.current = appliedWorkbench;
+      workbenchSnapshotRef.current = appliedWorkbench;
+      setWorkbench(() => appliedWorkbench);
+    } catch (caught) {
+      if (stillCurrent()) {
+        setError(
+          caught instanceof Error
+            ? caught
+            : new Error('Sensitivity analysis failed.'),
+        );
+      }
+    } finally {
+      setAnalysisRefreshing(false);
     }
   }
 
@@ -654,7 +809,7 @@ export default function SensitivityPage() {
     );
     workbenchSnapshotRef.current = nextWorkbench;
     setWorkbench(() => nextWorkbench);
-    scheduleAnalysis(nextWorkbench);
+    scheduleExactCalculation(nextWorkbench);
   }
 
   useEffect(() => {
@@ -669,6 +824,7 @@ export default function SensitivityPage() {
         return;
       }
       requestRevisionRef.current += 1;
+      pendingExactCalculationRef.current = null;
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
@@ -677,6 +833,7 @@ export default function SensitivityPage() {
         clearTimeout(storageReconciliationTimerRef.current);
       }
       setRecalculating(false);
+      setAnalysisRefreshing(false);
       storageReconciliationTimerRef.current = setTimeout(() => {
         storageReconciliationTimerRef.current = null;
         void bootstrapWorkbench();
@@ -688,6 +845,7 @@ export default function SensitivityPage() {
       window.removeEventListener('storage', handleStorage);
       bootstrapRevisionRef.current += 1;
       requestRevisionRef.current += 1;
+      pendingExactCalculationRef.current = null;
       activeIdentityRef.current = null;
       workbenchDocumentRevisionRef.current = null;
       if (timerRef.current !== null) {
@@ -701,12 +859,45 @@ export default function SensitivityPage() {
     };
   }, []);
 
-  const outputView = useMemo(
+  const exactOutputView = useMemo(
     () =>
       workbench.outputs
         ? buildSensitivityOutputView(workbench.outputs)
         : null,
     [workbench.outputs],
+  );
+  const previewIsDirty = !overridesEqual(
+    workbench.overridesByTarget,
+    persistedWorkbenchRef.current.overridesByTarget,
+  );
+  const estimatedPreview = useMemo(
+    () =>
+      estimateSensitivityKpis({
+        kpis: exactOutputView?.kpis ?? [],
+        analysis: error === null && previewIsDirty
+          ? workbench.analysis
+          : null,
+        assumptions: workbench.assumptions,
+        analysisOverridesByTarget:
+          workbench.analysisOverridesByTarget,
+        previewOverridesByTarget: workbench.overridesByTarget,
+      }),
+    [
+      error,
+      exactOutputView,
+      previewIsDirty,
+      workbench.analysis,
+      workbench.analysisOverridesByTarget,
+      workbench.assumptions,
+      workbench.overridesByTarget,
+    ],
+  );
+  const outputView = useMemo(
+    () =>
+      exactOutputView === null
+        ? null
+        : { ...exactOutputView, kpis: estimatedPreview.kpis },
+    [estimatedPreview.kpis, exactOutputView],
   );
   const assumptionsByTarget = useMemo(
     () =>
@@ -770,6 +961,12 @@ export default function SensitivityPage() {
       ),
     [tornadoRows],
   );
+  const analysisStale =
+    workbench.analysis !== null &&
+    !overridesEqual(
+      workbench.analysisOverridesByTarget,
+      workbench.overridesByTarget,
+    );
 
   const formatAxisValue = useCallback(
     (targetKey: string, value: string): string => {
@@ -870,6 +1067,14 @@ export default function SensitivityPage() {
         matrix={matrix}
         expanded={assumptionsExpanded}
         recalculating={recalculating}
+        analysisRefreshing={analysisRefreshing}
+        analysisStale={analysisStale}
+        analysisRunDisabled={
+          previewIsDirty ||
+          workbench.selectedOutputId === null ||
+          workbench.tornadoDriverKeys.length === 0
+        }
+        estimatedOutputIds={estimatedPreview.estimatedOutputIds}
         errorMessage={error?.message ?? null}
         controlsDisabled={activeIdentityRef.current === null}
         calculationRunId={outputView.calculationRunId}
@@ -912,6 +1117,7 @@ export default function SensitivityPage() {
           }))
         }
         onRefresh={() => void bootstrapWorkbench()}
+        onRunAnalysis={() => void refreshSensitivityAnalysis()}
         formatAxisValue={formatAxisValue}
         formatAnalyzedOutputValue={formatAnalyzedOutputValue}
         formatAnalyzedOutputDelta={formatAnalyzedOutputDelta}

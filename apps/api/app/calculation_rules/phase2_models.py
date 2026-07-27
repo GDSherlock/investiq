@@ -412,6 +412,81 @@ class CalculationRunRecord(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class CalculationSensitivityAnalysisRecord(Base):
+    __tablename__ = "calculation_sensitivity_analyses"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_hash",
+            name="uq_calculation_sensitivity_analyses_request_hash",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'completed', 'failed')",
+            name="ck_calculation_sensitivity_analyses_status",
+        ),
+        CheckConstraint(
+            "length(request_hash) = 64",
+            name="ck_calculation_sensitivity_analyses_request_hash",
+        ),
+        Index(
+            "ix_calculation_sensitivity_model_created",
+            "model_version_id",
+            "created_at",
+        ),
+    )
+
+    id = Column(Uuid(as_uuid=False), primary_key=True)
+    model_version_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey(
+            "model_versions.id",
+            ondelete="RESTRICT",
+            name="fk_calculation_sensitivity_model",
+        ),
+        nullable=False,
+    )
+    graph_version_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey(
+            "calculation_graph_versions.id",
+            ondelete="RESTRICT",
+            name="fk_calculation_sensitivity_graph",
+        ),
+        nullable=False,
+    )
+    comparison_baseline_run_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey(
+            "calculation_runs.id",
+            ondelete="RESTRICT",
+            name="fk_calculation_sensitivity_baseline_run",
+        ),
+        nullable=False,
+    )
+    current_run_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey(
+            "calculation_runs.id",
+            ondelete="RESTRICT",
+            name="fk_calculation_sensitivity_current_run",
+        ),
+        nullable=False,
+    )
+    compiler_version = Column(String(64), nullable=False)
+    engine_version = Column(String(64), nullable=False)
+    function_registry_version = Column(String(64), nullable=False)
+    semantics_profile = Column(String(64), nullable=False)
+    request_hash = Column(CHAR(64), nullable=False)
+    request_json = Column(JSON, nullable=False)
+    response_json = Column(JSON, nullable=True)
+    status = Column(String(32), nullable=False)
+    case_count = Column(Integer, nullable=False, default=0)
+    duration_ms = Column(Integer, nullable=True)
+    error_code = Column(String(100), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class CalculationRunValueRecord(Base):
     __tablename__ = "calculation_run_values"
     __table_args__ = (

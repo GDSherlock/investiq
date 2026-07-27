@@ -150,6 +150,22 @@ def analyze_calculation_sensitivity(
         _translate_error(error)
 
 
+@router.get(
+    "/calculation-sensitivity-analyses/{analysis_id}",
+    response_model=CalculationSensitivityResponse,
+)
+def get_calculation_sensitivity_analysis(
+    analysis_id: UUID,
+    service: CalculationSensitivityService = Depends(
+        get_calculation_sensitivity_service
+    ),
+) -> CalculationSensitivityResponse:
+    try:
+        return service.get_analysis(str(analysis_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
 @router.post(
     "/models/{model_version_id}/calculations",
     response_model=CalculationRunResponse,

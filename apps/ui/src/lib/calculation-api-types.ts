@@ -261,6 +261,7 @@ export interface CalculationSensitivityTwoWayRequest {
 export interface CalculationSensitivityRequest {
   graph_version_id: string;
   output_id: string;
+  current_run_id?: string | null;
   two_way_mode?: 'explicit' | 'top_impact';
   current_overrides: CalculationSensitivityOverrideRequest[];
   drivers: CalculationSensitivityDriverRequest[];
@@ -281,10 +282,22 @@ export interface CalculationSensitivitySelectedOutput {
   current: CalculationProjectedOutputValue;
 }
 
+export interface CalculationSensitivityCaseOutput {
+  output_id: string;
+  business_role: string;
+  label: string;
+  unit: string | null;
+  scenario: string | null;
+  number_format: string | null;
+  value: CalculationProjectedOutputValue;
+}
+
 export interface CalculationSensitivityCase {
+  case_id?: string | null;
   input_value: CalculationNumberValue;
-  calculation_run_id: string;
+  calculation_run_id: string | null;
   output: CalculationProjectedOutputValue;
+  outputs?: CalculationSensitivityCaseOutput[];
   warnings: string[];
 }
 
@@ -297,10 +310,12 @@ export interface CalculationSensitivityDriverResult {
 }
 
 export interface CalculationSensitivityTwoWayCell {
+  case_id?: string | null;
   row_value: CalculationNumberValue;
   column_value: CalculationNumberValue;
-  calculation_run_id: string;
+  calculation_run_id: string | null;
   output: CalculationProjectedOutputValue;
+  outputs?: CalculationSensitivityCaseOutput[];
   warnings: string[];
 }
 
@@ -311,11 +326,15 @@ export interface CalculationSensitivityTwoWayResult {
 }
 
 export interface CalculationSensitivityResponse {
+  analysis_id?: string | null;
+  request_hash?: string | null;
+  case_count?: number;
   model_version_id: string;
   graph_version_id: string;
   comparison_baseline_run_id: string;
   current_run_id: string;
   selected_output: CalculationSensitivitySelectedOutput;
+  current_outputs?: CalculationSensitivityCaseOutput[];
   drivers: CalculationSensitivityDriverResult[];
   two_way: CalculationSensitivityTwoWayResult | null;
   warnings: string[];

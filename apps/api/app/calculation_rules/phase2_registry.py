@@ -26,6 +26,8 @@ def _phase2_definition(
     name: str,
     minimum_arguments: int,
     maximum_arguments: int,
+    *,
+    lazy: bool = False,
 ) -> FunctionDefinition:
     return FunctionDefinition(
         name=name,
@@ -33,7 +35,7 @@ def _phase2_definition(
         maximum_arguments=maximum_arguments,
         accepted_value_kinds=_KINDS,
         accepts_ranges=True,
-        lazy=False,
+        lazy=lazy,
         volatile=False,
         implementation_version=f"{name.lower()}-v2",
         conformance_version=PHASE2_SEMANTICS_PROFILE,
@@ -46,5 +48,10 @@ PHASE2_FUNCTION_REGISTRY: Mapping[str, FunctionDefinition] = MappingProxyType(
         "COUNT": _phase2_definition("COUNT", 0, 255),
         "COUNTA": _phase2_definition("COUNTA", 0, 255),
         "COUNTIF": _phase2_definition("COUNTIF", 2, 2),
+        "IFERROR": _phase2_definition("IFERROR", 2, 2, lazy=True),
+        "AND": _phase2_definition("AND", 1, 255),
+        "MINIFS": _phase2_definition("MINIFS", 3, 253),
+        "IRR": _phase2_definition("IRR", 1, 2),
+        "NPV": _phase2_definition("NPV", 2, 255),
     }
 )

@@ -18,6 +18,7 @@ from .phase2_models import (
     CalculationRuleMemberRecord,
     CalculationRunRecord,
     CalculationRunValueRecord,
+    CalculationSensitivityAnalysisRecord,
     GroupedCalculationRuleRecord,
 )
 from .phase2_types import Phase2CalculationConfiguration, canonical_hash
@@ -213,6 +214,25 @@ class Phase2CalculationRepository:
                 )
         self._session.flush()
 
+    def has_groups(
+        self,
+        model_version_id: str,
+        graph_version_id: str,
+    ) -> bool:
+        return (
+            self._session.scalar(
+                select(GroupedCalculationRuleRecord.id)
+                .where(
+                    GroupedCalculationRuleRecord.model_version_id
+                    == model_version_id,
+                    GroupedCalculationRuleRecord.graph_version_id
+                    == graph_version_id,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+
     def find_matching_graph(
         self,
         workbook_version_id: str,
@@ -279,6 +299,136 @@ class Phase2CalculationRepository:
         if graph is None:
             raise ValueError("Calculation run graph metadata was not found")
         return PersistedCalculationRunBundle(run=run, graph=graph)
+
+    def load_sensitivity_analysis(
+        self,
+        analysis_id: str,
+    ) -> CalculationSensitivityAnalysisRecord | None:
+        return self._session.get(
+            CalculationSensitivityAnalysisRecord,
+            analysis_id,
+        )
+
+    def find_completed_sensitivity_analysis(
+        self,
+        request_hash: str,
+    ) -> CalculationSensitivityAnalysisRecord | None:
+        row = self._session.scalar(
+            select(CalculationSensitivityAnalysisRecord)
+            .where(
+                CalculationSensitivityAnalysisRecord.request_hash
+                == request_hash,
+            )
+            .limit(1)
+        )
+        return row if row is not None and row.status == "completed" else None
+
+    def save_completed_sensitivity_analysis(
+        self,
+        *,
+        analysis_id: str,
+        model_version_id: str,
+        graph_version_id: str,
+        baseline_run_id: str,
+        current_run_id: str,
+        configuration: Phase2CalculationConfiguration,
+        request_hash: str,
+        request_payload: Mapping[str, Any],
+        response_payload: Mapping[str, Any],
+        case_count: int,
+        duration_ms: int,
+    ) -> CalculationSensitivityAnalysisRecord:
+        existing = self._session.scalar(
+            select(CalculationSensitivityAnalysisRecord)
+            .where(
+                CalculationSensitivityAnalysisRecord.request_hash
+                == request_hash
+            )
+            .limit(1)
+        )
+        if existing is not None:
+            row = existing
+        else:
+            row = CalculationSensitivityAnalysisRecord(
+                id=analysis_id,
+                model_version_id=model_version_id,
+                graph_version_id=graph_version_id,
+                comparison_baseline_run_id=baseline_run_id,
+                current_run_id=current_run_id,
+                compiler_version=configuration.compiler_version,
+                engine_version=configuration.engine_version,
+                function_registry_version=(
+                    configuration.function_registry_version
+                ),
+                semantics_profile=configuration.semantics_profile,
+                request_hash=request_hash,
+                request_json=dict(request_payload),
+                status="running",
+                case_count=0,
+            )
+            self._session.add(row)
+        row.response_json = dict(response_payload)
+        row.status = "completed"
+        row.case_count = case_count
+        row.duration_ms = duration_ms
+        row.error_code = None
+        row.error_message = None
+        row.completed_at = utcnow()
+        self._session.flush()
+        return row
+
+    def save_failed_sensitivity_analysis(
+        self,
+        *,
+        analysis_id: str,
+        model_version_id: str,
+        graph_version_id: str,
+        baseline_run_id: str,
+        current_run_id: str,
+        configuration: Phase2CalculationConfiguration,
+        request_hash: str,
+        request_payload: Mapping[str, Any],
+        error_code: str,
+        error_message: str,
+        duration_ms: int,
+    ) -> CalculationSensitivityAnalysisRecord:
+        row = self._session.scalar(
+            select(CalculationSensitivityAnalysisRecord)
+            .where(
+                CalculationSensitivityAnalysisRecord.request_hash
+                == request_hash
+            )
+            .limit(1)
+        )
+        if row is not None and row.status == "completed":
+            return row
+        if row is None:
+            row = CalculationSensitivityAnalysisRecord(
+                id=analysis_id,
+                model_version_id=model_version_id,
+                graph_version_id=graph_version_id,
+                comparison_baseline_run_id=baseline_run_id,
+                current_run_id=current_run_id,
+                compiler_version=configuration.compiler_version,
+                engine_version=configuration.engine_version,
+                function_registry_version=(
+                    configuration.function_registry_version
+                ),
+                semantics_profile=configuration.semantics_profile,
+                request_hash=request_hash,
+                request_json=dict(request_payload),
+                status="running",
+                case_count=0,
+            )
+            self._session.add(row)
+        row.status = "failed"
+        row.response_json = None
+        row.error_code = error_code
+        row.error_message = error_message
+        row.duration_ms = duration_ms
+        row.completed_at = utcnow()
+        self._session.flush()
+        return row
 
     def start_run(
         self,

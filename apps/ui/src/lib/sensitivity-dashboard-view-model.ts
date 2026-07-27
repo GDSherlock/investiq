@@ -134,6 +134,7 @@ function resolveSlot(
         [
           kpi.current.unavailableReason,
           kpi.current.executionStatus,
+          kpi.current.engineErrorCode,
           kpi.current.validationStatus,
           ...kpi.current.warnings,
           kpi.supportStatus === 'supported' ? null : kpi.supportStatus,

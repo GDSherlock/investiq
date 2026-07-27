@@ -2659,6 +2659,29 @@ test('sensitivity request uses canonical targets, changed overrides, driver cap,
   assert.doesNotMatch(JSON.stringify(request), /sheet_name|cell_address|cell:/);
 });
 
+test('standard auto-analysis request keeps eight ordered drivers in top-impact mode', () => {
+  const assumptions = Array.from({ length: 8 }, (_, index) =>
+    numericAssumption(`irr-driver-${index + 1}`, '100'),
+  );
+
+  const request = buildSensitivityRequest({
+    graphVersionId: 'graph-version',
+    outputId: 'project-irr-output',
+    assumptions,
+    overridesByTarget: {},
+    tornadoDriverKeys: assumptions.map((assumption) => assumption.targetKey),
+    rowDriverKey: null,
+    columnDriverKey: null,
+  });
+
+  assert.equal(request.two_way_mode, 'top_impact');
+  assert.equal(request.two_way, null);
+  assert.deepEqual(
+    request.drivers.map((driver) => driver.target),
+    assumptions.map((assumption) => assumption.target),
+  );
+});
+
 test('one-driver request uses explicit mode and omits axes regardless of stored selections', () => {
   const assumptions = [
     numericAssumption('zero', '0'),

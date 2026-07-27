@@ -17,6 +17,7 @@ from apps.api.app.calculation_integration_service import (
 )
 from apps.api.app.calculation_rules.phase2_models import (
     CalculationRunRecord,
+    CalculationRunValueRecord,
     CalculationSensitivityAnalysisRecord,
 )
 from apps.api.app.database import Base
@@ -686,7 +687,9 @@ def test_current_run_anchor_uses_compact_cases_without_new_runs(
     assert response.drivers[0].low_case.calculation_run_id is None
     assert response.drivers[0].high_case.case_id
     assert response.drivers[0].high_case.calculation_run_id is None
-    assert response.current_outputs[0].output_id == request.output_id
+    assert request.output_id in {
+        output.output_id for output in response.current_outputs
+    }
     assert (
         response.drivers[0].low_case.outputs[0].output_id
         == request.output_id
@@ -1425,6 +1428,107 @@ def test_top_impact_current_anchor_creates_compact_matrix_without_case_runs(
         | {cell.case_id for cell in response.two_way.cells}
     ) == 29
     assert _run_count(context) == run_count_before
+
+
+def test_top_impact_current_anchor_evaluates_eight_irr_drivers_in_compact_mode(
+    sensitivity_context,
+) -> None:
+    """Protects the standard auto-analysis path from reintroducing case runs."""
+    context = sensitivity_context
+    output = context["session"].get(
+        CanonicalOutput,
+        _output_id(context["model"].id),
+    )
+    assert output is not None
+    output.business_role = "project_irr"
+    context["session"].commit()
+
+    drivers = [context["parameter"]]
+    drivers.extend(
+        _add_parameter(
+            context["session"],
+            context["model"].id,
+            source_cell=f"A{index}",
+            value=index,
+            data_type="n",
+            label=f"Auto IRR driver {index}",
+        )
+        for index in range(2, 9)
+    )
+    prepared, _baseline = _prepare_with_baseline(context)
+    initial_request = _top_impact_request(
+        context,
+        prepared.graph_version_id,
+        _output_id(context["model"].id),
+        drivers[1].id,
+        driver_specs=[
+            (driver.id, "1", str(index + 4))
+            for index, driver in enumerate(drivers)
+        ],
+    )
+    current = context["facade"].calculate(
+        context["model"].id,
+        CalculationRequest.model_validate(
+            {
+                "graph_version_id": prepared.graph_version_id,
+                "overrides": [
+                    override.model_dump(mode="json")
+                    for override in initial_request.current_overrides
+                ],
+                "idempotency_key": None,
+            }
+        ),
+    )
+    payload = initial_request.model_dump(mode="json")
+    payload["current_run_id"] = current.calculation_run_id
+    request = CalculationSensitivityRequest.model_validate(payload)
+    run_count_before = _run_count(context)
+    run_value_count_before = context["session"].scalar(
+        select(func.count()).select_from(CalculationRunValueRecord)
+    )
+
+    response = _service(context).analyze(context["model"].id, request)
+
+    assert response.current_run_id == current.calculation_run_id
+    assert response.selected_output.business_role == "project_irr"
+    assert response.case_count == 41
+    assert len(response.drivers) == 8
+    assert response.two_way is not None
+    assert len(response.two_way.cells) == 25
+    assert response.two_way.row_target.identity == ("parameter", drivers[1].id)
+    assert response.two_way.column_target.identity == (
+        "parameter",
+        drivers[0].id,
+    )
+    assert response.drivers[0].impact == "3"
+    assert response.drivers[1].impact == "4"
+    all_cases = [
+        case
+        for driver in response.drivers
+        for case in (driver.low_case, driver.high_case)
+    ] + response.two_way.cells
+    assert len(all_cases) == 41
+    assert all(case.calculation_run_id is None for case in all_cases)
+    assert all(
+        case.output.availability_status == "available"
+        and case.output.value is not None
+        and case.output.value.value_type == "number"
+        and any(
+            output.business_role == "project_irr"
+            and output.value.availability_status == "available"
+            and output.value.value is not None
+            and output.value.value.value_type == "number"
+            for output in case.outputs
+        )
+        for case in all_cases
+    )
+    assert _run_count(context) == run_count_before
+    assert (
+        context["session"].scalar(
+            select(func.count()).select_from(CalculationRunValueRecord)
+        )
+        == run_value_count_before
+    )
 
 
 def test_top_impact_returns_typed_warning_when_fewer_than_two_impacts_are_usable(

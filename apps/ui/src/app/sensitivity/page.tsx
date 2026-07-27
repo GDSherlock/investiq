@@ -61,10 +61,12 @@ import { buildSensitivityOutputView } from '@/lib/sensitivity-output-adapter';
 import { estimateSensitivityKpis } from '@/lib/sensitivity-output-adapter';
 import {
   buildInitialSensitivityActionKey,
+  canJoinInitialSensitivityAction,
   initialSensitivityAnalysisStatusLabel,
   resolveInitialSensitivityAnalysis,
   shouldStartInitialSensitivityAction,
   type InitialSensitivityAnalysisAction,
+  type InitialSensitivityActionInFlight,
 } from '@/lib/sensitivity-auto-analysis';
 
 const SENSITIVITY_DEBOUNCE_MS = 400;
@@ -211,8 +213,10 @@ export default function SensitivityPage() {
   const workbenchSnapshotRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
   const persistedWorkbenchRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
   const workbenchDocumentRevisionRef = useRef<string | null>(null);
-  const initialExactRunInFlightRef = useRef<string | null>(null);
-  const initialAnalysisInFlightRef = useRef<string | null>(null);
+  const initialExactRunInFlightRef =
+    useRef<InitialSensitivityActionInFlight | null>(null);
+  const initialAnalysisInFlightRef =
+    useRef<InitialSensitivityActionInFlight | null>(null);
 
   function invalidatePersistedIdentity() {
     activeIdentityRef.current = null;
@@ -231,6 +235,25 @@ export default function SensitivityPage() {
   }
 
   async function bootstrapWorkbench(): Promise<BootstrapWorkbenchResult> {
+    const persisted = readPersistedCalculationState(window.localStorage);
+    if (
+      persisted.modelVersionId !== null &&
+      persisted.graphVersionId !== null &&
+      (canJoinInitialSensitivityAction(initialExactRunInFlightRef.current, {
+        modelVersionId: persisted.modelVersionId,
+        graphVersionId: persisted.graphVersionId,
+        baselineRunId: persisted.baselineRunId,
+        currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
+      }) ||
+        canJoinInitialSensitivityAction(initialAnalysisInFlightRef.current, {
+          modelVersionId: persisted.modelVersionId,
+          graphVersionId: persisted.graphVersionId,
+          baselineRunId: persisted.baselineRunId,
+          currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
+        }))
+    ) {
+      return 'applied';
+    }
     const bootstrapRevision = ++bootstrapRevisionRef.current;
     const previousActiveIdentity = activeIdentityRef.current;
     requestRevisionRef.current += 1;
@@ -244,7 +267,6 @@ export default function SensitivityPage() {
     setError(null);
     setEmptyReason(null);
 
-    const persisted = readPersistedCalculationState(window.localStorage);
     const canRetainPreviousIdentity = canRetainSensitivityIdentity(
       previousActiveIdentity,
       persisted,
@@ -566,13 +588,19 @@ export default function SensitivityPage() {
     });
     if (
       !shouldStartInitialSensitivityAction(
-        initialAnalysisInFlightRef.current,
+        initialAnalysisInFlightRef.current?.actionKey ?? null,
         actionKey,
       )
     ) {
       return;
     }
-    initialAnalysisInFlightRef.current = actionKey;
+    initialAnalysisInFlightRef.current = {
+      actionKey,
+      modelVersionId: identity.modelVersionId,
+      graphVersionId: identity.graphVersionId,
+      baselineRunId: persisted.baselineRunId,
+      currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
+    };
     setInitialAnalysisAction('build');
     try {
       const completed = await refreshSensitivityAnalysis(actionKey);
@@ -584,7 +612,7 @@ export default function SensitivityPage() {
         setInitialAnalysisAction(completed ? 'ready' : 'error');
       }
     } finally {
-      if (initialAnalysisInFlightRef.current === actionKey) {
+      if (initialAnalysisInFlightRef.current?.actionKey === actionKey) {
         initialAnalysisInFlightRef.current = null;
       }
     }
@@ -595,18 +623,24 @@ export default function SensitivityPage() {
     identity: ActiveIdentity,
     workbench: WorkbenchState,
   ) {
-    const actionKey = `${identity.modelVersionId}:${identity.graphVersionId}`;
-    if (initialExactRunInFlightRef.current === actionKey) {
+    const actionKey = `initial-exact:${identity.modelVersionId}:${identity.graphVersionId}`;
+    if (initialExactRunInFlightRef.current?.actionKey === actionKey) {
       return;
     }
-    initialExactRunInFlightRef.current = actionKey;
+    initialExactRunInFlightRef.current = {
+      actionKey,
+      modelVersionId: identity.modelVersionId,
+      graphVersionId: identity.graphVersionId,
+      baselineRunId: null,
+      currentRunId: null,
+    };
     const revision = ++requestRevisionRef.current;
     enqueueExactCalculation({
       revision,
       identity,
       workbench,
       onSettled: (completed) => {
-        if (initialExactRunInFlightRef.current === actionKey) {
+        if (initialExactRunInFlightRef.current?.actionKey === actionKey) {
           initialExactRunInFlightRef.current = null;
         }
         if (completed) {
@@ -903,7 +937,7 @@ export default function SensitivityPage() {
       exactCalculationInFlightRef.current ||
       pendingExactCalculationRef.current !== null ||
       (initialAnalysisInFlightRef.current !== null &&
-        initialAnalysisInFlightRef.current !== automaticActionKey)
+        initialAnalysisInFlightRef.current.actionKey !== automaticActionKey)
     ) {
       return false;
     }

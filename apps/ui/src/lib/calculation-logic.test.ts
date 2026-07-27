@@ -93,6 +93,7 @@ import {
 } from './sensitivity-analysis';
 import {
   buildInitialSensitivityActionKey,
+  canJoinInitialSensitivityAction,
   resolveInitialSensitivityAnalysis,
   shouldStartInitialSensitivityAction,
   type InitialSensitivityAnalysisInput,
@@ -3492,6 +3493,47 @@ test('initial analysis action keys single-flight an automatic fallback without b
   );
 });
 
+test('same-key bootstrap joins interrupted exact and analysis actions without revoking their response guards', () => {
+  const identity = {
+    modelVersionId: 'model-version',
+    graphVersionId: 'graph-version',
+    baselineRunId: 'baseline-run',
+    currentRunId: 'override-run',
+  };
+  assert.equal(
+    canJoinInitialSensitivityAction(
+      { ...identity, actionKey: 'analysis-key' },
+      identity,
+    ),
+    true,
+  );
+  assert.equal(
+    canJoinInitialSensitivityAction(
+      { ...identity, actionKey: 'analysis-key' },
+      { ...identity, currentRunId: 'newer-run' },
+    ),
+    false,
+  );
+  assert.equal(
+    canJoinInitialSensitivityAction(
+      {
+        modelVersionId: 'model-version',
+        graphVersionId: 'graph-version',
+        baselineRunId: null,
+        currentRunId: null,
+        actionKey: 'exact-key',
+      },
+      {
+        modelVersionId: 'model-version',
+        graphVersionId: 'graph-version',
+        baselineRunId: null,
+        currentRunId: null,
+      },
+    ),
+    true,
+  );
+});
+
 test('transient refresh may retain only the matching active model and graph identity', () => {
   const persisted = {
     workbookVersionId: null,
@@ -3937,6 +3979,7 @@ test('initial sensitivity bootstrap GET-restores compatible artifacts and builds
   assert.match(pageSource, /analysisOverridesByTarget/);
   assert.match(pageSource, /initialSensitivityAnalysisStatusLabel/);
   assert.match(pageSource, /initialAnalysisInFlightRef/);
+  assert.match(pageSource, /canJoinInitialSensitivityAction/);
   assert.match(autoAnalysisSource, /Waiting for exact current scenario…/);
   assert.match(autoAnalysisSource, /Building Tornado and 5×5 matrix…/);
   assert.match(

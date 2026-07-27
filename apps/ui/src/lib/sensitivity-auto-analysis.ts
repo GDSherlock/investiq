@@ -29,6 +29,18 @@ export type InitialSensitivityAnalysisActionKeyInput = Omit<
   'artifact'
 >;
 
+export interface InitialSensitivityActionIdentity {
+  modelVersionId: string;
+  graphVersionId: string;
+  baselineRunId: string | null;
+  currentRunId: string | null;
+}
+
+export interface InitialSensitivityActionInFlight
+  extends InitialSensitivityActionIdentity {
+  actionKey: string;
+}
+
 function decimalMapsEqual(
   left: Readonly<Record<string, string>>,
   right: Readonly<Record<string, string>>,
@@ -111,6 +123,19 @@ export function shouldStartInitialSensitivityAction(
   actionKey: string,
 ): boolean {
   return inFlightActionKey !== actionKey;
+}
+
+export function canJoinInitialSensitivityAction(
+  inFlight: InitialSensitivityActionInFlight | null,
+  current: InitialSensitivityActionIdentity,
+): boolean {
+  return (
+    inFlight !== null &&
+    inFlight.modelVersionId === current.modelVersionId &&
+    inFlight.graphVersionId === current.graphVersionId &&
+    inFlight.baselineRunId === current.baselineRunId &&
+    inFlight.currentRunId === current.currentRunId
+  );
 }
 
 export function initialSensitivityAnalysisStatusLabel(

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
 
 import { FixedSensitivityDashboard } from '../components/sensitivity/FixedSensitivityDashboard';
@@ -1593,8 +1593,9 @@ test('expanded assumption sliders keep the eight-row card height and scroll the 
       category: 'Operating assumptions',
     }),
   );
-  const renderDashboard = (expanded: boolean) =>
-    createElement(FixedSensitivityDashboard, {
+  function SensitivityDashboardHarness() {
+    const [expanded, setExpanded] = useState(false);
+    return createElement(FixedSensitivityDashboard, {
       dashboard: resolveFixedDashboardViewModel([]),
       assumptions,
       overridesByTarget: {},
@@ -1608,7 +1609,7 @@ test('expanded assumption sliders keep the eight-row card height and scroll the 
       analysisOutputLabel: 'IRR',
       analysisUnavailableReason: null,
       twoWayUnavailableReason: null,
-      onToggleExpanded: () => {},
+      onToggleExpanded: () => setExpanded((current) => !current),
       onValueChange: () => {},
       onReset: () => {},
       onResetAll: () => {},
@@ -1618,11 +1619,12 @@ test('expanded assumption sliders keep the eight-row card height and scroll the 
         value === null ? 'Unavailable' : String(value),
       formatAnalyzedOutputDelta: (value: number) => String(value),
     });
+  }
   const scrollRegionElement = { scrollTop: 0 };
   let renderer!: TestRenderer.ReactTestRenderer;
 
   act(() => {
-    renderer = TestRenderer.create(renderDashboard(false), {
+    renderer = TestRenderer.create(createElement(SensitivityDashboardHarness), {
       createNodeMock: (element) =>
         element.props['data-testid'] ===
         'fixed-sensitivity-assumption-scroll-region'
@@ -1649,7 +1651,9 @@ test('expanded assumption sliders keep the eight-row card height and scroll the 
   );
 
   act(() => {
-    renderer.update(renderDashboard(true));
+    renderer.root
+      .findByProps({ 'aria-label': 'Show all 10 assumptions' })
+      .props.onClick();
   });
   const expandedCard = renderer.root.findByProps({
     'data-testid': 'fixed-sensitivity-assumption-card',
@@ -1675,7 +1679,9 @@ test('expanded assumption sliders keep the eight-row card height and scroll the 
   scrollRegionElement.scrollTop = 240;
 
   act(() => {
-    renderer.update(renderDashboard(false));
+    renderer.root
+      .findByProps({ 'aria-label': 'Show first 8 assumptions' })
+      .props.onClick();
   });
   assert.equal(
     scrollRegionElement.scrollTop,

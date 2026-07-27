@@ -18,6 +18,7 @@
     "src/lib/calculation-storage.ts",
     "src/lib/calculation-storage-transaction.test.ts",
     "src/lib/calculation-value-utils.ts",
-    "src/lib/calculation-logic.test.ts"
+    "src/lib/calculation-logic.test.ts",
+    "src/lib/sensitivity-tornado-geometry.test.ts"
   ]
 }

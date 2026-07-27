@@ -1,16 +1,6 @@
 'use client';
 
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { buildSensitivityTornadoGeometry } from '../../lib/sensitivity-tornado-geometry';
 
 import type { SensitivityTornadoRow } from '@/lib/sensitivity-analysis';
 
@@ -19,6 +9,18 @@ interface SensitivityTornadoChartProps {
   outputLabel: string;
   formatValue: (value: number | null) => string;
   formatDelta: (value: number) => string;
+}
+
+const CHART_WIDTH = 760;
+const LABEL_WIDTH = 190;
+const PLOT_RIGHT = 28;
+const ROW_HEIGHT = 54;
+const BAR_HEIGHT = 14;
+const TOP_PADDING = 28;
+const BOTTOM_PADDING = 42;
+
+function diamondPoints(x: number, y: number, radius = 5): string {
+  return `${x},${y - radius} ${x + radius},${y} ${x},${y + radius} ${x - radius},${y}`;
 }
 
 export function SensitivityTornadoChart({
@@ -42,69 +44,161 @@ export function SensitivityTornadoChart({
     );
   }
 
+  const plotWidth = CHART_WIDTH - LABEL_WIDTH - PLOT_RIGHT;
+  const geometry = buildSensitivityTornadoGeometry({
+    width: plotWidth,
+    rowHeight: ROW_HEIGHT,
+    barHeight: BAR_HEIGHT,
+    rows: chartRows.map((row) => ({
+      targetKey: row.targetKey,
+      lowDelta: row.lowDelta,
+      highDelta: row.highDelta,
+    })),
+  });
+  const chartHeight = Math.max(320, chartRows.length * ROW_HEIGHT + TOP_PADDING + BOTTOM_PADDING);
+  const zeroX = LABEL_WIDTH + geometry.zeroX;
+
   return (
     <div>
       {chartRows.length > 0 ? (
         <div className="overflow-x-auto">
           <div
             className="min-w-[42rem] sm:min-w-0"
-            style={{
-              height: `${Math.max(320, chartRows.length * 54 + 96)}px`,
-            }}
+            style={{ height: `${chartHeight}px` }}
             role="img"
             aria-label={`${outputLabel} sensitivity deltas by canonical driver`}
           >
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={chartRows}
-                layout="vertical"
-                margin={{ top: 12, right: 28, bottom: 18, left: 24 }}
-              >
-                <CartesianGrid
-                  stroke="rgba(148,163,184,0.12)"
-                  horizontal={false}
-                />
-                <XAxis
-                  type="number"
-                  stroke="#94a3b8"
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={formatDelta}
-                />
-                <YAxis
-                  type="category"
-                  dataKey="label"
-                  width={180}
-                  stroke="#94a3b8"
-                  tick={{ fontSize: 11 }}
-                />
-                <Tooltip
-                  formatter={(value: number, name: string) => [
-                    formatDelta(value),
-                    name,
-                  ]}
-                  contentStyle={{
-                    background: '#111827',
-                    border: '1px solid #334155',
-                    borderRadius: 6,
-                  }}
-                  labelStyle={{ color: '#e2e8f0' }}
-                />
-                <Legend />
-                <ReferenceLine x={0} stroke="#cbd5e1" strokeOpacity={0.5} />
-                <Bar
-                  dataKey="lowDelta"
-                  name="Low case Δ"
-                  fill="#f87171"
-                  radius={[3, 3, 3, 3]}
-                />
-                <Bar
-                  dataKey="highDelta"
-                  name="High case Δ"
-                  fill="#4ade80"
-                  radius={[3, 3, 3, 3]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+            <svg
+              viewBox={`0 0 ${CHART_WIDTH} ${chartHeight}`}
+              width="100%"
+              height="100%"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <line
+                x1={zeroX}
+                x2={zeroX}
+                y1={TOP_PADDING - 8}
+                y2={chartHeight - BOTTOM_PADDING + 4}
+                stroke="#cbd5e1"
+                strokeOpacity="0.5"
+              />
+              {geometry.rows.map((geometryRow, index) => {
+                const row = chartRows[index];
+                const yOffset = TOP_PADDING;
+                const low = geometryRow.low;
+                const high = geometryRow.high;
+                const labelY = yOffset + low.yCenter + 4;
+                const lowBarX = low.barX === null ? null : LABEL_WIDTH + low.barX;
+                const highBarX = high.barX === null ? null : LABEL_WIDTH + high.barX;
+                const lowMarkerX = low.markerX === null ? null : LABEL_WIDTH + low.markerX;
+                const highMarkerX = high.markerX === null ? null : LABEL_WIDTH + high.markerX;
+
+                return (
+                  <g key={geometryRow.targetKey}>
+                    <line
+                      x1={LABEL_WIDTH}
+                      x2={CHART_WIDTH - PLOT_RIGHT}
+                      y1={yOffset + low.yCenter}
+                      y2={yOffset + low.yCenter}
+                      stroke="rgba(148,163,184,0.12)"
+                    />
+                    <text
+                      x={LABEL_WIDTH - 12}
+                      y={labelY}
+                      textAnchor="end"
+                      fill="#cbd5e1"
+                      fontSize="12"
+                    >
+                      {row.label}
+                    </text>
+                    {lowBarX !== null ? (
+                      <g>
+                        <title>{`${row.label}, Low case: ${formatDelta(row.lowDelta as number)}`}</title>
+                        <rect
+                          x={lowBarX}
+                          y={yOffset + low.barY}
+                          width={low.barWidth}
+                          height={low.barHeight}
+                          rx="3"
+                          fill="#f87171"
+                          fillOpacity="0.58"
+                          stroke="#fecaca"
+                          strokeWidth="1"
+                        />
+                        {lowMarkerX !== null ? (
+                          <circle
+                            cx={lowMarkerX}
+                            cy={yOffset + low.yCenter}
+                            r="4"
+                            fill="#f87171"
+                            stroke="#fee2e2"
+                            strokeWidth="1"
+                          />
+                        ) : null}
+                      </g>
+                    ) : null}
+                    {highBarX !== null ? (
+                      <g>
+                        <title>{`${row.label}, High case: ${formatDelta(row.highDelta as number)}`}</title>
+                        <rect
+                          x={highBarX}
+                          y={yOffset + high.barY}
+                          width={high.barWidth}
+                          height={high.barHeight}
+                          rx="3"
+                          fill="#4ade80"
+                          fillOpacity="0.58"
+                          stroke="#bbf7d0"
+                          strokeWidth="1"
+                        />
+                        {highMarkerX !== null ? (
+                          <polygon
+                            points={diamondPoints(
+                              highMarkerX,
+                              yOffset + high.yCenter,
+                            )}
+                            fill="#4ade80"
+                            stroke="#dcfce7"
+                            strokeWidth="1"
+                          />
+                        ) : null}
+                      </g>
+                    ) : null}
+                    {!low.available || !high.available ? (
+                      <text
+                        x={CHART_WIDTH - PLOT_RIGHT}
+                        y={labelY}
+                        textAnchor="end"
+                        fill="#fcd34d"
+                        fontSize="10"
+                      >
+                        {!low.available && !high.available
+                          ? 'Low and High unavailable'
+                          : !low.available
+                            ? 'Low unavailable'
+                            : 'High unavailable'}
+                      </text>
+                    ) : null}
+                  </g>
+                );
+              })}
+              <text x={LABEL_WIDTH} y={chartHeight - 14} fill="#94a3b8" fontSize="11">
+                {formatDelta(-geometry.extent)}
+              </text>
+              <text x={zeroX} y={chartHeight - 14} textAnchor="middle" fill="#94a3b8" fontSize="11">
+                {formatDelta(0)}
+              </text>
+              <text x={CHART_WIDTH - PLOT_RIGHT} y={chartHeight - 14} textAnchor="end" fill="#94a3b8" fontSize="11">
+                {formatDelta(geometry.extent)}
+              </text>
+              <text x={LABEL_WIDTH} y="16" fill="#f87171" fontSize="11">
+                ● Low case
+              </text>
+              <text x={LABEL_WIDTH + 88} y="16" fill="#4ade80" fontSize="11">
+                ◆ High case
+              </text>
+            </svg>
           </div>
         </div>
       ) : (

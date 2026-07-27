@@ -4,12 +4,27 @@
  * This avoids Next.js rewrite proxy issues with POST bodies and long-running requests.
  */
 
+import { Agent } from 'undici';
+
+import {
+  MODEL_UPLOAD_PROXY_TIMEOUT_MS,
+  buildUploadProxyTimeoutResponse,
+  isUpstreamTimeout,
+} from '@/lib/api-proxy';
+
 const API_BACKEND = process.env.API_PROXY_TARGET || 'http://api:8000';
+const MODEL_UPLOAD_PATH = 'v1/models/upload';
+const modelUploadDispatcher = new Agent({
+  headersTimeout: MODEL_UPLOAD_PROXY_TIMEOUT_MS,
+  bodyTimeout: MODEL_UPLOAD_PROXY_TIMEOUT_MS,
+});
 
 async function proxyRequest(request: Request, { params }: { params: { path: string[] } }) {
   const path = params.path.join('/');
   const url = new URL(request.url);
   const targetUrl = `${API_BACKEND}/api/${path}${url.search}`;
+  const isModelUpload =
+    request.method === 'POST' && path === MODEL_UPLOAD_PATH;
 
   const headers: Record<string, string> = {};
   request.headers.forEach((value, key) => {
@@ -18,18 +33,29 @@ async function proxyRequest(request: Request, { params }: { params: { path: stri
     }
   });
 
-  const fetchOptions: RequestInit = {
+  const fetchOptions: RequestInit & { dispatcher?: Agent } = {
     method: request.method,
     headers,
     // @ts-ignore - Next.js extended fetch options
     cache: 'no-store',
   };
+  if (isModelUpload) {
+    fetchOptions.dispatcher = modelUploadDispatcher;
+  }
 
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     fetchOptions.body = await request.arrayBuffer();
   }
 
-  const response = await fetch(targetUrl, fetchOptions);
+  let response: Response;
+  try {
+    response = await fetch(targetUrl, fetchOptions);
+  } catch (error) {
+    if (isModelUpload && isUpstreamTimeout(error)) {
+      return buildUploadProxyTimeoutResponse();
+    }
+    throw error;
+  }
 
   const responseHeaders = new Headers();
   response.headers.forEach((value, key) => {

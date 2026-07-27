@@ -14,6 +14,7 @@
   },
   "include": [
     "src/lib/calculation-api-types.ts",
+    "src/lib/api-proxy.test.ts",
     "src/lib/calculation-flow.ts",
     "src/lib/calculation-storage.ts",
     "src/lib/calculation-storage-transaction.test.ts",

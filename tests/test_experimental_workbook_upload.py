@@ -1,5 +1,6 @@
 """FastAPI contract tests for the experimental workbook-agent upload route."""
 
+import inspect
 from pathlib import Path
 from uuid import UUID
 
@@ -131,6 +132,12 @@ def test_openapi_marks_upload_as_experimental_workbook_agent_validation(api_cont
     assert "experimental" in operation["summary"].lower()
     assert "workbook-agent" in operation["summary"].lower()
     assert "synchronous" in operation["description"].lower()
+
+
+def test_upload_route_runs_as_a_sync_endpoint_off_the_event_loop(api_context):
+    app, _session_factory = api_context
+
+    assert inspect.iscoroutinefunction(_upload_route(app).endpoint) is False
 
 
 @pytest.mark.parametrize("filename", ["legacy.xls", "data.csv", "book.xlsm", "notes.txt"])

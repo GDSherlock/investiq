@@ -54,7 +54,7 @@ def _api_error(status_code: int, code: str, message: str) -> HTTPException:
         "validation endpoint for benchmark testing. Supports .xlsx only."
     ),
 )
-async def upload_model(
+def upload_model(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -67,7 +67,7 @@ async def upload_model(
             "Only .xlsx is supported; legacy .xls is not reliably readable by this toolchain.",
         )
 
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     if not file_bytes:
         raise _api_error(400, "EMPTY_FILE", "Uploaded workbook is empty.")
 

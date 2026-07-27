@@ -67,6 +67,10 @@ export class AutomaticSensitivityAnalysisScheduler {
     };
   }
 
+  get hasScheduledWork(): boolean {
+    return this.running !== null || this.pending !== null;
+  }
+
   enqueue(
     snapshot: AutomaticSensitivityAnalysisSnapshot,
   ): AutomaticSensitivityAnalysisTransition {
@@ -87,6 +91,27 @@ export class AutomaticSensitivityAnalysisScheduler {
     this.pending = snapshot;
     this.error = null;
     return { kind: 'queued', snapshot };
+  }
+
+  /**
+   * A compare-and-write conflict means the active request cannot apply. Keep a
+   * reconciled successor even when its full action key matches the doomed one.
+   */
+  enqueueAfterConflict(
+    snapshot: AutomaticSensitivityAnalysisSnapshot,
+  ): AutomaticSensitivityAnalysisTransition {
+    if (this.running === null) {
+      return this.enqueue(snapshot);
+    }
+    this.pending = snapshot;
+    this.error = null;
+    return { kind: 'queued', snapshot };
+  }
+
+  reset(): void {
+    this.running = null;
+    this.pending = null;
+    this.error = null;
   }
 
   succeed(

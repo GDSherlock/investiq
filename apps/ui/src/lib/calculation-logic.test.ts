@@ -4049,6 +4049,18 @@ test('initial sensitivity bootstrap GET-restores compatible artifacts and builds
   assert.match(pageSource, /initialAnalysisInFlightRef/);
   assert.match(pageSource, /canJoinInitialSensitivityAction/);
   assert.match(pageSource, /canJoinInitialSensitivityAnalysis/);
+  assert.match(
+    pageSource,
+    /persistence\.status === 'conflict'[\s\S]*bootstrapWorkbench\(\)[\s\S]*enqueueAfterConflict/,
+  );
+  assert.match(
+    pageSource,
+    /automaticAnalysisSchedulerRef\.current\.hasScheduledWork/,
+  );
+  assert.match(
+    pageSource,
+    /isMountedRef\.current = false;[\s\S]*automaticAnalysisSchedulerRef\.current\.reset\(\)/,
+  );
   assert.match(bootstrapSource, /const initialActionKey =[\s\S]*buildInitialSensitivityActionKey/);
   assert.match(autoAnalysisSource, /Waiting for exact current scenario…/);
   assert.match(autoAnalysisSource, /Building Tornado and 5×5 matrix…/);

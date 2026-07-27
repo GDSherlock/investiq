@@ -225,12 +225,20 @@ export default function SensitivityPage() {
     new AutomaticSensitivityAnalysisScheduler(),
   );
   const automaticAnalysisSnapshotRevisionRef = useRef(0);
+  const isMountedRef = useRef(false);
+
+  function resetAutomaticAnalysisScheduler() {
+    automaticAnalysisSchedulerRef.current.reset();
+    if (isMountedRef.current) {
+      setAnalysisRefreshing(false);
+    }
+  }
 
   function invalidatePersistedIdentity() {
     activeIdentityRef.current = null;
     workbenchDocumentRevisionRef.current = null;
     setRecalculating(false);
-    setAnalysisRefreshing(false);
+    resetAutomaticAnalysisScheduler();
     setInitialAnalysisAction('error');
     pendingExactCalculationRef.current = null;
     initialExactRunInFlightRef.current = null;
@@ -267,7 +275,7 @@ export default function SensitivityPage() {
     }
     setLoading(true);
     setRecalculating(false);
-    setAnalysisRefreshing(false);
+    updateAutomaticAnalysisSchedulingState();
     setError(null);
     setEmptyReason(null);
 
@@ -1031,14 +1039,22 @@ export default function SensitivityPage() {
   }
 
   function updateAutomaticAnalysisSchedulingState() {
-    const state = automaticAnalysisSchedulerRef.current.state;
-    setAnalysisRefreshing(state.running !== null || state.pending !== null);
+    if (!isMountedRef.current) {
+      return;
+    }
+    setAnalysisRefreshing(
+      automaticAnalysisSchedulerRef.current.hasScheduledWork,
+    );
   }
 
   function settleAutomaticSensitivityAnalysis(
     snapshot: AutomaticSensitivityAnalysisSnapshot,
     error: Error | null,
   ) {
+    if (!isMountedRef.current) {
+      automaticAnalysisSchedulerRef.current.reset();
+      return;
+    }
     const transition =
       error === null
         ? automaticAnalysisSchedulerRef.current.succeed(
@@ -1064,6 +1080,7 @@ export default function SensitivityPage() {
     actionKeyOverride?: string,
   ): boolean {
     if (
+      !isMountedRef.current ||
       recalculating ||
       exactCalculationInFlightRef.current ||
       pendingExactCalculationRef.current !== null
@@ -1087,6 +1104,24 @@ export default function SensitivityPage() {
     return transition.kind !== 'idle' && transition.kind !== 'ignored';
   }
 
+  function queueReconciledSensitivityAnalysis(): boolean {
+    const snapshot = currentAutomaticAnalysisSnapshot(
+      workbenchSnapshotRef.current,
+    );
+    if (snapshot === null || !isMountedRef.current) {
+      return false;
+    }
+    const transition =
+      automaticAnalysisSchedulerRef.current.enqueueAfterConflict(snapshot);
+    updateAutomaticAnalysisSchedulingState();
+    if (transition.kind === 'start') {
+      setInitialAnalysisAction('build');
+      setError(null);
+      void executeAutomaticSensitivityAnalysis(transition.snapshot);
+    }
+    return transition.kind !== 'idle' && transition.kind !== 'ignored';
+  }
+
   async function executeAutomaticSensitivityAnalysis(
     snapshot: AutomaticSensitivityAnalysisSnapshot,
   ) {
@@ -1101,6 +1136,7 @@ export default function SensitivityPage() {
     let failure: Error | null = null;
     try {
       if (
+        !isMountedRef.current ||
         identity === null ||
         persisted.baselineRunId === null ||
         requestWorkbench.selectedOutputId === null ||
@@ -1170,11 +1206,18 @@ export default function SensitivityPage() {
       );
       if (persistence.status !== 'persisted') {
         if (persistence.status === 'conflict') {
-          await bootstrapWorkbench();
+          const reconciliation = await bootstrapWorkbench();
+          if (reconciliation === 'applied' && isMountedRef.current) {
+            queueReconciledSensitivityAnalysis();
+          }
+          return;
         }
         throw new Error(
           'Sensitivity analysis completed, but its artifact could not be saved in this workbench.',
         );
+      }
+      if (!isMountedRef.current) {
+        return;
       }
       workbenchDocumentRevisionRef.current = persistence.revision;
       persistedWorkbenchRef.current = appliedWorkbench;
@@ -1186,7 +1229,10 @@ export default function SensitivityPage() {
         caught instanceof Error
           ? caught
           : new Error('Sensitivity analysis failed.');
-      if (isCurrentAutomaticAnalysisSnapshot(snapshot)) {
+      if (
+        isMountedRef.current &&
+        isCurrentAutomaticAnalysisSnapshot(snapshot)
+      ) {
         setError(failure);
         setInitialAnalysisAction('error');
       }
@@ -1286,6 +1332,7 @@ export default function SensitivityPage() {
   }
 
   useEffect(() => {
+    isMountedRef.current = true;
     const reconciliationKeys = new Set<string>(
       Object.values(CALCULATION_STORAGE_KEYS),
     );
@@ -1305,8 +1352,8 @@ export default function SensitivityPage() {
       if (storageReconciliationTimerRef.current !== null) {
         clearTimeout(storageReconciliationTimerRef.current);
       }
+      resetAutomaticAnalysisScheduler();
       setRecalculating(false);
-      setAnalysisRefreshing(false);
       storageReconciliationTimerRef.current = setTimeout(() => {
         storageReconciliationTimerRef.current = null;
         void bootstrapWorkbench();
@@ -1316,11 +1363,13 @@ export default function SensitivityPage() {
     void bootstrapWorkbench();
     return () => {
       window.removeEventListener('storage', handleStorage);
+      isMountedRef.current = false;
       bootstrapRevisionRef.current += 1;
       requestRevisionRef.current += 1;
       pendingExactCalculationRef.current = null;
       initialExactRunInFlightRef.current = null;
       initialAnalysisInFlightRef.current = null;
+      automaticAnalysisSchedulerRef.current.reset();
       activeIdentityRef.current = null;
       workbenchDocumentRevisionRef.current = null;
       if (timerRef.current !== null) {

@@ -136,3 +136,56 @@ test('a duplicate initial full action key joins the running request instead of i
   assert.equal(scheduler.state.running, initial);
   assert.equal(scheduler.state.pending, null);
 });
+
+test('a persistence conflict queues one same-key successor instead of joining the doomed request', () => {
+  const scheduler = new AutomaticSensitivityAnalysisScheduler();
+  const doomed = snapshot(11, 'exact-run-11');
+  const reconciled = { ...doomed, revision: 12 };
+
+  scheduler.enqueue(doomed);
+  assert.deepEqual(scheduler.enqueueAfterConflict(reconciled), {
+    kind: 'queued',
+    snapshot: reconciled,
+  });
+  assert.deepEqual(scheduler.succeed(doomed, () => true), {
+    kind: 'start',
+    snapshot: reconciled,
+  });
+  assert.equal(scheduler.state.running, reconciled);
+  assert.equal(scheduler.state.pending, null);
+});
+
+test('refreshing stays true until the scheduler drains its running and pending work', () => {
+  const scheduler = new AutomaticSensitivityAnalysisScheduler();
+  const first = snapshot(13, 'exact-run-13');
+  const second = snapshot(14, 'exact-run-14');
+
+  assert.equal(scheduler.hasScheduledWork, false);
+  scheduler.enqueue(first);
+  assert.equal(scheduler.hasScheduledWork, true);
+  scheduler.enqueue(second);
+  assert.equal(scheduler.hasScheduledWork, true);
+  const next = scheduler.succeed(first, () => true);
+  assert.equal(next.kind, 'start');
+  assert.equal(scheduler.hasScheduledWork, true);
+  scheduler.succeed(second, () => true);
+  assert.equal(scheduler.hasScheduledWork, false);
+});
+
+test('unmount reset drops queued work and ignores a late running response', () => {
+  const scheduler = new AutomaticSensitivityAnalysisScheduler();
+  const running = snapshot(15, 'exact-run-15');
+  const pending = snapshot(16, 'exact-run-16');
+
+  scheduler.enqueue(running);
+  scheduler.enqueue(pending);
+  scheduler.reset();
+
+  assert.deepEqual(scheduler.state, {
+    running: null,
+    pending: null,
+    error: null,
+  });
+  assert.deepEqual(scheduler.succeed(running, () => true), { kind: 'ignored' });
+  assert.equal(scheduler.hasScheduledWork, false);
+});

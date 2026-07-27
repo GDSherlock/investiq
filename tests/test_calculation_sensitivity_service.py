@@ -1547,7 +1547,7 @@ def test_top_impact_returns_typed_warning_when_fewer_than_two_impacts_are_usable
         context["session"],
         context["model"].id,
         source_cell="B5",
-        business_role="unclassified",
+        business_role="project_irr",
         label="Circular metric",
     )
     prepared, _baseline = _prepare_with_baseline(context)
@@ -1559,6 +1559,30 @@ def test_top_impact_returns_typed_warning_when_fewer_than_two_impacts_are_usable
     )
 
     response = _service(context).analyze(context["model"].id, request)
+
+    assert response.selected_output.business_role == "project_irr"
+    assert response.selected_output.current.availability_status == "unavailable"
+    assert response.selected_output.current.value is None
+    assert response.selected_output.current.unavailable_reason == "cycle"
+    assert response.selected_output.current.execution_status == "cycle"
+    assert [driver.target for driver in response.drivers] == [
+        driver.target for driver in request.drivers
+    ]
+    assert [
+        (driver.low_case.input_value, driver.high_case.input_value)
+        for driver in response.drivers
+    ] == [(driver.low, driver.high) for driver in request.drivers]
+    for driver in response.drivers:
+        assert driver.impact is None
+        assert driver.warnings == [
+            "Impact is unavailable because one or both endpoint outputs are not "
+            "available numeric values."
+        ]
+        for case in (driver.low_case, driver.high_case):
+            assert case.output.availability_status == "unavailable"
+            assert case.output.value is None
+            assert case.output.unavailable_reason == "cycle"
+            assert case.output.execution_status == "cycle"
 
     assert response.two_way is None
     assert "TOP_IMPACT_TWO_WAY_UNAVAILABLE" in response.warnings

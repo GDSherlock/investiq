@@ -3,6 +3,7 @@ import { sensitivityTargetKey } from './sensitivity-analysis';
 
 export type InitialSensitivityAnalysisAction =
   | 'waiting_for_current_run'
+  | 'unavailable'
   | 'restore'
   | 'build';
 
@@ -22,6 +23,11 @@ export interface InitialSensitivityAnalysisInput {
   tornadoDriverKeys: string[];
   artifact: InitialSensitivityAnalysisArtifact | null;
 }
+
+export type InitialSensitivityAnalysisActionKeyInput = Omit<
+  InitialSensitivityAnalysisInput,
+  'artifact'
+>;
 
 function decimalMapsEqual(
   left: Readonly<Record<string, string>>,
@@ -48,8 +54,14 @@ function orderedKeysEqual(
 export function resolveInitialSensitivityAnalysis(
   input: InitialSensitivityAnalysisInput,
 ): InitialSensitivityAnalysisAction {
-  if (input.currentRunId === null || input.selectedOutputId === null) {
+  if (input.currentRunId === null) {
     return 'waiting_for_current_run';
+  }
+  if (
+    input.selectedOutputId === null ||
+    input.tornadoDriverKeys.length === 0
+  ) {
+    return 'unavailable';
   }
   const artifact = input.artifact;
   if (
@@ -78,6 +90,29 @@ export function resolveInitialSensitivityAnalysis(
   return 'restore';
 }
 
+export function buildInitialSensitivityActionKey(
+  input: InitialSensitivityAnalysisActionKeyInput,
+): string {
+  return JSON.stringify({
+    modelVersionId: input.modelVersionId,
+    graphVersionId: input.graphVersionId,
+    comparisonBaselineRunId: input.comparisonBaselineRunId,
+    currentRunId: input.currentRunId,
+    selectedOutputId: input.selectedOutputId,
+    currentOverridesByTarget: Object.entries(input.currentOverridesByTarget).sort(
+      ([left], [right]) => left.localeCompare(right),
+    ),
+    tornadoDriverKeys: input.tornadoDriverKeys,
+  });
+}
+
+export function shouldStartInitialSensitivityAction(
+  inFlightActionKey: string | null,
+  actionKey: string,
+): boolean {
+  return inFlightActionKey !== actionKey;
+}
+
 export function initialSensitivityAnalysisStatusLabel(
   action: InitialSensitivityAnalysisAction | 'ready' | 'unavailable' | 'error',
 ): string {
@@ -92,6 +127,6 @@ export function initialSensitivityAnalysisStatusLabel(
     case 'unavailable':
       return 'Unavailable';
     case 'error':
-      return 'Analysis unavailable';
+      return 'Analysis failed';
   }
 }

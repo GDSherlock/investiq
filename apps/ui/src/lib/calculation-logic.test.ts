@@ -92,7 +92,9 @@ import {
   type SensitivityAssumption,
 } from './sensitivity-analysis';
 import {
+  buildInitialSensitivityActionKey,
   resolveInitialSensitivityAnalysis,
+  shouldStartInitialSensitivityAction,
   type InitialSensitivityAnalysisInput,
 } from './sensitivity-auto-analysis';
 
@@ -3448,6 +3450,46 @@ test('initial sensitivity analysis restores only a fully compatible artifact and
     }),
     'build',
   );
+  assert.equal(
+    resolveInitialSensitivityAnalysis({
+      ...expected,
+      currentRunId: null,
+    }),
+    'waiting_for_current_run',
+  );
+  assert.equal(
+    resolveInitialSensitivityAnalysis({
+      ...expected,
+      selectedOutputId: null,
+    }),
+    'unavailable',
+  );
+  assert.equal(
+    resolveInitialSensitivityAnalysis({
+      ...expected,
+      tornadoDriverKeys: [],
+    }),
+    'unavailable',
+  );
+});
+
+test('initial analysis action keys single-flight an automatic fallback without blocking manual retry', () => {
+  const actionKey = buildInitialSensitivityActionKey({
+    modelVersionId: 'model-version',
+    graphVersionId: 'graph-version',
+    comparisonBaselineRunId: 'baseline-run',
+    currentRunId: 'override-run',
+    selectedOutputId: 'project-irr-output',
+    currentOverridesByTarget: { 'parameter:a': '12.5' },
+    tornadoDriverKeys: ['parameter:a', 'parameter:b'],
+  });
+
+  assert.equal(shouldStartInitialSensitivityAction(null, actionKey), true);
+  assert.equal(shouldStartInitialSensitivityAction(actionKey, actionKey), false);
+  assert.equal(
+    shouldStartInitialSensitivityAction(actionKey, `${actionKey}:new-run`),
+    true,
+  );
 });
 
 test('transient refresh may retain only the matching active model and graph identity', () => {
@@ -3812,6 +3854,7 @@ test('initial sensitivity bootstrap GET-restores compatible artifacts and builds
   assert.match(bootstrapSource, /getCalculationSensitivityAnalysis/);
   assert.match(bootstrapSource, /resolveInitialSensitivityAnalysis/);
   assert.match(bootstrapSource, /void beginInitialSensitivityAnalysis\(/);
+  assert.match(bootstrapSource, /enqueueInitialExactCalculation/);
   assert.match(
     bootstrapSource,
     /catch \(caught\)[\s\S]*activeIdentityRef\.current = null;[\s\S]*return 'failed'/,
@@ -3893,6 +3936,7 @@ test('initial sensitivity bootstrap GET-restores compatible artifacts and builds
   assert.match(pageSource, /exactCalculationInFlightRef/);
   assert.match(pageSource, /analysisOverridesByTarget/);
   assert.match(pageSource, /initialSensitivityAnalysisStatusLabel/);
+  assert.match(pageSource, /initialAnalysisInFlightRef/);
   assert.match(autoAnalysisSource, /Waiting for exact current scenario…/);
   assert.match(autoAnalysisSource, /Building Tornado and 5×5 matrix…/);
   assert.match(

@@ -26,6 +26,7 @@ import {
   CALCULATION_STORAGE_KEYS,
   createGuardedSensitivityStorage,
   isCalculationStorageLockAvailable,
+  persistCalculationRunId,
   persistSensitivityWorkbenchState,
   readPersistedCalculationState,
   readSensitivityWorkbenchDocument,
@@ -59,8 +60,10 @@ import {
 import { buildSensitivityOutputView } from '@/lib/sensitivity-output-adapter';
 import { estimateSensitivityKpis } from '@/lib/sensitivity-output-adapter';
 import {
+  buildInitialSensitivityActionKey,
   initialSensitivityAnalysisStatusLabel,
   resolveInitialSensitivityAnalysis,
+  shouldStartInitialSensitivityAction,
   type InitialSensitivityAnalysisAction,
 } from '@/lib/sensitivity-auto-analysis';
 
@@ -106,6 +109,7 @@ interface PendingExactCalculation {
   revision: number;
   identity: ActiveIdentity;
   workbench: WorkbenchState;
+  onSettled?: (completed: boolean) => void;
 }
 
 function isPercentage(
@@ -207,14 +211,18 @@ export default function SensitivityPage() {
   const workbenchSnapshotRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
   const persistedWorkbenchRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
   const workbenchDocumentRevisionRef = useRef<string | null>(null);
+  const initialExactRunInFlightRef = useRef<string | null>(null);
+  const initialAnalysisInFlightRef = useRef<string | null>(null);
 
   function invalidatePersistedIdentity() {
     activeIdentityRef.current = null;
     workbenchDocumentRevisionRef.current = null;
     setRecalculating(false);
     setAnalysisRefreshing(false);
-    setInitialAnalysisAction('waiting_for_current_run');
+    setInitialAnalysisAction('error');
     pendingExactCalculationRef.current = null;
+    initialExactRunInFlightRef.current = null;
+    initialAnalysisInFlightRef.current = null;
     setError(
       new Error(
         'The persisted model or run selection changed. Refresh before editing this workbench.',
@@ -266,11 +274,6 @@ export default function SensitivityPage() {
       clearForEmptyState('graph');
       return 'applied';
     }
-    if (persisted.baselineRunId === null) {
-      clearForEmptyState('baseline');
-      return 'applied';
-    }
-
     const identity: ActiveIdentity = {
       modelVersionId: persisted.modelVersionId,
       graphVersionId: persisted.graphVersionId,
@@ -320,7 +323,47 @@ export default function SensitivityPage() {
         window.localStorage,
       );
       if (outputs === null) {
-        clearForEmptyState('outputs');
+        const { tornadoDriverKeys } = resolveSensitivitySelections({
+          assumptions,
+          overridesByTarget: {},
+          storedTornadoDriverKeys: null,
+          storedRowDriverKey: null,
+          storedColumnDriverKey: null,
+          maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+        });
+        const waitingWorkbench: WorkbenchState = {
+          assumptions,
+          overridesByTarget: {},
+          tornadoDriverKeys,
+          selectedOutputId: null,
+          rowDriverKey: null,
+          columnDriverKey: null,
+          outputs: null,
+          analysis: null,
+          analysisOverridesByTarget: {},
+          analysisTornadoDriverKeys: [],
+        };
+        const storageLockAvailable = isCalculationStorageLockAvailable();
+        activeIdentityRef.current = storageLockAvailable ? identity : null;
+        workbenchSnapshotRef.current = waitingWorkbench;
+        persistedWorkbenchRef.current = waitingWorkbench;
+        workbenchDocumentRevisionRef.current = null;
+        setWorkbench(() => waitingWorkbench);
+        if (!storageLockAvailable) {
+          setInitialAnalysisAction('unavailable');
+          setError(
+            new Error(
+              'Browser storage coordination is unavailable, so an exact current scenario cannot be created.',
+            ),
+          );
+        } else {
+          setInitialAnalysisAction('waiting_for_current_run');
+          enqueueInitialExactCalculation(
+            bootstrapRevision,
+            identity,
+            waitingWorkbench,
+          );
+        }
         return 'applied';
       }
       if (
@@ -446,6 +489,7 @@ export default function SensitivityPage() {
           : restoredAnalysisAction;
       setInitialAnalysisAction(initialAction);
       if (!storageLockAvailable) {
+        setInitialAnalysisAction('unavailable');
         setError(
           new Error(
             'This browser cannot coordinate calculation storage across tabs. Results remain available to view, but sensitivity controls are disabled to prevent unpersisted calculation runs.',
@@ -464,6 +508,7 @@ export default function SensitivityPage() {
         return 'superseded';
       }
       activeIdentityRef.current = null;
+      setInitialAnalysisAction('error');
       setError(
         caught instanceof Error
           ? caught
@@ -497,15 +542,80 @@ export default function SensitivityPage() {
       setInitialAnalysisAction('waiting_for_current_run');
       return;
     }
-    setInitialAnalysisAction('build');
-    const completed = await refreshSensitivityAnalysis();
-    if (
-      bootstrapRevision === bootstrapRevisionRef.current &&
-      activeIdentityRef.current?.modelVersionId === identity.modelVersionId &&
-      activeIdentityRef.current.graphVersionId === identity.graphVersionId
-    ) {
-      setInitialAnalysisAction(completed ? 'ready' : 'error');
+    if (action === 'unavailable') {
+      setInitialAnalysisAction('unavailable');
+      const workbench = workbenchSnapshotRef.current;
+      setError(
+        new Error(
+          workbench.selectedOutputId === null
+            ? 'No numeric canonical IRR output is available for sensitivity analysis.'
+            : 'No eligible canonical Tornado drivers are available for sensitivity analysis.',
+        ),
+      );
+      return;
     }
+    const persisted = readPersistedCalculationState(window.localStorage);
+    const actionKey = buildInitialSensitivityActionKey({
+      modelVersionId: identity.modelVersionId,
+      graphVersionId: identity.graphVersionId,
+      comparisonBaselineRunId: persisted.baselineRunId as string,
+      currentRunId: persisted.overrideRunId ?? persisted.baselineRunId,
+      selectedOutputId: workbenchSnapshotRef.current.selectedOutputId,
+      currentOverridesByTarget: workbenchSnapshotRef.current.overridesByTarget,
+      tornadoDriverKeys: workbenchSnapshotRef.current.tornadoDriverKeys,
+    });
+    if (
+      !shouldStartInitialSensitivityAction(
+        initialAnalysisInFlightRef.current,
+        actionKey,
+      )
+    ) {
+      return;
+    }
+    initialAnalysisInFlightRef.current = actionKey;
+    setInitialAnalysisAction('build');
+    try {
+      const completed = await refreshSensitivityAnalysis(actionKey);
+      if (
+        bootstrapRevision === bootstrapRevisionRef.current &&
+        activeIdentityRef.current?.modelVersionId === identity.modelVersionId &&
+        activeIdentityRef.current.graphVersionId === identity.graphVersionId
+      ) {
+        setInitialAnalysisAction(completed ? 'ready' : 'error');
+      }
+    } finally {
+      if (initialAnalysisInFlightRef.current === actionKey) {
+        initialAnalysisInFlightRef.current = null;
+      }
+    }
+  }
+
+  function enqueueInitialExactCalculation(
+    bootstrapRevision: number,
+    identity: ActiveIdentity,
+    workbench: WorkbenchState,
+  ) {
+    const actionKey = `${identity.modelVersionId}:${identity.graphVersionId}`;
+    if (initialExactRunInFlightRef.current === actionKey) {
+      return;
+    }
+    initialExactRunInFlightRef.current = actionKey;
+    const revision = ++requestRevisionRef.current;
+    enqueueExactCalculation({
+      revision,
+      identity,
+      workbench,
+      onSettled: (completed) => {
+        if (initialExactRunInFlightRef.current === actionKey) {
+          initialExactRunInFlightRef.current = null;
+        }
+        if (completed) {
+          void bootstrapWorkbench();
+        } else if (bootstrapRevision === bootstrapRevisionRef.current) {
+          setInitialAnalysisAction('error');
+        }
+      },
+    });
   }
 
   function scheduleExactCalculation(nextWorkbench: WorkbenchState) {
@@ -557,12 +667,13 @@ export default function SensitivityPage() {
     exactCalculationInFlightRef.current = true;
     setRecalculating(true);
     try {
-      await executeExactCalculation(
+      const completed = await executeExactCalculation(
         job.revision,
         job.identity,
         readPersistedCalculationState(window.localStorage),
         job.workbench,
       );
+      job.onSettled?.(completed === true);
     } finally {
       exactCalculationInFlightRef.current = false;
       if (pendingExactCalculationRef.current !== null) {
@@ -627,6 +738,14 @@ export default function SensitivityPage() {
         return;
       }
       const currentRunId = calculation.calculation_run_id;
+      if (persisted.baselineRunId === null) {
+        return persistCalculationRunId(
+          window.localStorage,
+          'baseline',
+          currentRunId,
+          persisted,
+        );
+      }
       if (!guardedStorage.matchesCurrent()) {
         invalidatePersistedIdentity();
         return;
@@ -746,6 +865,7 @@ export default function SensitivityPage() {
       persistedWorkbenchRef.current = appliedWorkbench;
       workbenchSnapshotRef.current = appliedWorkbench;
       setWorkbench(() => appliedWorkbench);
+      return true;
     } catch (caught) {
       if (!stillCurrent()) {
         return;
@@ -762,7 +882,9 @@ export default function SensitivityPage() {
     }
   }
 
-  async function refreshSensitivityAnalysis(): Promise<boolean> {
+  async function refreshSensitivityAnalysis(
+    automaticActionKey?: string,
+  ): Promise<boolean> {
     const identity = activeIdentityRef.current;
     const requestWorkbench = workbenchSnapshotRef.current;
     const persisted = readPersistedCalculationState(window.localStorage);
@@ -779,7 +901,9 @@ export default function SensitivityPage() {
       ) ||
       recalculating ||
       exactCalculationInFlightRef.current ||
-      pendingExactCalculationRef.current !== null
+      pendingExactCalculationRef.current !== null ||
+      (initialAnalysisInFlightRef.current !== null &&
+        initialAnalysisInFlightRef.current !== automaticActionKey)
     ) {
       return false;
     }
@@ -1012,6 +1136,8 @@ export default function SensitivityPage() {
       bootstrapRevisionRef.current += 1;
       requestRevisionRef.current += 1;
       pendingExactCalculationRef.current = null;
+      initialExactRunInFlightRef.current = null;
+      initialAnalysisInFlightRef.current = null;
       activeIdentityRef.current = null;
       workbenchDocumentRevisionRef.current = null;
       if (timerRef.current !== null) {

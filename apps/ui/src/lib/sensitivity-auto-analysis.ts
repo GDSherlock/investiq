@@ -58,6 +58,7 @@ export class AutomaticSensitivityAnalysisScheduler {
   private running: AutomaticSensitivityAnalysisSnapshot | null = null;
   private pending: AutomaticSensitivityAnalysisSnapshot | null = null;
   private error: Error | null = null;
+  private runningInvalidated = false;
 
   get state(): AutomaticSensitivityAnalysisSchedulerState {
     return {
@@ -76,6 +77,7 @@ export class AutomaticSensitivityAnalysisScheduler {
   ): AutomaticSensitivityAnalysisTransition {
     if (this.running === null) {
       this.running = snapshot;
+      this.runningInvalidated = false;
       this.error = null;
       return { kind: 'start', snapshot };
     }
@@ -100,6 +102,22 @@ export class AutomaticSensitivityAnalysisScheduler {
   enqueueAfterConflict(
     snapshot: AutomaticSensitivityAnalysisSnapshot,
   ): AutomaticSensitivityAnalysisTransition {
+    return this.enqueueAfterReconciliation(snapshot);
+  }
+
+  /**
+   * Keeps the physical POST in the single running slot while replacing stale
+   * queued work. The caller must enqueue the reconciled current snapshot next.
+   */
+  invalidateForReconciliation(): void {
+    this.pending = null;
+    this.error = null;
+    this.runningInvalidated = this.running !== null;
+  }
+
+  enqueueAfterReconciliation(
+    snapshot: AutomaticSensitivityAnalysisSnapshot,
+  ): AutomaticSensitivityAnalysisTransition {
     if (this.running === null) {
       return this.enqueue(snapshot);
     }
@@ -108,21 +126,28 @@ export class AutomaticSensitivityAnalysisScheduler {
     return { kind: 'queued', snapshot };
   }
 
+  isResultCurrent(snapshot: AutomaticSensitivityAnalysisSnapshot): boolean {
+    return this.running === snapshot && !this.runningInvalidated;
+  }
+
   reset(): void {
     this.running = null;
     this.pending = null;
     this.error = null;
+    this.runningInvalidated = false;
   }
 
   succeed(
     snapshot: AutomaticSensitivityAnalysisSnapshot,
     isCurrent: (snapshot: AutomaticSensitivityAnalysisSnapshot) => boolean,
   ): AutomaticSensitivityAnalysisTransition {
-    if (this.running === null || !sameAutomaticSensitivityAction(this.running, snapshot)) {
+    if (this.running !== snapshot) {
       return { kind: 'ignored' };
     }
+    const current = isCurrent(snapshot);
     this.running = null;
-    if (isCurrent(snapshot)) {
+    this.runningInvalidated = false;
+    if (current) {
       this.error = null;
     }
     return this.startLatestPending(isCurrent);
@@ -133,11 +158,13 @@ export class AutomaticSensitivityAnalysisScheduler {
     error: Error,
     isCurrent: (snapshot: AutomaticSensitivityAnalysisSnapshot) => boolean,
   ): AutomaticSensitivityAnalysisTransition {
-    if (this.running === null || !sameAutomaticSensitivityAction(this.running, snapshot)) {
+    if (this.running !== snapshot) {
       return { kind: 'ignored' };
     }
+    const current = isCurrent(snapshot);
     this.running = null;
-    if (isCurrent(snapshot)) {
+    this.runningInvalidated = false;
+    if (current) {
       this.error = error;
     }
     return this.startLatestPending(isCurrent);
@@ -151,10 +178,12 @@ export class AutomaticSensitivityAnalysisScheduler {
     if (next === null) {
       return { kind: 'idle' };
     }
+    this.running = next;
+    this.runningInvalidated = false;
     if (!isCurrent(next)) {
+      this.running = null;
       return { kind: 'idle' };
     }
-    this.running = next;
     this.error = null;
     return { kind: 'start', snapshot: next };
   }

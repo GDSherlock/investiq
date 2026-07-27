@@ -225,13 +225,23 @@ export default function SensitivityPage() {
     new AutomaticSensitivityAnalysisScheduler(),
   );
   const automaticAnalysisSnapshotRevisionRef = useRef(0);
+  const automaticAnalysisReconciliationPendingRef = useRef(false);
   const isMountedRef = useRef(false);
 
   function resetAutomaticAnalysisScheduler() {
     automaticAnalysisSchedulerRef.current.reset();
+    automaticAnalysisReconciliationPendingRef.current = false;
     if (isMountedRef.current) {
       setAnalysisRefreshing(false);
     }
+  }
+
+  function invalidateAutomaticAnalysisForReconciliation() {
+    const scheduler = automaticAnalysisSchedulerRef.current;
+    automaticAnalysisReconciliationPendingRef.current =
+      scheduler.hasScheduledWork;
+    scheduler.invalidateForReconciliation();
+    updateAutomaticAnalysisSchedulingState();
   }
 
   function invalidatePersistedIdentity() {
@@ -1014,6 +1024,7 @@ export default function SensitivityPage() {
     const currentRunId = persisted.overrideRunId ?? persisted.baselineRunId;
     return (
       identity !== null &&
+      automaticAnalysisSchedulerRef.current.isResultCurrent(snapshot) &&
       persisted.baselineRunId !== null &&
       currentRunId === snapshot.currentRunId &&
       current.selectedOutputId === snapshot.selectedOutputId &&
@@ -1104,7 +1115,9 @@ export default function SensitivityPage() {
     return transition.kind !== 'idle' && transition.kind !== 'ignored';
   }
 
-  function queueReconciledSensitivityAnalysis(): boolean {
+  function queueReconciledSensitivityAnalysis(
+    reason: 'conflict' | 'storage',
+  ): boolean {
     const snapshot = currentAutomaticAnalysisSnapshot(
       workbenchSnapshotRef.current,
     );
@@ -1112,7 +1125,11 @@ export default function SensitivityPage() {
       return false;
     }
     const transition =
-      automaticAnalysisSchedulerRef.current.enqueueAfterConflict(snapshot);
+      reason === 'conflict'
+        ? automaticAnalysisSchedulerRef.current.enqueueAfterConflict(snapshot)
+        : automaticAnalysisSchedulerRef.current.enqueueAfterReconciliation(
+            snapshot,
+          );
     updateAutomaticAnalysisSchedulingState();
     if (transition.kind === 'start') {
       setInitialAnalysisAction('build');
@@ -1208,7 +1225,7 @@ export default function SensitivityPage() {
         if (persistence.status === 'conflict') {
           const reconciliation = await bootstrapWorkbench();
           if (reconciliation === 'applied' && isMountedRef.current) {
-            queueReconciledSensitivityAnalysis();
+            queueReconciledSensitivityAnalysis('conflict');
           }
           return;
         }
@@ -1352,11 +1369,20 @@ export default function SensitivityPage() {
       if (storageReconciliationTimerRef.current !== null) {
         clearTimeout(storageReconciliationTimerRef.current);
       }
-      resetAutomaticAnalysisScheduler();
+      invalidateAutomaticAnalysisForReconciliation();
       setRecalculating(false);
       storageReconciliationTimerRef.current = setTimeout(() => {
         storageReconciliationTimerRef.current = null;
-        void bootstrapWorkbench();
+        void bootstrapWorkbench().then((reconciliation) => {
+          if (
+            reconciliation === 'applied' &&
+            automaticAnalysisReconciliationPendingRef.current &&
+            isMountedRef.current
+          ) {
+            automaticAnalysisReconciliationPendingRef.current = false;
+            queueReconciledSensitivityAnalysis('storage');
+          }
+        });
       }, STORAGE_RECONCILIATION_MS);
     };
     window.addEventListener('storage', handleStorage);

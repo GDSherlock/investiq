@@ -189,3 +189,29 @@ test('unmount reset drops queued work and ignores a late running response', () =
   assert.deepEqual(scheduler.succeed(running, () => true), { kind: 'ignored' });
   assert.equal(scheduler.hasScheduledWork, false);
 });
+
+test('storage reconciliation keeps an active POST logical until it settles and starts one latest successor', () => {
+  const scheduler = new AutomaticSensitivityAnalysisScheduler();
+  const active = snapshot(17, 'exact-run-17');
+  const reconciled = { ...active, revision: 18 };
+
+  assert.deepEqual(scheduler.enqueue(active), { kind: 'start', snapshot: active });
+  scheduler.invalidateForReconciliation();
+  assert.equal(scheduler.isResultCurrent(active), false);
+  assert.deepEqual(scheduler.state, {
+    running: active,
+    pending: null,
+    error: null,
+  });
+  assert.deepEqual(scheduler.enqueueAfterReconciliation(reconciled), {
+    kind: 'queued',
+    snapshot: reconciled,
+  });
+  assert.equal(scheduler.state.running, active);
+  assert.equal(scheduler.state.pending, reconciled);
+  assert.deepEqual(scheduler.succeed(active, () => true), {
+    kind: 'start',
+    snapshot: reconciled,
+  });
+  assert.equal(scheduler.isResultCurrent(reconciled), true);
+});

@@ -4061,6 +4061,14 @@ test('initial sensitivity bootstrap GET-restores compatible artifacts and builds
     pageSource,
     /isMountedRef\.current = false;[\s\S]*automaticAnalysisSchedulerRef\.current\.reset\(\)/,
   );
+  assert.match(
+    pageSource,
+    /const handleStorage[\s\S]*invalidateAutomaticAnalysisForReconciliation\(\)[\s\S]*queueReconciledSensitivityAnalysis\('storage'\)/,
+  );
+  assert.match(
+    pageSource,
+    /isCurrentAutomaticAnalysisSnapshot[\s\S]*isResultCurrent\(snapshot\)/,
+  );
   assert.match(bootstrapSource, /const initialActionKey =[\s\S]*buildInitialSensitivityActionKey/);
   assert.match(autoAnalysisSource, /Waiting for exact current scenario…/);
   assert.match(autoAnalysisSource, /Building Tornado and 5×5 matrix…/);

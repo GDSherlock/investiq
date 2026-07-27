@@ -24,6 +24,7 @@ interface FixedSensitivityDashboardProps {
   expanded: boolean;
   recalculating: boolean;
   analysisRefreshing?: boolean;
+  initialAnalysisStatus?: string;
   analysisStale?: boolean;
   analysisRunDisabled?: boolean;
   estimatedOutputIds?: string[];
@@ -115,6 +116,7 @@ export function FixedSensitivityDashboard({
   expanded,
   recalculating,
   analysisRefreshing = false,
+  initialAnalysisStatus,
   analysisStale = false,
   analysisRunDisabled = false,
   estimatedOutputIds = [],
@@ -446,6 +448,14 @@ export function FixedSensitivityDashboard({
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {initialAnalysisStatus ? (
+                    <span
+                      aria-live="polite"
+                      className="text-[11px] text-d-muted"
+                    >
+                      {initialAnalysisStatus}
+                    </span>
+                  ) : null}
                   {analysisStale ? (
                     <span className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200">
                       Out of date

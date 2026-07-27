@@ -91,6 +91,10 @@ import {
   toggleTornadoDriver,
   type SensitivityAssumption,
 } from './sensitivity-analysis';
+import {
+  resolveInitialSensitivityAnalysis,
+  type InitialSensitivityAnalysisInput,
+} from './sensitivity-auto-analysis';
 
 class MemoryStorage implements StorageLike {
   private readonly values = new Map<string, string>();
@@ -3343,6 +3347,109 @@ test('revision/model/graph/output guard rejects stale sensitivity responses', ()
   );
 });
 
+test('initial sensitivity analysis restores only a fully compatible artifact and otherwise builds once', () => {
+  const expected: InitialSensitivityAnalysisInput = {
+    modelVersionId: 'model-version',
+    graphVersionId: 'graph-version',
+    comparisonBaselineRunId: 'baseline-run',
+    currentRunId: 'override-run',
+    selectedOutputId: 'project-irr-output',
+    currentOverridesByTarget: {
+      'parameter:driver-a': '12.5',
+    },
+    tornadoDriverKeys: ['parameter:driver-a', 'parameter:driver-b'],
+    artifact: {
+      response: sensitivityResponse({
+        drivers: [
+          {
+            target: {
+              kind: 'parameter',
+              parameter_id: 'driver-a',
+            },
+            low_case: {
+              input_value: { value_type: 'number', value: '10' },
+              calculation_run_id: null,
+              output: projectedNumber('0.11'),
+              warnings: [],
+            },
+            high_case: {
+              input_value: { value_type: 'number', value: '15' },
+              calculation_run_id: null,
+              output: projectedNumber('0.13'),
+              warnings: [],
+            },
+            impact: '0.02',
+            warnings: [],
+          },
+          {
+            target: {
+              kind: 'parameter',
+              parameter_id: 'driver-b',
+            },
+            low_case: {
+              input_value: { value_type: 'number', value: '20' },
+              calculation_run_id: null,
+              output: projectedNumber('0.10'),
+              warnings: [],
+            },
+            high_case: {
+              input_value: { value_type: 'number', value: '30' },
+              calculation_run_id: null,
+              output: projectedNumber('0.14'),
+              warnings: [],
+            },
+            impact: '0.04',
+            warnings: [],
+          },
+        ],
+      }),
+      analysisOverridesByTarget: {
+        'parameter:driver-a': '12.5',
+      },
+      analysisTornadoDriverKeys: ['parameter:driver-a', 'parameter:driver-b'],
+    },
+  };
+
+  assert.equal(resolveInitialSensitivityAnalysis(expected), 'restore');
+  assert.equal(
+    resolveInitialSensitivityAnalysis({
+      ...expected,
+      artifact: null,
+    }),
+    'build',
+  );
+  assert.equal(
+    resolveInitialSensitivityAnalysis({
+      ...expected,
+      artifact: {
+        ...expected.artifact!,
+        response: sensitivityResponse({ current_run_id: 'older-run' }),
+      },
+    }),
+    'build',
+  );
+  assert.equal(
+    resolveInitialSensitivityAnalysis({
+      ...expected,
+      artifact: {
+        ...expected.artifact!,
+        analysisOverridesByTarget: {},
+      },
+    }),
+    'build',
+  );
+  assert.equal(
+    resolveInitialSensitivityAnalysis({
+      ...expected,
+      artifact: {
+        ...expected.artifact!,
+        analysisTornadoDriverKeys: ['parameter:driver-b', 'parameter:driver-a'],
+      },
+    }),
+    'build',
+  );
+});
+
 test('transient refresh may retain only the matching active model and graph identity', () => {
   const persisted = {
     workbookVersionId: null,
@@ -3669,8 +3776,12 @@ test('sensitivity workbench composes canonical APIs and dynamic components witho
   assert.doesNotMatch(allSource, /new\s+(Map|Set)\s*\(\s*\[[\s\S]*IRR/i);
 });
 
-test('sensitivity bootstrap restores analysis by GET while exact and batch submissions stay separate', () => {
+test('initial sensitivity bootstrap GET-restores compatible artifacts and builds one missing artifact', () => {
   const pageSource = readFileSync('src/app/sensitivity/page.tsx', 'utf8');
+  const autoAnalysisSource = readFileSync(
+    'src/lib/sensitivity-auto-analysis.ts',
+    'utf8',
+  );
   const bootstrapStart = pageSource.indexOf('async function bootstrapWorkbench');
   const schedulerStart = pageSource.indexOf(
     'function scheduleExactCalculation',
@@ -3699,6 +3810,8 @@ test('sensitivity bootstrap restores analysis by GET while exact and batch submi
     /readSensitivityWorkbenchDocument\(\s*bootstrapStorage,/,
   );
   assert.match(bootstrapSource, /getCalculationSensitivityAnalysis/);
+  assert.match(bootstrapSource, /resolveInitialSensitivityAnalysis/);
+  assert.match(bootstrapSource, /void beginInitialSensitivityAnalysis\(/);
   assert.match(
     bootstrapSource,
     /catch \(caught\)[\s\S]*activeIdentityRef\.current = null;[\s\S]*return 'failed'/,
@@ -3707,9 +3820,17 @@ test('sensitivity bootstrap restores analysis by GET while exact and batch submi
     bootstrapSource,
     /loadAllEditableNumericParameters\([\s\S]*identity\.graphVersionId/,
   );
-  assert.doesNotMatch(bootstrapSource, /runCalculationSensitivity/);
-  assert.doesNotMatch(bootstrapSource, /runCalculation\(/);
-  assert.doesNotMatch(bootstrapSource, /method:\s*['"]POST['"]/);
+  const restoreGetIndex = bootstrapSource.indexOf(
+    'getCalculationSensitivityAnalysis(',
+  );
+  const initialAnalysisIndex = bootstrapSource.indexOf(
+    'void beginInitialSensitivityAnalysis(',
+  );
+  assert.ok(restoreGetIndex >= 0);
+  assert.ok(
+    initialAnalysisIndex > restoreGetIndex,
+    'a compatible persisted artifact must be fetched before initial POST fallback',
+  );
 
   const exactPostIndex = pageSource.indexOf(
     'const calculation = await runCalculation(',
@@ -3771,6 +3892,9 @@ test('sensitivity bootstrap restores analysis by GET while exact and batch submi
   assert.match(pageSource, /pendingExactCalculationRef/);
   assert.match(pageSource, /exactCalculationInFlightRef/);
   assert.match(pageSource, /analysisOverridesByTarget/);
+  assert.match(pageSource, /initialSensitivityAnalysisStatusLabel/);
+  assert.match(autoAnalysisSource, /Waiting for exact current scenario…/);
+  assert.match(autoAnalysisSource, /Building Tornado and 5×5 matrix…/);
   assert.match(
     pageSource,
     /buildCanonicalOverrideCalculationRequest\([\s\S]*requestWorkbench\.overridesByTarget/,

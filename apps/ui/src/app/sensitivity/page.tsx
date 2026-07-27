@@ -58,6 +58,11 @@ import {
 } from '@/lib/sensitivity-dashboard-view-model';
 import { buildSensitivityOutputView } from '@/lib/sensitivity-output-adapter';
 import { estimateSensitivityKpis } from '@/lib/sensitivity-output-adapter';
+import {
+  initialSensitivityAnalysisStatusLabel,
+  resolveInitialSensitivityAnalysis,
+  type InitialSensitivityAnalysisAction,
+} from '@/lib/sensitivity-auto-analysis';
 
 const SENSITIVITY_DEBOUNCE_MS = 400;
 const STORAGE_RECONCILIATION_MS = 50;
@@ -181,6 +186,10 @@ export default function SensitivityPage() {
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
   const [analysisRefreshing, setAnalysisRefreshing] = useState(false);
+  const [initialAnalysisAction, setInitialAnalysisAction] =
+    useState<InitialSensitivityAnalysisAction | 'ready' | 'unavailable' | 'error'>(
+      'waiting_for_current_run',
+    );
   const [emptyReason, setEmptyReason] = useState<EmptyReason>(null);
   const [error, setError] = useState<Error | null>(null);
   const [pendingTornadoReplacementTargetKey, setPendingTornadoReplacementTargetKey] =
@@ -204,6 +213,7 @@ export default function SensitivityPage() {
     workbenchDocumentRevisionRef.current = null;
     setRecalculating(false);
     setAnalysisRefreshing(false);
+    setInitialAnalysisAction('waiting_for_current_run');
     pendingExactCalculationRef.current = null;
     setError(
       new Error(
@@ -364,22 +374,34 @@ export default function SensitivityPage() {
         maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
       });
       let restoredAnalysis: CalculationSensitivityResponse | null = null;
+      let restoredAnalysisAction: InitialSensitivityAnalysisAction = 'build';
       if (storedDocument?.analysisId) {
         try {
           const candidate = await getCalculationSensitivityAnalysis(
             storedDocument.analysisId,
           );
-          if (
-            candidate.model_version_id === identity.modelVersionId &&
-            candidate.graph_version_id === identity.graphVersionId &&
-            candidate.comparison_baseline_run_id ===
-              restoredPersisted.baselineRunId &&
-            candidate.selected_output.output_id === selectedOutputId
-          ) {
+          restoredAnalysisAction = resolveInitialSensitivityAnalysis({
+            modelVersionId: identity.modelVersionId,
+            graphVersionId: identity.graphVersionId,
+            comparisonBaselineRunId: restoredPersisted.baselineRunId as string,
+            currentRunId: restoredCurrentRunId,
+            selectedOutputId,
+            currentOverridesByTarget: overridesByTarget,
+            tornadoDriverKeys,
+            artifact: {
+              response: candidate,
+              analysisOverridesByTarget:
+                storedDocument.analysisOverridesByTarget ?? {},
+              analysisTornadoDriverKeys:
+                storedDocument.analysisTornadoDriverKeys ?? [],
+            },
+          });
+          if (restoredAnalysisAction === 'restore') {
             restoredAnalysis = candidate;
           }
         } catch {
           restoredAnalysis = null;
+          restoredAnalysisAction = 'build';
         }
       }
 
@@ -409,11 +431,31 @@ export default function SensitivityPage() {
       setWorkbench(() => nextWorkbench);
       setAssumptionsExpanded(false);
       setPendingTornadoReplacementTargetKey(null);
+      const initialAction =
+        restoredAnalysis === null
+          ? resolveInitialSensitivityAnalysis({
+              modelVersionId: identity.modelVersionId,
+              graphVersionId: identity.graphVersionId,
+              comparisonBaselineRunId: restoredPersisted.baselineRunId as string,
+              currentRunId: restoredCurrentRunId,
+              selectedOutputId,
+              currentOverridesByTarget: overridesByTarget,
+              tornadoDriverKeys,
+              artifact: null,
+            })
+          : restoredAnalysisAction;
+      setInitialAnalysisAction(initialAction);
       if (!storageLockAvailable) {
         setError(
           new Error(
             'This browser cannot coordinate calculation storage across tabs. Results remain available to view, but sensitivity controls are disabled to prevent unpersisted calculation runs.',
           ),
+        );
+      } else {
+        void beginInitialSensitivityAnalysis(
+          bootstrapRevision,
+          identity,
+          initialAction,
         );
       }
       return 'applied';
@@ -432,6 +474,37 @@ export default function SensitivityPage() {
       if (bootstrapRevision === bootstrapRevisionRef.current) {
         setLoading(false);
       }
+    }
+  }
+
+  async function beginInitialSensitivityAnalysis(
+    bootstrapRevision: number,
+    identity: ActiveIdentity,
+    action: InitialSensitivityAnalysisAction,
+  ) {
+    if (
+      bootstrapRevision !== bootstrapRevisionRef.current ||
+      activeIdentityRef.current?.modelVersionId !== identity.modelVersionId ||
+      activeIdentityRef.current.graphVersionId !== identity.graphVersionId
+    ) {
+      return;
+    }
+    if (action === 'restore') {
+      setInitialAnalysisAction('ready');
+      return;
+    }
+    if (action === 'waiting_for_current_run') {
+      setInitialAnalysisAction('waiting_for_current_run');
+      return;
+    }
+    setInitialAnalysisAction('build');
+    const completed = await refreshSensitivityAnalysis();
+    if (
+      bootstrapRevision === bootstrapRevisionRef.current &&
+      activeIdentityRef.current?.modelVersionId === identity.modelVersionId &&
+      activeIdentityRef.current.graphVersionId === identity.graphVersionId
+    ) {
+      setInitialAnalysisAction(completed ? 'ready' : 'error');
     }
   }
 
@@ -689,7 +762,7 @@ export default function SensitivityPage() {
     }
   }
 
-  async function refreshSensitivityAnalysis() {
+  async function refreshSensitivityAnalysis(): Promise<boolean> {
     const identity = activeIdentityRef.current;
     const requestWorkbench = workbenchSnapshotRef.current;
     const persisted = readPersistedCalculationState(window.localStorage);
@@ -708,7 +781,7 @@ export default function SensitivityPage() {
       exactCalculationInFlightRef.current ||
       pendingExactCalculationRef.current !== null
     ) {
-      return;
+      return false;
     }
     const revision = ++requestRevisionRef.current;
     const stillCurrent = () =>
@@ -723,11 +796,12 @@ export default function SensitivityPage() {
       stillCurrent,
     );
     setAnalysisRefreshing(true);
+    setInitialAnalysisAction('build');
     setError(null);
     try {
       if (!guardedStorage.matchesCurrent()) {
         invalidatePersistedIdentity();
-        return;
+        return false;
       }
       const request = buildSensitivityRequest({
         graphVersionId: identity.graphVersionId,
@@ -756,7 +830,7 @@ export default function SensitivityPage() {
           persisted.baselineRunId ||
         !stillCurrent()
       ) {
-        return;
+        return false;
       }
       const analysisOverridesByTarget = {
         ...requestWorkbench.overridesByTarget,
@@ -802,6 +876,8 @@ export default function SensitivityPage() {
       persistedWorkbenchRef.current = appliedWorkbench;
       workbenchSnapshotRef.current = appliedWorkbench;
       setWorkbench(() => appliedWorkbench);
+      setInitialAnalysisAction('ready');
+      return true;
     } catch (caught) {
       if (stillCurrent()) {
         setError(
@@ -810,6 +886,8 @@ export default function SensitivityPage() {
             : new Error('Sensitivity analysis failed.'),
         );
       }
+      setInitialAnalysisAction('error');
+      return false;
     } finally {
       setAnalysisRefreshing(false);
     }
@@ -1164,6 +1242,9 @@ export default function SensitivityPage() {
         expanded={assumptionsExpanded}
         recalculating={recalculating}
         analysisRefreshing={analysisRefreshing}
+        initialAnalysisStatus={initialSensitivityAnalysisStatusLabel(
+          initialAnalysisAction,
+        )}
         analysisStale={analysisStale}
         analysisRunDisabled={
           previewIsDirty ||

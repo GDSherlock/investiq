@@ -133,6 +133,7 @@ function draft(value: string): SensitivityWorkbenchDraft {
     graphVersionId: 'graph-version',
     overridesByTarget: { [DRIVER_KEY]: value },
     tornadoDriverKeys: [DRIVER_KEY],
+    analysisTornadoDriverKeys: [DRIVER_KEY],
     selectedOutputId: 'output-id',
     rowDriverKey: DRIVER_KEY,
     columnDriverKey: null,

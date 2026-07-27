@@ -38,16 +38,20 @@ import {
   buildTwoWayMatrix,
   canApplySensitivityResponse,
   canRetainSensitivityIdentity,
+  DEFAULT_TORNADO_DRIVER_LIMIT,
+  eligibleSensitivityDriverKeys,
   formatSensitivityDelta,
+  isTornadoDriverSelectionStale,
   loadAllEditableNumericParameters,
+  replaceTornadoDriver,
   retainEligibleSensitivityDrivers,
   resolveSensitivitySelections,
   restoreSensitivityOutputProjection,
+  toggleTornadoDriver,
   type SensitivityAssumption,
 } from '@/lib/sensitivity-analysis';
 import {
   orderFixedDashboardAssumptions,
-  promoteFixedDashboardDriver,
   resolveFixedDashboardAnalysis,
   resolveFixedDashboardTwoWayUnavailableReason,
   resolveFixedDashboardViewModel,
@@ -55,7 +59,6 @@ import {
 import { buildSensitivityOutputView } from '@/lib/sensitivity-output-adapter';
 import { estimateSensitivityKpis } from '@/lib/sensitivity-output-adapter';
 
-const MAX_TORNADO_DRIVERS = 12;
 const SENSITIVITY_DEBOUNCE_MS = 400;
 const STORAGE_RECONCILIATION_MS = 50;
 
@@ -69,6 +72,7 @@ interface WorkbenchState {
   outputs: CalculationRunOutputsResponse | null;
   analysis: CalculationSensitivityResponse | null;
   analysisOverridesByTarget: Record<string, string>;
+  analysisTornadoDriverKeys: string[];
 }
 
 type BootstrapWorkbenchResult = 'applied' | 'superseded' | 'failed';
@@ -90,6 +94,7 @@ const EMPTY_WORKBENCH: WorkbenchState = {
   outputs: null,
   analysis: null,
   analysisOverridesByTarget: {},
+  analysisTornadoDriverKeys: [],
 };
 
 interface PendingExactCalculation {
@@ -178,6 +183,8 @@ export default function SensitivityPage() {
   const [analysisRefreshing, setAnalysisRefreshing] = useState(false);
   const [emptyReason, setEmptyReason] = useState<EmptyReason>(null);
   const [error, setError] = useState<Error | null>(null);
+  const [pendingTornadoReplacementTargetKey, setPendingTornadoReplacementTargetKey] =
+    useState<string | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const storageReconciliationTimerRef =
@@ -354,7 +361,7 @@ export default function SensitivityPage() {
           storedDocument?.tornadoDriverKeys ?? null,
         storedRowDriverKey: null,
         storedColumnDriverKey: null,
-        maxDrivers: MAX_TORNADO_DRIVERS,
+        maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
       });
       let restoredAnalysis: CalculationSensitivityResponse | null = null;
       if (storedDocument?.analysisId) {
@@ -387,6 +394,8 @@ export default function SensitivityPage() {
         analysis: restoredAnalysis,
         analysisOverridesByTarget:
           storedDocument?.analysisOverridesByTarget ?? {},
+        analysisTornadoDriverKeys:
+          storedDocument?.analysisTornadoDriverKeys ?? tornadoDriverKeys,
       };
       if (bootstrapRevision !== bootstrapRevisionRef.current) {
         return 'superseded';
@@ -399,6 +408,7 @@ export default function SensitivityPage() {
         storedDocument?.revision ?? null;
       setWorkbench(() => nextWorkbench);
       setAssumptionsExpanded(false);
+      setPendingTornadoReplacementTargetKey(null);
       if (!storageLockAvailable) {
         setError(
           new Error(
@@ -581,6 +591,8 @@ export default function SensitivityPage() {
         analysisId: requestWorkbench.analysis?.analysis_id ?? null,
         analysisOverridesByTarget:
           requestWorkbench.analysisOverridesByTarget,
+        analysisTornadoDriverKeys:
+          requestWorkbench.analysisTornadoDriverKeys,
       };
       const appliedWorkbench: WorkbenchState = {
         ...requestWorkbench,
@@ -753,6 +765,7 @@ export default function SensitivityPage() {
         ...requestWorkbench,
         analysis,
         analysisOverridesByTarget,
+        analysisTornadoDriverKeys: [...requestWorkbench.tornadoDriverKeys],
       };
       const persistence = await persistSensitivityWorkbenchState(
         window.localStorage,
@@ -772,6 +785,7 @@ export default function SensitivityPage() {
             columnDriverKey: null,
             analysisId: analysis.analysis_id ?? null,
             analysisOverridesByTarget,
+            analysisTornadoDriverKeys: requestWorkbench.tornadoDriverKeys,
           },
           isCurrent: stillCurrent,
         },
@@ -801,15 +815,89 @@ export default function SensitivityPage() {
     }
   }
 
+  async function persistTornadoDriverSelection(
+    nextWorkbench: WorkbenchState,
+  ) {
+    const identity = activeIdentityRef.current;
+    const persisted = readPersistedCalculationState(window.localStorage);
+    const currentRunId = persisted.overrideRunId ?? persisted.baselineRunId;
+    if (
+      identity === null ||
+      persisted.baselineRunId === null ||
+      currentRunId === null
+    ) {
+      return;
+    }
+    const stillCurrent = () =>
+      activeIdentityRef.current?.modelVersionId === identity.modelVersionId &&
+      activeIdentityRef.current.graphVersionId === identity.graphVersionId &&
+      workbenchSnapshotRef.current === nextWorkbench;
+    const persistence = await persistSensitivityWorkbenchState(
+      window.localStorage,
+      {
+        expectedIdentity: persisted,
+        expectedDocumentRevision: workbenchDocumentRevisionRef.current,
+        nextDocumentRevision: createWorkbenchDocumentRevision(),
+        response: {
+          model_version_id: identity.modelVersionId,
+          graph_version_id: identity.graphVersionId,
+          comparison_baseline_run_id: persisted.baselineRunId,
+          current_run_id: currentRunId,
+        },
+        document: {
+          modelVersionId: identity.modelVersionId,
+          graphVersionId: identity.graphVersionId,
+          overridesByTarget: nextWorkbench.overridesByTarget,
+          tornadoDriverKeys: nextWorkbench.tornadoDriverKeys,
+          selectedOutputId: nextWorkbench.selectedOutputId,
+          rowDriverKey: null,
+          columnDriverKey: null,
+          analysisId: nextWorkbench.analysis?.analysis_id ?? null,
+          analysisOverridesByTarget:
+            nextWorkbench.analysisOverridesByTarget,
+          analysisTornadoDriverKeys:
+            nextWorkbench.analysisTornadoDriverKeys,
+        },
+        isCurrent: stillCurrent,
+      },
+    );
+    if (persistence.status === 'persisted') {
+      workbenchDocumentRevisionRef.current = persistence.revision;
+      persistedWorkbenchRef.current = nextWorkbench;
+      return;
+    }
+    if (persistence.status === 'superseded' || !stillCurrent()) {
+      return;
+    }
+    if (persistence.status === 'conflict') {
+      await bootstrapWorkbench();
+      return;
+    }
+    const previousWorkbench = persistedWorkbenchRef.current;
+    workbenchSnapshotRef.current = previousWorkbench;
+    setWorkbench(() => previousWorkbench);
+    setError(
+      new Error(
+        'The Tornado driver selection could not be saved. The last persisted selection was restored.',
+      ),
+    );
+  }
+
   function applyUserUpdate(
     update: (current: WorkbenchState) => WorkbenchState,
+    options: { scheduleCalculation?: boolean; persistDrivers?: boolean } = {},
   ) {
     const nextWorkbench = pruneInactiveSensitivitySelections(
       update(workbenchSnapshotRef.current),
     );
     workbenchSnapshotRef.current = nextWorkbench;
     setWorkbench(() => nextWorkbench);
-    scheduleExactCalculation(nextWorkbench);
+    if (options.persistDrivers) {
+      void persistTornadoDriverSelection(nextWorkbench);
+    }
+    if (options.scheduleCalculation !== false) {
+      scheduleExactCalculation(nextWorkbench);
+    }
   }
 
   useEffect(() => {
@@ -909,6 +997,17 @@ export default function SensitivityPage() {
       ),
     [workbench.assumptions],
   );
+  const eligibleTornadoDrivers = useMemo(() => {
+    const eligibleKeys = new Set(
+      eligibleSensitivityDriverKeys(
+        workbench.assumptions,
+        workbench.overridesByTarget,
+      ),
+    );
+    return workbench.assumptions.filter((assumption) =>
+      eligibleKeys.has(assumption.targetKey),
+    );
+  }, [workbench.assumptions, workbench.overridesByTarget]);
   const tornadoRows = useMemo(
     () =>
       workbench.analysis
@@ -954,19 +1053,16 @@ export default function SensitivityPage() {
       : null;
   const twoWayUnavailableReason =
     resolveFixedDashboardTwoWayUnavailableReason(workbench.analysis);
-  const impactsByTarget = useMemo(
-    () =>
-      Object.fromEntries(
-        tornadoRows.map((row) => [row.targetKey, row.impact]),
-      ),
-    [tornadoRows],
-  );
   const analysisStale =
     workbench.analysis !== null &&
-    !overridesEqual(
+    (!overridesEqual(
       workbench.analysisOverridesByTarget,
       workbench.overridesByTarget,
-    );
+    ) ||
+      isTornadoDriverSelectionStale(
+        workbench.analysisTornadoDriverKeys,
+        workbench.tornadoDriverKeys,
+      ));
 
   const formatAxisValue = useCallback(
     (targetKey: string, value: string): string => {
@@ -1081,6 +1177,62 @@ export default function SensitivityPage() {
         analysisOutputLabel={analyzedOutputLabel}
         analysisUnavailableReason={analysisUnavailableReason}
         twoWayUnavailableReason={twoWayUnavailableReason}
+        tornadoDriverKeys={workbench.tornadoDriverKeys}
+        eligibleTornadoDrivers={eligibleTornadoDrivers}
+        pendingTornadoReplacementTargetKey={
+          pendingTornadoReplacementTargetKey
+        }
+        onTornadoDriverToggle={(targetKey) => {
+          const selection = toggleTornadoDriver({
+            eligibleTargetKeys: eligibleTornadoDrivers.map(
+              (assumption) => assumption.targetKey,
+            ),
+            currentDriverKeys: workbenchSnapshotRef.current.tornadoDriverKeys,
+            targetKey,
+          });
+          setPendingTornadoReplacementTargetKey(
+            selection.pendingReplacementTargetKey,
+          );
+          if (
+            !isTornadoDriverSelectionStale(
+              workbenchSnapshotRef.current.tornadoDriverKeys,
+              selection.driverKeys,
+            )
+          ) {
+            return;
+          }
+          applyUserUpdate(
+            (current) => ({
+              ...current,
+              tornadoDriverKeys: selection.driverKeys,
+            }),
+            { scheduleCalculation: false, persistDrivers: true },
+          );
+        }}
+        onTornadoDriverReplace={(outgoingTargetKey) => {
+          if (pendingTornadoReplacementTargetKey === null) {
+            return;
+          }
+          const nextDriverKeys = replaceTornadoDriver({
+            eligibleTargetKeys: eligibleTornadoDrivers.map(
+              (assumption) => assumption.targetKey,
+            ),
+            currentDriverKeys: workbenchSnapshotRef.current.tornadoDriverKeys,
+            outgoingTargetKey,
+            incomingTargetKey: pendingTornadoReplacementTargetKey,
+          });
+          setPendingTornadoReplacementTargetKey(null);
+          applyUserUpdate(
+            (current) => ({
+              ...current,
+              tornadoDriverKeys: nextDriverKeys,
+            }),
+            { scheduleCalculation: false, persistDrivers: true },
+          );
+        }}
+        onCancelTornadoDriverReplacement={() =>
+          setPendingTornadoReplacementTargetKey(null)
+        }
         onToggleExpanded={() =>
           setAssumptionsExpanded((current) => !current)
         }
@@ -1094,13 +1246,6 @@ export default function SensitivityPage() {
               ...current.overridesByTarget,
               [targetKey]: value,
             },
-            tornadoDriverKeys: promoteFixedDashboardDriver({
-              assumptions: current.assumptions,
-              currentDriverKeys: current.tornadoDriverKeys,
-              changedTargetKey: targetKey,
-              impactsByTarget,
-              maxDrivers: MAX_TORNADO_DRIVERS,
-            }),
           }));
         }}
         onReset={(targetKey) =>

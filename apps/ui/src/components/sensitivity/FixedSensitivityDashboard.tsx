@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 
 import type { FixedDashboardViewModel } from '../../lib/sensitivity-dashboard-view-model';
 import { visibleFixedDashboardAssumptions } from '../../lib/sensitivity-dashboard-view-model';
+import { DEFAULT_TORNADO_DRIVER_LIMIT } from '../../lib/sensitivity-analysis';
 import type {
   SensitivityAssumption,
   SensitivityMatrixView,
@@ -32,12 +33,18 @@ interface FixedSensitivityDashboardProps {
   analysisOutputLabel: string;
   analysisUnavailableReason: string | null;
   twoWayUnavailableReason: string | null;
+  tornadoDriverKeys?: string[];
+  eligibleTornadoDrivers?: SensitivityAssumption[];
+  pendingTornadoReplacementTargetKey?: string | null;
   onToggleExpanded: () => void;
   onValueChange: (targetKey: string, value: string) => void;
   onReset: (targetKey: string) => void;
   onResetAll: () => void;
   onRefresh: () => void;
   onRunAnalysis?: () => void;
+  onTornadoDriverToggle?: (targetKey: string) => void;
+  onTornadoDriverReplace?: (outgoingTargetKey: string) => void;
+  onCancelTornadoDriverReplacement?: () => void;
   formatAxisValue: (targetKey: string, value: string) => string;
   formatAnalyzedOutputValue: (value: number | null) => string;
   formatAnalyzedOutputDelta: (value: number) => string;
@@ -117,12 +124,18 @@ export function FixedSensitivityDashboard({
   analysisOutputLabel,
   analysisUnavailableReason,
   twoWayUnavailableReason,
+  tornadoDriverKeys = [],
+  eligibleTornadoDrivers = [],
+  pendingTornadoReplacementTargetKey = null,
   onToggleExpanded,
   onValueChange,
   onReset,
   onResetAll,
   onRefresh,
   onRunAnalysis = () => undefined,
+  onTornadoDriverToggle = () => undefined,
+  onTornadoDriverReplace = () => undefined,
+  onCancelTornadoDriverReplacement = () => undefined,
   formatAxisValue,
   formatAnalyzedOutputValue,
   formatAnalyzedOutputDelta,
@@ -151,6 +164,11 @@ export function FixedSensitivityDashboard({
     recalculating ||
     analysisRefreshing ||
     analysisRunDisabled;
+  const selectedTornadoDrivers = new Set(tornadoDriverKeys);
+  const pendingReplacementDriver = eligibleTornadoDrivers.find(
+    (assumption) =>
+      assumption.targetKey === pendingTornadoReplacementTargetKey,
+  );
 
   return (
     <div className="min-w-0 space-y-5" data-testid="fixed-sensitivity-dashboard">
@@ -417,8 +435,8 @@ export function FixedSensitivityDashboard({
               </fieldset>
             </section>
 
-            <section className="min-w-0 rounded-lg border border-d-border bg-d-card p-4 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+            <section className="flex h-[38rem] min-w-0 flex-col rounded-lg border border-d-border bg-d-card p-4 shadow-sm">
+              <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="text-base font-semibold text-white">
                     IRR tornado chart
@@ -443,19 +461,95 @@ export function FixedSensitivityDashboard({
                   </button>
                 </div>
               </div>
-              <div className="mt-4">
-                {analysisUnavailableReason ? (
-                  <p className="rounded border border-amber-800/50 bg-amber-900/10 p-4 text-sm text-amber-100">
-                    {analysisUnavailableReason}
-                  </p>
-                ) : (
-                  <SensitivityTornadoChart
-                    rows={tornadoRows}
-                    outputLabel={analysisOutputLabel}
-                    formatValue={formatAnalyzedOutputValue}
-                    formatDelta={formatAnalyzedOutputDelta}
-                  />
-                )}
+              <div className="mt-4 grid min-h-0 flex-1 gap-3 lg:grid-cols-[12rem_minmax(0,1fr)]">
+                <aside
+                  aria-label="Tornado drivers"
+                  className="flex min-h-0 flex-col rounded border border-d-border bg-d-panel/40 p-2"
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                    <p className="text-xs font-semibold text-slate-200">
+                      Drivers
+                    </p>
+                    <span className="text-[11px] text-d-muted">
+                      {tornadoDriverKeys.length}/{DEFAULT_TORNADO_DRIVER_LIMIT}
+                    </span>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+                    <ul className="space-y-1">
+                      {eligibleTornadoDrivers.map((assumption) => {
+                        const selected = selectedTornadoDrivers.has(
+                          assumption.targetKey,
+                        );
+                        return (
+                          <li key={assumption.targetKey}>
+                            <button
+                              type="button"
+                              aria-pressed={selected}
+                              disabled={controlsDisabled}
+                              onClick={() =>
+                                onTornadoDriverToggle(assumption.targetKey)
+                              }
+                              className={`w-full rounded px-2 py-1.5 text-left text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                selected
+                                  ? 'bg-gold-500/20 text-gold-200'
+                                  : 'text-d-muted hover:bg-d-hover hover:text-slate-100'
+                              }`}
+                            >
+                              <span className="block truncate">
+                                {assumption.label}
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                  {pendingReplacementDriver ? (
+                    <div className="mt-2 rounded border border-gold-500/40 bg-gold-500/10 p-2">
+                      <p className="text-[11px] leading-4 text-gold-100">
+                        Replace with {pendingReplacementDriver.label}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {tornadoDriverKeys.map((targetKey) => {
+                          const assumption = eligibleTornadoDrivers.find(
+                            (candidate) => candidate.targetKey === targetKey,
+                          );
+                          return (
+                            <button
+                              key={targetKey}
+                              type="button"
+                              onClick={() => onTornadoDriverReplace(targetKey)}
+                              className="rounded border border-gold-400/50 px-1.5 py-1 text-[10px] text-gold-100 hover:bg-gold-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+                            >
+                              {assumption?.label ?? targetKey}
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={onCancelTornadoDriverReplacement}
+                          className="rounded border border-d-border px-1.5 py-1 text-[10px] text-d-muted hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-400"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </aside>
+                <div className="min-h-0 overflow-y-auto pr-1">
+                  {analysisUnavailableReason ? (
+                    <p className="rounded border border-amber-800/50 bg-amber-900/10 p-4 text-sm text-amber-100">
+                      {analysisUnavailableReason}
+                    </p>
+                  ) : (
+                    <SensitivityTornadoChart
+                      rows={tornadoRows}
+                      outputLabel={analysisOutputLabel}
+                      formatValue={formatAnalyzedOutputValue}
+                      formatDelta={formatAnalyzedOutputDelta}
+                    />
+                  )}
+                </div>
               </div>
             </section>
           </div>

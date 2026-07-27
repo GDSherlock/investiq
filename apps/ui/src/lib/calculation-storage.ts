@@ -34,6 +34,7 @@ export interface SensitivityWorkbenchDocument {
   currentRunId: string;
   analysisId?: string | null;
   analysisOverridesByTarget?: Record<string, string>;
+  analysisTornadoDriverKeys?: string[];
   overridesByTarget: Record<string, string>;
   tornadoDriverKeys: string[];
   selectedOutputId: string | null;
@@ -202,6 +203,10 @@ function isSensitivityWorkbenchDocument(
       value.analysisOverridesByTarget === undefined ||
       isRecord(value.analysisOverridesByTarget)
     ) ||
+    !(
+      value.analysisTornadoDriverKeys === undefined ||
+      Array.isArray(value.analysisTornadoDriverKeys)
+    ) ||
     !isRecord(value.overridesByTarget) ||
     !Array.isArray(value.tornadoDriverKeys) ||
     !isNullableString(value.selectedOutputId) ||
@@ -221,6 +226,7 @@ function isSensitivityWorkbenchDocument(
         isCanonicalTargetKey(key) &&
         isFiniteDecimalString(decimalValue),
     ) ||
+    !(value.analysisTornadoDriverKeys ?? []).every(isCanonicalTargetKey) ||
     !value.tornadoDriverKeys.every(isCanonicalTargetKey) ||
     (value.rowDriverKey !== null &&
       !isCanonicalTargetKey(value.rowDriverKey)) ||

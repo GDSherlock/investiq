@@ -20,6 +20,9 @@ import {
 } from './calculation-storage';
 import type { SensitivityKpi } from './sensitivity-output-adapter';
 
+/** Standard UI cap; the calculation API remains compatible with up to 12. */
+export const DEFAULT_TORNADO_DRIVER_LIMIT = 8;
+
 interface ParsedDecimal {
   sign: -1 | 0 | 1;
   digits: string;
@@ -115,6 +118,21 @@ export interface SensitivitySelectionInput {
   storedRowDriverKey: string | null;
   storedColumnDriverKey: string | null;
   maxDrivers: number;
+}
+
+export interface ToggleTornadoDriverInput {
+  eligibleTargetKeys: readonly string[];
+  currentDriverKeys: readonly string[];
+  targetKey: string;
+  maxDrivers?: number;
+}
+
+export interface ReplaceTornadoDriverInput {
+  eligibleTargetKeys: readonly string[];
+  currentDriverKeys: readonly string[];
+  outgoingTargetKey: string;
+  incomingTargetKey: string;
+  maxDrivers?: number;
 }
 
 export class SensitivityCatalogIdentityError extends Error {
@@ -507,29 +525,23 @@ export function resolveSensitivitySelections({
   rowDriverKey: string | null;
   columnDriverKey: string | null;
 } {
-  const rangeCapableKeys = assumptions
-    .filter(
-      (assumption) =>
-        deriveSliderSpec(
-          currentAssumptionValue(assumption, overridesByTarget),
-        ).kind === 'range',
-    )
-    .map((assumption) => assumption.targetKey);
+  const rangeCapableKeys = eligibleSensitivityDriverKeys(
+    assumptions,
+    overridesByTarget,
+  );
   const rangeCapable = new Set(rangeCapableKeys);
-  const storedDriversValid =
-    storedTornadoDriverKeys !== null &&
-    storedTornadoDriverKeys.length > 0 &&
-    storedTornadoDriverKeys.length <= maxDrivers &&
-    new Set(storedTornadoDriverKeys).size ===
-      storedTornadoDriverKeys.length &&
-    storedTornadoDriverKeys.every((targetKey) =>
-      rangeCapable.has(targetKey),
-    );
-  const tornadoDriverKeys = (
-    storedDriversValid
-      ? storedTornadoDriverKeys
-      : rangeCapableKeys.slice(0, maxDrivers)
-  ).slice(0, maxDrivers);
+  const retainedStoredKeys = uniqueEligibleDriverKeys(
+    storedTornadoDriverKeys ?? [],
+    rangeCapable,
+    maxDrivers,
+  );
+  const tornadoDriverKeys = retainedStoredKeys
+    .concat(
+      rangeCapableKeys.filter(
+        (targetKey) => !retainedStoredKeys.includes(targetKey),
+      ),
+    )
+    .slice(0, maxDrivers);
 
   const rowDriverKey =
     storedRowDriverKey !== null && rangeCapable.has(storedRowDriverKey)
@@ -552,19 +564,163 @@ export function retainEligibleSensitivityDrivers(
   overridesByTarget: Record<string, string>,
   currentDriverKeys: string[],
 ): string[] {
-  const eligibleKeys = assumptions
-    .filter(
-      (assumption) =>
-        deriveSliderSpec(
-          currentAssumptionValue(assumption, overridesByTarget),
-        ).kind === 'range',
-    )
-    .map((assumption) => assumption.targetKey);
+  const eligibleKeys = eligibleSensitivityDriverKeys(
+    assumptions,
+    overridesByTarget,
+  );
   const eligible = new Set(eligibleKeys);
-  const retained = Array.from(new Set(currentDriverKeys)).filter(
-    (targetKey) => eligible.has(targetKey),
+  const retained = uniqueEligibleDriverKeys(
+    currentDriverKeys,
+    eligible,
+    Number.POSITIVE_INFINITY,
   );
   return retained.length > 0 ? retained : eligibleKeys.slice(0, 1);
+}
+
+/**
+ * Eligibility is intentionally derived from the canonical, editable input
+ * catalogue. Invalid values are omitted rather than making restore fail.
+ */
+export function eligibleSensitivityDriverKeys(
+  assumptions: readonly SensitivityAssumption[],
+  overridesByTarget: Readonly<Record<string, string>>,
+): string[] {
+  const eligible = new Set<string>();
+  for (const assumption of assumptions) {
+    if (
+      eligible.has(assumption.targetKey) ||
+      sensitivityTargetKey(assumption.target) !== assumption.targetKey
+    ) {
+      continue;
+    }
+    try {
+      if (
+        deriveSliderSpec(
+          currentAssumptionValue(assumption, overridesByTarget),
+        ).kind === 'range'
+      ) {
+        eligible.add(assumption.targetKey);
+      }
+    } catch {
+      // A malformed stored value is not a selectable Tornado driver.
+    }
+  }
+  return [...eligible];
+}
+
+function uniqueEligibleDriverKeys(
+  driverKeys: readonly string[],
+  eligible: ReadonlySet<string>,
+  maxDrivers: number,
+): string[] {
+  const unique: string[] = [];
+  for (const targetKey of driverKeys) {
+    if (
+      unique.length >= maxDrivers ||
+      !eligible.has(targetKey) ||
+      unique.includes(targetKey)
+    ) {
+      continue;
+    }
+    unique.push(targetKey);
+  }
+  return unique;
+}
+
+function normalizedTornadoDriverKeys(
+  eligibleTargetKeys: readonly string[],
+  currentDriverKeys: readonly string[],
+  maxDrivers: number,
+): { eligible: Set<string>; drivers: string[]; limit: number } {
+  const eligible = new Set(eligibleTargetKeys);
+  const limit = Math.max(0, maxDrivers);
+  return {
+    eligible,
+    drivers: uniqueEligibleDriverKeys(currentDriverKeys, eligible, limit),
+    limit,
+  };
+}
+
+/**
+ * Updates a selection only when it can be done without silently evicting a
+ * driver. A full selection asks the caller to render an explicit replacement
+ * control instead.
+ */
+export function toggleTornadoDriver({
+  eligibleTargetKeys,
+  currentDriverKeys,
+  targetKey,
+  maxDrivers = DEFAULT_TORNADO_DRIVER_LIMIT,
+}: ToggleTornadoDriverInput): {
+  driverKeys: string[];
+  pendingReplacementTargetKey: string | null;
+} {
+  const { eligible, drivers, limit } = normalizedTornadoDriverKeys(
+    eligibleTargetKeys,
+    currentDriverKeys,
+    maxDrivers,
+  );
+  if (!eligible.has(targetKey) || limit === 0) {
+    return { driverKeys: drivers, pendingReplacementTargetKey: null };
+  }
+  if (drivers.includes(targetKey)) {
+    return {
+      driverKeys:
+        drivers.length > 1
+          ? drivers.filter((driverKey) => driverKey !== targetKey)
+          : drivers,
+      pendingReplacementTargetKey: null,
+    };
+  }
+  if (drivers.length < limit) {
+    return {
+      driverKeys: [...drivers, targetKey],
+      pendingReplacementTargetKey: null,
+    };
+  }
+  return {
+    driverKeys: drivers,
+    pendingReplacementTargetKey: targetKey,
+  };
+}
+
+/** Replaces exactly the user-selected slot while preserving all other order. */
+export function replaceTornadoDriver({
+  eligibleTargetKeys,
+  currentDriverKeys,
+  outgoingTargetKey,
+  incomingTargetKey,
+  maxDrivers = DEFAULT_TORNADO_DRIVER_LIMIT,
+}: ReplaceTornadoDriverInput): string[] {
+  const { eligible, drivers } = normalizedTornadoDriverKeys(
+    eligibleTargetKeys,
+    currentDriverKeys,
+    maxDrivers,
+  );
+  const outgoingIndex = drivers.indexOf(outgoingTargetKey);
+  if (
+    outgoingIndex === -1 ||
+    !eligible.has(incomingTargetKey) ||
+    drivers.includes(incomingTargetKey)
+  ) {
+    return drivers;
+  }
+  return drivers.map((targetKey, index) =>
+    index === outgoingIndex ? incomingTargetKey : targetKey,
+  );
+}
+
+/** Analysis rows are ranked independently; stale state follows ordered input. */
+export function isTornadoDriverSelectionStale(
+  analysisDriverKeys: readonly string[],
+  currentDriverKeys: readonly string[],
+): boolean {
+  return (
+    analysisDriverKeys.length !== currentDriverKeys.length ||
+    analysisDriverKeys.some(
+      (targetKey, index) => targetKey !== currentDriverKeys[index],
+    )
+  );
 }
 
 export function canRetainSensitivityIdentity(

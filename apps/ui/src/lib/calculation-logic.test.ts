@@ -77,14 +77,18 @@ import {
   canRetainSensitivityIdentity,
   deriveSliderControlStep,
   deriveSliderSpec,
+  DEFAULT_TORNADO_DRIVER_LIMIT,
   formatSensitivityDelta,
   isSensitivityCatalogIdentityError,
+  isTornadoDriverSelectionStale,
   loadAllEditableNumericParameters,
+  replaceTornadoDriver,
   retainEligibleSensitivityDrivers,
   resolveSensitivitySelections,
   restoreSensitivityOutputProjection,
   selectDefaultSensitivityOutput,
   SensitivityCatalogIdentityError,
+  toggleTornadoDriver,
   type SensitivityAssumption,
 } from './sensitivity-analysis';
 
@@ -2729,7 +2733,11 @@ test('stored driver and axis selections require current non-zero effective value
       maxDrivers: 12,
     }),
     {
-      tornadoDriverKeys: ['parameter:zero'],
+      tornadoDriverKeys: [
+        'parameter:zero',
+        'parameter:one',
+        'parameter:two',
+      ],
       rowDriverKey: 'parameter:zero',
       columnDriverKey: 'parameter:two',
     },
@@ -2765,6 +2773,173 @@ test('interactive driver selection retains one deterministic eligible non-zero t
       ['parameter:zero'],
     ),
     [],
+  );
+});
+
+test('eight-driver defaults retain eligible persisted selections then fill canonical page order', () => {
+  const assumptions = Array.from({ length: 10 }, (_, index) =>
+    numericAssumption(`driver-${index + 1}`, `${index + 1}`),
+  );
+
+  assert.equal(DEFAULT_TORNADO_DRIVER_LIMIT, 8);
+  assert.deepEqual(
+    resolveSensitivitySelections({
+      assumptions,
+      overridesByTarget: {},
+      storedTornadoDriverKeys: null,
+      storedRowDriverKey: null,
+      storedColumnDriverKey: null,
+      maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+    }).tornadoDriverKeys,
+    assumptions.slice(0, 8).map((assumption) => assumption.targetKey),
+  );
+  assert.deepEqual(
+    resolveSensitivitySelections({
+      assumptions,
+      overridesByTarget: {},
+      storedTornadoDriverKeys: [
+        'parameter:driver-6',
+        'parameter:driver-3',
+      ],
+      storedRowDriverKey: null,
+      storedColumnDriverKey: null,
+      maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+    }).tornadoDriverKeys,
+    [
+      'parameter:driver-6',
+      'parameter:driver-3',
+      'parameter:driver-1',
+      'parameter:driver-2',
+      'parameter:driver-4',
+      'parameter:driver-5',
+      'parameter:driver-7',
+      'parameter:driver-8',
+    ],
+  );
+});
+
+test('eight-driver restore excludes invalid canonical targets and deduplicates persisted order', () => {
+  const assumptions = [
+    numericAssumption('one', '1'),
+    numericAssumption('zero', '0'),
+    numericAssumption('invalid-number', 'not-a-number'),
+    numericAssumption('wrong-key', '4', { targetKey: 'parameter:other' }),
+    numericAssumption('two', '2'),
+    numericAssumption('three', '3'),
+  ];
+
+  assert.deepEqual(
+    resolveSensitivitySelections({
+      assumptions,
+      overridesByTarget: {},
+      storedTornadoDriverKeys: [
+        'parameter:two',
+        'parameter:two',
+        'parameter:zero',
+        'parameter:missing',
+        'parameter:one',
+      ],
+      storedRowDriverKey: null,
+      storedColumnDriverKey: null,
+      maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+    }).tornadoDriverKeys,
+    ['parameter:two', 'parameter:one', 'parameter:three'],
+  );
+});
+
+test('driver selector adds and removes in user order while retaining one driver', () => {
+  const eligibleTargetKeys = [
+    'parameter:one',
+    'parameter:two',
+    'parameter:three',
+  ];
+  const added = toggleTornadoDriver({
+    eligibleTargetKeys,
+    currentDriverKeys: ['parameter:two'],
+    targetKey: 'parameter:one',
+    maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+  });
+  assert.deepEqual(added, {
+    driverKeys: ['parameter:two', 'parameter:one'],
+    pendingReplacementTargetKey: null,
+  });
+  assert.deepEqual(
+    toggleTornadoDriver({
+      eligibleTargetKeys,
+      currentDriverKeys: added.driverKeys,
+      targetKey: 'parameter:two',
+      maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+    }),
+    {
+      driverKeys: ['parameter:one'],
+      pendingReplacementTargetKey: null,
+    },
+  );
+  assert.deepEqual(
+    toggleTornadoDriver({
+      eligibleTargetKeys,
+      currentDriverKeys: ['parameter:one'],
+      targetKey: 'parameter:one',
+      maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+    }),
+    {
+      driverKeys: ['parameter:one'],
+      pendingReplacementTargetKey: null,
+    },
+  );
+});
+
+test('driver selector requires an explicit replacement at eight and keeps its selection order', () => {
+  const eligibleTargetKeys = Array.from(
+    { length: 9 },
+    (_, index) => `parameter:driver-${index + 1}`,
+  );
+  const currentDriverKeys = eligibleTargetKeys.slice(0, 8);
+  const selection = toggleTornadoDriver({
+    eligibleTargetKeys,
+    currentDriverKeys,
+    targetKey: 'parameter:driver-9',
+    maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+  });
+  assert.deepEqual(selection, {
+    driverKeys: currentDriverKeys,
+    pendingReplacementTargetKey: 'parameter:driver-9',
+  });
+  assert.deepEqual(
+    replaceTornadoDriver({
+      eligibleTargetKeys,
+      currentDriverKeys,
+      outgoingTargetKey: 'parameter:driver-3',
+      incomingTargetKey: 'parameter:driver-9',
+      maxDrivers: DEFAULT_TORNADO_DRIVER_LIMIT,
+    }),
+    [
+      'parameter:driver-1',
+      'parameter:driver-2',
+      'parameter:driver-9',
+      'parameter:driver-4',
+      'parameter:driver-5',
+      'parameter:driver-6',
+      'parameter:driver-7',
+      'parameter:driver-8',
+    ],
+  );
+});
+
+test('driver selection changes mark a retained analysis stale without depending on response row rank', () => {
+  assert.equal(
+    isTornadoDriverSelectionStale(
+      ['parameter:one', 'parameter:two'],
+      ['parameter:one', 'parameter:two'],
+    ),
+    false,
+  );
+  assert.equal(
+    isTornadoDriverSelectionStale(
+      ['parameter:one', 'parameter:two'],
+      ['parameter:two', 'parameter:one'],
+    ),
+    true,
   );
 });
 
@@ -3456,8 +3631,11 @@ test('sensitivity workbench composes canonical APIs and dynamic components witho
     'resolveFixedDashboardViewModel',
     'estimateSensitivityKpis',
     'getCalculationSensitivityAnalysis',
-    'promoteFixedDashboardDriver',
-    'MAX_TORNADO_DRIVERS = 12',
+    'toggleTornadoDriver',
+    'replaceTornadoDriver',
+    'DEFAULT_TORNADO_DRIVER_LIMIT',
+    'persistTornadoDriverSelection',
+    'analysisTornadoDriverKeys',
   ]) {
     assert.ok(
       pageSource.includes(requiredSource),
@@ -3621,7 +3799,9 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
 
   assert.match(pageSource, /resolveFixedDashboardViewModel/);
   assert.match(pageSource, /orderFixedDashboardAssumptions/);
-  assert.match(pageSource, /promoteFixedDashboardDriver/);
+  assert.match(pageSource, /toggleTornadoDriver/);
+  assert.match(pageSource, /replaceTornadoDriver/);
+  assert.doesNotMatch(pageSource, /promoteFixedDashboardDriver/);
   assert.match(pageSource, /rowDriverKey: null/);
   assert.match(pageSource, /columnDriverKey: null/);
   assert.match(pageSource, /SENSITIVITY_DEBOUNCE_MS = 400/);

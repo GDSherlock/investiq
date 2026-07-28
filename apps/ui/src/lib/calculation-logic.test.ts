@@ -890,6 +890,66 @@ test('navigation consumes the shared canonical analysis context', () => {
   assert.doesNotMatch(navBarSource, /parsed_json/);
 });
 
+test('overview and cash flow pages use persisted canonical read models only', () => {
+  const overviewSource = readFileSync(
+    'src/app/dashboard/page.tsx',
+    'utf8',
+  );
+  const cashFlowSource = readFileSync(
+    'src/app/cashflows/page.tsx',
+    'utf8',
+  );
+  const sidebarSource = readFileSync(
+    'src/components/analysis/AnalysisStatusSidebar.tsx',
+    'utf8',
+  );
+  const combined = `${overviewSource}\n${cashFlowSource}\n${sidebarSource}`;
+
+  assert.match(overviewSource, /getOverviewAnalysis/);
+  assert.match(overviewSource, /getModelDiagnostics/);
+  assert.match(cashFlowSource, /getCashFlowAnalysis/);
+  assert.match(combined, /useActiveAnalysis/);
+  assert.match(sidebarSource, /Calculation status/);
+  assert.match(overviewSource, /Debt coverage/);
+  assert.match(overviewSource, /Project cash generation/);
+  assert.match(cashFlowSource, /Annual equity cash flow/);
+  assert.match(cashFlowSource, /Debt balance profile/);
+  assert.match(cashFlowSource, /Capex construction profile/);
+  assert.match(cashFlowSource, /Interest and principal profile/);
+
+  for (const forbidden of [
+    'parsed_json',
+    'createScenario',
+    'getCashFlows',
+    'useScenario',
+    'P10 / P50 / P90',
+    'NPV distribution',
+    'Decision Confidence',
+  ]) {
+    assert.equal(
+      combined.includes(forbidden),
+      false,
+      `canonical analysis pages must not include ${forbidden}`,
+    );
+  }
+  assert.doesNotMatch(combined, /\bgetModel\s*\(/);
+  assert.doesNotMatch(combined, /scenarios\//);
+  assert.doesNotMatch(combined, /\b(?:10%|8\.5%|1\.25x|65:35)\b/);
+});
+
+test('persisted line charts expose Line elements directly to Recharts', () => {
+  const chartSource = readFileSync(
+    'src/components/analysis/PersistedAnalysisChart.tsx',
+    'utf8',
+  );
+
+  assert.doesNotMatch(chartSource, /function ChartLines/);
+  assert.match(
+    chartSource,
+    /<LineChart[\s\S]*chart\.series\.map[\s\S]*<Line/,
+  );
+});
+
 test('existing run reload uses GET without recalculating', async () => {
   const originalFetch = globalThis.fetch;
   const calls: { url: string; method: string }[] = [];

@@ -6,6 +6,9 @@ import type {
   CalculationSensitivityResponse,
   CalculationRunOutputsResponse,
   CalculationRunResponse,
+  CashFlowAnalysisResponse,
+  ModelDiagnosticsResponse,
+  OverviewAnalysisResponse,
   WorkbookValidationResponse,
 } from './calculation-api-types';
 import { parseCalculationApiErrorPayload } from './calculation-flow';
@@ -194,6 +197,48 @@ export async function getCalculationRunOutputs(
     },
   );
   return parseJsonResponse<CalculationRunOutputsResponse>(res);
+}
+
+export async function getOverviewAnalysis(
+  calculationRunId: string,
+): Promise<OverviewAnalysisResponse> {
+  return parseJsonResponse<OverviewAnalysisResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/calculation-runs/${encodeURIComponent(calculationRunId)}/overview`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
+export async function getCashFlowAnalysis(
+  calculationRunId: string,
+): Promise<CashFlowAnalysisResponse> {
+  return parseJsonResponse<CashFlowAnalysisResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/calculation-runs/${encodeURIComponent(calculationRunId)}/cash-flow`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
+export async function getModelDiagnostics(
+  modelVersionId: string,
+): Promise<ModelDiagnosticsResponse> {
+  return parseJsonResponse<ModelDiagnosticsResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/diagnostics`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
 }
 
 export async function runCalculationSensitivity(

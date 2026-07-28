@@ -392,3 +392,84 @@ export interface CalculationRunResponse {
   warnings: string[];
   values: CalculationRunValue[];
 }
+
+export interface AnalysisBenchmark {
+  role: string;
+  value: string;
+  display_value: string;
+  source_ids: string[];
+}
+
+export interface AnalysisKpi {
+  slot: string;
+  role: string;
+  label: string;
+  value: string | null;
+  unit: string | null;
+  display_value: string;
+  benchmark: AnalysisBenchmark | null;
+  status: string;
+  source_type: 'calculated' | 'derived' | 'unavailable';
+  availability_status: 'available' | 'partial' | 'unavailable';
+  quality_status: string;
+  validation_status: string | null;
+  calculation_run_id: string;
+  source_ids: string[];
+}
+
+export interface AnalysisSeriesPoint {
+  period_index: number;
+  period: string | null;
+  value: string | null;
+  availability_status: 'available' | 'unavailable';
+  validation_status: string | null;
+  source_ids: string[];
+}
+
+export interface AnalysisSeries {
+  role: string;
+  label: string;
+  unit: string | null;
+  source_type: 'calculated' | 'derived';
+  availability_status: 'available' | 'partial' | 'unavailable';
+  source_ids: string[];
+  points: AnalysisSeriesPoint[];
+}
+
+export interface AnalysisChart {
+  slot: string;
+  title: string;
+  availability_status: 'available' | 'partial' | 'unavailable';
+  source_type: 'calculated' | 'derived' | 'unavailable';
+  fallback_used: string | null;
+  series: AnalysisSeries[];
+}
+
+export interface OverviewAnalysisResponse {
+  calculation_run_id: string;
+  model_version_id: string;
+  graph_version_id: string;
+  kpis: AnalysisKpi[];
+  charts: AnalysisChart[];
+}
+
+export interface CashFlowAnalysisResponse {
+  calculation_run_id: string;
+  model_version_id: string;
+  graph_version_id: string;
+  charts: AnalysisChart[];
+}
+
+export interface ModelDiagnosticsResponse {
+  model_version_id: string;
+  status: string;
+  validation_status: string;
+  submitted: boolean;
+  stop_reason: string | null;
+  error_code: string | null;
+  coverage: Record<string, unknown>;
+  validation_summary: Record<string, unknown>;
+  time_series_summary: Record<string, unknown>;
+  detected_sheets: string[];
+  error_count: number;
+}

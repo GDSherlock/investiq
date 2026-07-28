@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -23,6 +24,13 @@ from partition_planner import WorkbookPartition
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _ToolCallInspection:
+    arguments: dict[str, Any] | None
+    call_id: str | None
+    has_function_calls: bool
 
 
 class PartitionDriverError(RuntimeError):
@@ -207,11 +215,12 @@ class AzurePartitionDriver:
             if previous_response_id is not None:
                 kwargs["previous_response_id"] = previous_response_id
             response = self._call_with_retry(kwargs, operation_id=operation_id)
-            parsed = self._parse_tool_result(
+            inspection = self._inspect_tool_result(
                 response,
                 expected_tool_name=expected_tool_name,
                 required_fields=required_fields,
             )
+            parsed = inspection.arguments
             issue = (
                 payload_validator(parsed)
                 if parsed is not None and payload_validator is not None
@@ -232,6 +241,14 @@ class AzurePartitionDriver:
                 structured_attempt,
             )
             if structured_attempt == 0:
+                if (
+                    inspection.has_function_calls
+                    and inspection.call_id is None
+                ):
+                    raise PartitionStructuredOutputError(
+                        "Azure response contained an unacknowledgeable "
+                        "function call."
+                    )
                 previous_response_id = response.id
                 repair_instruction = (
                     issue.repair_instruction
@@ -241,10 +258,25 @@ class AzurePartitionDriver:
                         "with every required field."
                     )
                 )
-                next_input = [{
-                    "role": "user",
-                    "content": repair_instruction,
-                }]
+                if inspection.call_id is not None:
+                    next_input = [{
+                        "type": "function_call_output",
+                        "call_id": inspection.call_id,
+                        "output": json.dumps(
+                            {
+                                "accepted": False,
+                                "validation_code": validation_code,
+                                "repair_instruction": repair_instruction,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    }]
+                else:
+                    next_input = [{
+                        "role": "user",
+                        "content": repair_instruction,
+                    }]
         raise PartitionStructuredOutputError(
             "Azure response did not contain a valid structured partition result."
         )
@@ -316,27 +348,47 @@ class AzurePartitionDriver:
             self.request_ids.append(request_id)
 
     @staticmethod
-    def _parse_tool_result(
+    def _inspect_tool_result(
         response: Any,
         *,
         expected_tool_name: str,
         required_fields: set[str],
-    ) -> dict[str, Any] | None:
-        calls = [
+    ) -> _ToolCallInspection:
+        function_calls = [
             item
             for item in getattr(response, "output", [])
             if getattr(item, "type", None) == "function_call"
-            and getattr(item, "name", None) == expected_tool_name
         ]
-        if len(calls) != 1:
-            return None
+        expected_calls = [
+            item
+            for item in function_calls
+            if getattr(item, "name", None) == expected_tool_name
+        ]
+        if len(function_calls) != 1 or len(expected_calls) != 1:
+            return _ToolCallInspection(
+                arguments=None,
+                call_id=None,
+                has_function_calls=bool(function_calls),
+            )
+
+        call = expected_calls[0]
+        raw_call_id = getattr(call, "call_id", None)
+        call_id = (
+            raw_call_id.strip()
+            if isinstance(raw_call_id, str) and raw_call_id.strip()
+            else None
+        )
         try:
-            parsed = json.loads(calls[0].arguments or "{}")
+            parsed = json.loads(call.arguments or "{}")
         except (TypeError, json.JSONDecodeError):
-            return None
+            parsed = None
         if not isinstance(parsed, dict) or not required_fields <= set(parsed):
-            return None
-        return parsed
+            parsed = None
+        return _ToolCallInspection(
+            arguments=parsed,
+            call_id=call_id,
+            has_function_calls=True,
+        )
 
 
 __all__ = [

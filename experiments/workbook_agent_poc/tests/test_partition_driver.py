@@ -91,7 +91,17 @@ def _candidate_with_source():
     }
 
 
-def _response(request, *, response_id, tool_name, arguments):
+def _response(
+    request,
+    *,
+    response_id,
+    tool_name,
+    arguments,
+    call_id=None,
+):
+    effective_call_id = (
+        f"call-{response_id}" if call_id is None else call_id
+    )
     return httpx.Response(
         200,
         request=request,
@@ -105,7 +115,7 @@ def _response(request, *, response_id, tool_name, arguments):
             "output": [{
                 "id": f"fc-{response_id}",
                 "type": "function_call",
-                "call_id": f"call-{response_id}",
+                "call_id": effective_call_id,
                 "name": tool_name,
                 "arguments": json.dumps(arguments),
             }],
@@ -220,16 +230,45 @@ def test_invalid_output_gets_one_same_partition_correction_only(monkeypatch):
     driver.extract(second, _envelope(second))
 
     assert bodies[1]["previous_response_id"] == "resp-invalid"
+    assert bodies[1]["input"][0]["role"] == "user"
+    assert (
+        bodies[1]["input"][0]["content"]
+        == "Return exactly one submit_partition_result function call "
+        "with every required field."
+    )
     assert "previous_response_id" not in bodies[2]
 
 
-def test_missing_candidate_source_gets_one_targeted_correction(monkeypatch):
+def test_missing_candidate_source_gets_protocol_correct_correction(monkeypatch):
     partition = _partition("partition-source-repair", "A1:B2")
     bodies = []
 
     def handler(request):
         body = json.loads(request.content)
         bodies.append(body)
+        if len(bodies) == 2:
+            correction_items = body["input"]
+            if (
+                len(correction_items) != 1
+                or correction_items[0].get("type") != "function_call_output"
+                or correction_items[0].get("call_id")
+                != "call-resp-source-1"
+            ):
+                return httpx.Response(
+                    400,
+                    request=request,
+                    json={
+                        "error": {
+                            "message": (
+                                "No tool output found for function call "
+                                "call-resp-source-1."
+                            ),
+                            "type": "invalid_request_error",
+                            "param": "input",
+                            "code": None,
+                        }
+                    },
+                )
         arguments = _partition_args(partition)
         arguments["result"]["all_assumption_candidates"] = [
             _candidate_without_source()
@@ -250,13 +289,157 @@ def test_missing_candidate_source_gets_one_targeted_correction(monkeypatch):
 
     assert len(bodies) == 2
     assert bodies[1]["previous_response_id"] == "resp-source-1"
-    correction = bodies[1]["input"][0]["content"]
-    assert "candidate_source_missing" in correction
-    assert "source_references" in correction
-    assert "secret-model-label" not in correction
+    correction_items = bodies[1]["input"]
+    assert correction_items[0]["type"] == "function_call_output"
+    assert correction_items[0]["call_id"] == "call-resp-source-1"
+    rejection = json.loads(correction_items[0]["output"])
+    assert rejection["accepted"] is False
+    assert rejection["validation_code"] == "candidate_source_missing"
+    assert "source_references" in rejection["repair_instruction"]
+    rendered_correction = json.dumps(correction_items)
+    assert '"role": "user"' not in rendered_correction
+    assert "secret-model-label" not in rendered_correction
     assert result["result"]["all_assumption_candidates"][0][
         "source_references"
     ] == [{"sheet_name": "Model", "cell": "A1"}]
+
+
+def test_missing_call_id_fails_without_correction_call(monkeypatch):
+    partition = _partition("partition-missing-call-id", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        arguments = _partition_args(partition)
+        arguments["result"]["all_assumption_candidates"] = [
+            _candidate_without_source()
+        ]
+        return _response(
+            request,
+            response_id="resp-missing-call-id",
+            tool_name="submit_partition_result",
+            arguments=arguments,
+            call_id="",
+        )
+
+    driver = _driver(monkeypatch, handler)
+
+    with pytest.raises(PartitionStructuredOutputError):
+        driver.extract(partition, _envelope(partition))
+
+    assert len(bodies) == 1
+    assert driver.call_count == 1
+
+
+def test_unexpected_function_call_fails_without_correction(monkeypatch):
+    partition = _partition("partition-unexpected-tool", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return _response(
+            request,
+            response_id="resp-unexpected-tool",
+            tool_name="unexpected_tool",
+            arguments={},
+        )
+
+    driver = _driver(monkeypatch, handler)
+
+    with pytest.raises(PartitionStructuredOutputError):
+        driver.extract(partition, _envelope(partition))
+
+    assert len(bodies) == 1
+    assert driver.call_count == 1
+
+
+def test_multiple_function_calls_fail_without_correction(monkeypatch):
+    partition = _partition("partition-multiple-tools", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        arguments = json.dumps(_partition_args(partition))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "resp-multiple-tools",
+                "object": "response",
+                "created_at": 0,
+                "model": "custom-full-deployment",
+                "output": [
+                    {
+                        "id": "fc-multiple-1",
+                        "type": "function_call",
+                        "call_id": "call-multiple-1",
+                        "name": "submit_partition_result",
+                        "arguments": arguments,
+                    },
+                    {
+                        "id": "fc-multiple-2",
+                        "type": "function_call",
+                        "call_id": "call-multiple-2",
+                        "name": "submit_partition_result",
+                        "arguments": arguments,
+                    },
+                ],
+            },
+        )
+
+    driver = _driver(monkeypatch, handler)
+
+    with pytest.raises(PartitionStructuredOutputError):
+        driver.extract(partition, _envelope(partition))
+
+    assert len(bodies) == 1
+    assert driver.call_count == 1
+
+
+def test_malformed_arguments_get_function_output_correction(monkeypatch):
+    partition = _partition("partition-malformed-arguments", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        if len(bodies) == 1:
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "resp-malformed",
+                    "object": "response",
+                    "created_at": 0,
+                    "model": "custom-full-deployment",
+                    "output": [{
+                        "id": "fc-malformed",
+                        "type": "function_call",
+                        "call_id": "call-malformed",
+                        "name": "submit_partition_result",
+                        "arguments": "{",
+                    }],
+                },
+            )
+        return _response(
+            request,
+            response_id="resp-malformed-corrected",
+            tool_name="submit_partition_result",
+            arguments=_partition_args(partition),
+        )
+
+    result = _driver(monkeypatch, handler).extract(
+        partition,
+        _envelope(partition),
+    )
+
+    assert result["partition_id"] == partition.partition_id
+    assert bodies[1]["previous_response_id"] == "resp-malformed"
+    correction = bodies[1]["input"][0]
+    assert correction["type"] == "function_call_output"
+    assert correction["call_id"] == "call-malformed"
+    rejection = json.loads(correction["output"])
+    assert rejection["validation_code"] == "partition_tool_call_invalid"
 
 
 def test_two_source_less_results_raise_without_third_call(monkeypatch):

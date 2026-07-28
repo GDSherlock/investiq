@@ -8,12 +8,16 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .analysis_output_resolver import (
+    normalized_analysis_label,
+    resolve_analysis_output,
+)
 from .calculation_integration_service import (
     CalculationIntegrationError,
     CalculationIntegrationService,
 )
 from .calculation_rules.phase2_models import CalculationRunRecord
-from .model_extraction_models import ModelSemanticBinding, ModelVersion
+from .model_extraction_models import ModelParameter, ModelVersion
 from .schemas import (
     AnalysisBenchmarkItem,
     AnalysisChartItem,
@@ -21,7 +25,6 @@ from .schemas import (
     AnalysisSeriesItem,
     AnalysisSeriesPointItem,
     CalculationProjectedValueItem,
-    CalculationRunOutputItem,
     CalculationRunOutputsResponse,
     CalculationRunScalarOutputItem,
     CalculationRunSeriesOutputItem,
@@ -83,6 +86,19 @@ _CASH_FLOW_CHARTS = (
     ),
 )
 
+_PARAMETER_LABEL_ALIASES = {
+    "discount_rate": frozenset({"discount rate", "wacc"}),
+    "project_irr_hurdle": frozenset(
+        {"project irr hurdle", "project irr hurdle rate"}
+    ),
+    "equity_irr_hurdle": frozenset(
+        {"equity irr hurdle", "equity irr hurdle rate"}
+    ),
+    "dscr_covenant": frozenset(
+        {"dscr covenant", "minimum dscr covenant"}
+    ),
+}
+
 
 class AnalysisPresentationService:
     def __init__(
@@ -95,18 +111,16 @@ class AnalysisPresentationService:
 
     def overview(self, calculation_run_id: str) -> OverviewAnalysisResponse:
         projection = self._calculation_service.get_run_outputs(calculation_run_id)
-        bindings = self._bindings(projection.model_version_id)
         kpis = [
             self._kpi(
                 projection,
-                bindings,
                 slot=slot,
                 roles=roles,
                 default_label=label,
             )
             for slot, roles, label in _KPI_SLOTS
         ]
-        charts = self._overview_charts(projection, bindings)
+        charts = self._overview_charts(projection)
         return OverviewAnalysisResponse(
             calculation_run_id=projection.calculation_run_id,
             model_version_id=projection.model_version_id,
@@ -117,12 +131,11 @@ class AnalysisPresentationService:
 
     def cash_flow(self, calculation_run_id: str) -> CashFlowAnalysisResponse:
         projection = self._calculation_service.get_run_outputs(calculation_run_id)
-        bindings = self._bindings(projection.model_version_id)
         charts: list[AnalysisChartItem] = []
         for slot, title, roles in _CASH_FLOW_CHARTS:
             if slot == "cumulative_cash_flow":
                 charts.append(
-                    self._cumulative_chart(projection, bindings, slot, title)
+                    self._cumulative_chart(projection, slot, title)
                 )
                 continue
             series = [
@@ -131,7 +144,6 @@ class AnalysisPresentationService:
                 if (
                     item := self._series_for_role(
                         projection,
-                        bindings,
                         role,
                     )
                 )
@@ -200,11 +212,10 @@ class AnalysisPresentationService:
     def _overview_charts(
         self,
         projection: CalculationRunOutputsResponse,
-        bindings: dict[str, ModelSemanticBinding],
     ) -> list[AnalysisChartItem]:
-        revenue = self._series_for_role(projection, bindings, "revenue")
-        ebitda = self._series_for_role(projection, bindings, "ebitda")
-        cfads = self._series_for_role(projection, bindings, "cfads")
+        revenue = self._series_for_role(projection, "revenue")
+        ebitda = self._series_for_role(projection, "ebitda")
+        cfads = self._series_for_role(projection, "cfads")
         if revenue is not None and ebitda is not None:
             operating = self._chart(
                 "operating_trajectory",
@@ -225,8 +236,8 @@ class AnalysisPresentationService:
                 [],
             )
 
-        debt_ratio = self._series_for_role(projection, bindings, "debt_ratio")
-        equity_ratio = self._series_for_role(projection, bindings, "equity_ratio")
+        debt_ratio = self._series_for_role(projection, "debt_ratio")
+        equity_ratio = self._series_for_role(projection, "equity_ratio")
         if debt_ratio is not None and equity_ratio is not None:
             capital = self._chart(
                 "capital_structure",
@@ -236,12 +247,10 @@ class AnalysisPresentationService:
         else:
             total_debt = self._series_for_role(
                 projection,
-                bindings,
                 "total_debt",
             )
             total_equity = self._series_for_role(
                 projection,
-                bindings,
                 "total_equity",
             )
             capital = self._chart(
@@ -259,10 +268,9 @@ class AnalysisPresentationService:
                 ),
             )
 
-        dscr = self._series_for_role(projection, bindings, "dscr")
+        dscr = self._series_for_role(projection, "dscr")
         covenant = self._series_for_role(
             projection,
-            bindings,
             "dscr_covenant",
         )
         coverage_series = [item for item in (dscr, covenant) if item is not None]
@@ -275,7 +283,6 @@ class AnalysisPresentationService:
 
         project_fcf = self._series_for_role(
             projection,
-            bindings,
             "project_free_cash_flow",
         )
         project_cash_series = [
@@ -285,7 +292,6 @@ class AnalysisPresentationService:
         if not project_cash_series:
             operating_cash = self._series_for_role(
                 projection,
-                bindings,
                 "operating_cash_flow",
             )
             if operating_cash is not None:
@@ -299,37 +305,26 @@ class AnalysisPresentationService:
         )
         return [operating, capital, debt_coverage, project_cash]
 
-    def _bindings(
-        self,
-        model_version_id: str,
-    ) -> dict[str, ModelSemanticBinding]:
-        return {
-            binding.semantic_role: binding
-            for binding in self._session.scalars(
-                select(ModelSemanticBinding).where(
-                    ModelSemanticBinding.model_version_id == model_version_id
-                )
-            )
-        }
-
     def _kpi(
         self,
         projection: CalculationRunOutputsResponse,
-        bindings: dict[str, ModelSemanticBinding],
         *,
         slot: str,
         roles: tuple[str, ...],
         default_label: str,
     ) -> AnalysisKpiItem:
         for role in roles:
-            binding = bindings.get(role)
-            output = self._bound_output(projection.outputs, binding)
+            output = resolve_analysis_output(
+                projection.outputs,
+                role,
+                entity_kind="scalar",
+            )
             if not isinstance(output, CalculationRunScalarOutputItem):
                 continue
             value = self._number(output.current)
             if value is None:
                 continue
-            benchmark = self._benchmark(projection, bindings, role)
+            benchmark = self._benchmark(projection, role)
             return AnalysisKpiItem(
                 slot=slot,
                 role=role,
@@ -368,7 +363,6 @@ class AnalysisPresentationService:
     def _benchmark(
         self,
         projection: CalculationRunOutputsResponse,
-        bindings: dict[str, ModelSemanticBinding],
         role: str,
     ) -> AnalysisBenchmarkItem | None:
         benchmark_role = {
@@ -381,13 +375,16 @@ class AnalysisPresentationService:
         }.get(role)
         if benchmark_role is None:
             return None
-        binding = bindings.get(benchmark_role)
-        if binding is None or binding.model_parameter is None:
+        parameter = self._parameter_for_role(
+            projection.model_version_id,
+            benchmark_role,
+        )
+        if parameter is None:
             return None
         value = self._current_parameter_value(
             projection.calculation_run_id,
-            binding.model_parameter_id,
-            binding.model_parameter.validated_value_json,
+            parameter.id,
+            parameter.validated_value_json,
         )
         if value is None:
             return None
@@ -395,8 +392,38 @@ class AnalysisPresentationService:
             role=benchmark_role,
             value=value,
             display_value=self._display_value(benchmark_role, value, None),
-            source_ids=[binding.model_parameter_id],
+            source_ids=[parameter.id],
         )
+
+    def _parameter_for_role(
+        self,
+        model_version_id: str,
+        role: str,
+    ) -> ModelParameter | None:
+        parameters = list(
+            self._session.scalars(
+                select(ModelParameter).where(
+                    ModelParameter.model_version_id == model_version_id
+                )
+            )
+        )
+        direct = [
+            parameter
+            for parameter in parameters
+            if parameter.business_role == role
+        ]
+        if len(direct) == 1:
+            return direct[0]
+        if direct:
+            return None
+        aliases = _PARAMETER_LABEL_ALIASES.get(role, frozenset())
+        legacy = [
+            parameter
+            for parameter in parameters
+            if parameter.business_role is None
+            and normalized_analysis_label(parameter.label) in aliases
+        ]
+        return legacy[0] if len(legacy) == 1 else None
 
     def _current_parameter_value(
         self,
@@ -424,28 +451,16 @@ class AnalysisPresentationService:
         except InvalidOperation:
             return None
 
-    @staticmethod
-    def _bound_output(
-        outputs: list[CalculationRunOutputItem],
-        binding: ModelSemanticBinding | None,
-    ) -> CalculationRunOutputItem | None:
-        if binding is None:
-            return None
-        output_id = binding.canonical_output_id or binding.financial_series_id
-        if output_id is None:
-            return None
-        return next(
-            (output for output in outputs if output.output_id == output_id),
-            None,
-        )
-
     def _series_for_role(
         self,
         projection: CalculationRunOutputsResponse,
-        bindings: dict[str, ModelSemanticBinding],
         role: str,
     ) -> AnalysisSeriesItem | None:
-        output = self._bound_output(projection.outputs, bindings.get(role))
+        output = resolve_analysis_output(
+            projection.outputs,
+            role,
+            entity_kind="series",
+        )
         if isinstance(output, CalculationRunScalarOutputItem):
             value = self._number(output.current)
             if value is None:
@@ -506,13 +521,11 @@ class AnalysisPresentationService:
     def _cumulative_chart(
         self,
         projection: CalculationRunOutputsResponse,
-        bindings: dict[str, ModelSemanticBinding],
         slot: str,
         title: str,
     ) -> AnalysisChartItem:
         source = self._series_for_role(
             projection,
-            bindings,
             "project_free_cash_flow",
         )
         if source is None or source.availability_status == "unavailable":

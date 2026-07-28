@@ -6,7 +6,6 @@ from apps.api.app.analysis_presentation_service import AnalysisPresentationServi
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
     FinancialSeries,
-    ModelSemanticBinding,
     ModelVersion,
     WorkbookVersion,
 )
@@ -88,16 +87,6 @@ def test_cumulative_cash_flow_propagates_a_missing_annual_value() -> None:
                 validation_status="validated",
             )
         )
-        session.flush()
-        session.add(
-            ModelSemanticBinding(
-                id=new_uuid(),
-                model_version_id=model_id,
-                semantic_role="project_free_cash_flow",
-                financial_series_id=series_id,
-                binding_source="reviewed",
-            )
-        )
         session.commit()
         points = [
             {
@@ -124,7 +113,7 @@ def test_cumulative_cash_flow_propagates_a_missing_annual_value() -> None:
                     {
                         "output_id": series_id,
                         "entity_kind": "series",
-                        "business_role": "project_free_cash_flow",
+                        "business_role": "unclassified",
                         "label": "Project FCF",
                         "unit": "USDm",
                         "mapping_status": "partial",
@@ -214,7 +203,7 @@ def test_overview_operating_trajectory_uses_explicit_revenue_cfads_fallback() ->
                 {
                     "output_id": series_id,
                     "entity_kind": "series",
-                    "business_role": role,
+                    "business_role": "unclassified",
                     "label": role.upper(),
                     "unit": "USDm",
                     "mapping_status": "mapped",
@@ -234,15 +223,6 @@ def test_overview_operating_trajectory_uses_explicit_revenue_cfads_fallback() ->
                         for index, value in enumerate(("10", "12"))
                     ],
                 }
-            )
-            session.add(
-                ModelSemanticBinding(
-                    id=new_uuid(),
-                    model_version_id=model_id,
-                    semantic_role=role,
-                    financial_series_id=series_id,
-                    binding_source="reviewed",
-                )
             )
         session.add_all(output_rows)
         session.commit()

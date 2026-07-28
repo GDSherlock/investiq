@@ -21,9 +21,9 @@ class HardCaps:
     max_range_cells: int = 500
     deadline_seconds: int = 30 * 60
     max_repeated_identical: int = 6
-    max_internal_chunks_per_request: int = 64
-    max_internal_chunks_per_run: int = 256
-    max_observed_bytes_per_run: int = 4_000_000
+    max_internal_chunks_per_request: int = 768
+    max_internal_chunks_per_run: int = 4_096
+    max_observed_bytes_per_run: int = 24 * 1024 * 1024
     reserved_submit_call: int = 1
 
 

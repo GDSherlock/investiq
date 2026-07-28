@@ -36,7 +36,7 @@ The effective container configuration was inspected by printing only selected
 non-secret values and booleans:
 
 ```text
-deployment: gpt-5.4
+deployment: gpt-5.4-mini
 endpoint_configured: true
 api_key_configured: true
 max_output_tokens environment value: not set
@@ -47,6 +47,13 @@ partitioned environment value: default true
 The driver therefore uses its code defaults of `16384` maximum output tokens
 and `medium` reasoning effort. No key, endpoint value, connection string, or
 workbook payload is recorded in this report.
+
+Azure CLI authentication was available, but the CLI's active subscription did
+not contain the Foundry resource derived from the configured endpoint. The
+management-plane deployment metadata therefore could not be refreshed. The
+container configuration proves which deployment identifier was called, but the
+underlying model binding is not independently reclassified from management
+metadata in this run.
 
 ## Deterministic Test Results
 
@@ -118,16 +125,51 @@ Azure client.
 
 ## Live Upload Result
 
-Not run. The user explicitly paused real Azure calls before the public upload
-step.
+After the local validation completed, the user authorized one real Azure
+validation with the local deployment changed to `gpt-5.4-mini`.
 
-- HTTP upload request: not sent
-- Azure Responses requests: zero
-- Azure request IDs: none
-- Workbook/model version IDs: none created by this local validation
+Command:
 
-Consequently, Azure model semantics, live response latency, and live
-materialization are not claimed as accepted.
+```text
+curl --fail-with-body --silent --show-error --max-time 1800 \
+  -X POST \
+  -F file=@/Users/kingjason/Downloads/PF Full Model END (1).xlsx \
+  http://127.0.0.1:8000/api/v1/models/upload
+```
+
+Result:
+
+```text
+HTTP status: 502
+runtime_seconds: 515.041239
+public_error_code: AZURE_RESPONSES_ERROR
+public_message: Azure Responses API execution failed.
+completed_partition_count: 10
+terminal_code: partition_driver_error
+Azure status on failing call: 400
+Azure error code: unavailable
+Azure request ID: a72c5034-c08d-4387-9f0f-d31f06d28f5b
+failed operation ID: 1483e6d68ae170fdf966827a9510e5a4e7b56d88f3dab9b1b42a29932e9917dd
+```
+
+The failed operation maps deterministically to:
+
+```text
+position: 11 of 163
+sheet/range: FS!AV1:BS32
+primary_fact_count: 504
+dependency_fact_count: 432
+estimated_total_tokens: 121923
+estimated_raw_tokens: 108353
+request_bytes: 243846
+```
+
+These measurements are below the configured application limits. Azure did not
+return `context_length_exceeded`, an authentication status, or a retryable
+status. The SDK exception exposed HTTP 400 and a request ID but no parseable
+Azure error code. The available evidence therefore does not distinguish a
+content-policy rejection from another request-specific Azure 400 condition.
+No retry was made.
 
 ## Coverage and Provenance
 
@@ -155,10 +197,20 @@ this test its value was `163`, but every operation was handled by the in-process
 
 ## Persistence and Calculation Preparation
 
-The local no-Azure validation invoked the request-scoped partition pipeline
-directly and intentionally did not call the public upload endpoint. It created
-no workbook version, model version, extraction snapshot, or calculation-rule
-record.
+The earlier local no-Azure validation invoked the request-scoped partition
+pipeline directly and created no database records. The subsequent authorized
+live upload created a new failed attempt:
+
+```text
+model_version_id: 069d269c-9781-49dd-b75b-f0f7ce2d8f6b
+workbook_version_id: d845e2f4-4735-4177-b5ab-c4415d79e42c
+status: extraction_failed
+validation_status: not_run
+submitted: false
+stop_reason: runner_exception
+error_code: EXTRACTION_ERROR
+calculation_rule_extractions for this attempt: 0
+```
 
 Existing persistence and calculation preparation behavior is covered by the
 focused deterministic suite above, including failed-attempt lifecycle behavior:
@@ -167,11 +219,15 @@ model version ID.
 
 ## Remaining Warnings
 
-- Live Azure upload, semantic extraction quality, durable materialization, and
-  calculation preparation for this supplied workbook remain pending by user
-  instruction.
-- The container receives the `gpt-5.4` deployment and defaults partitioned mode
-  to true, but does not receive explicit maximum-output-token or
+- The real `gpt-5.4-mini` upload failed after 10 completed partitions because
+  Azure rejected partition 11 with HTTP 400 and no parseable error code.
+- The Azure request ID above is the strongest correlation key for obtaining the
+  provider-side rejection reason before any retry.
+- The underlying model binding could not be refreshed from Azure management
+  metadata because the active CLI subscription does not contain the configured
+  Foundry resource.
+- The container receives the `gpt-5.4-mini` deployment and defaults partitioned
+  mode to true, but does not receive explicit maximum-output-token or
   reasoning-effort environment values.
 - The complete Python suite has one unrelated failure caused by existing
   uncommitted frontend changes described above.

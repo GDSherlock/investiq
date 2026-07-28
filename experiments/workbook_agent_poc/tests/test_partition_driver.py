@@ -16,6 +16,7 @@ from partition_driver import (
     AzurePartitionDriver,
     PartitionAuthenticationError,
     PartitionContextLimitError,
+    PartitionStructuredOutputError,
 )
 from partition_planner import WorkbookPartition
 
@@ -71,6 +72,22 @@ def _partition_args(partition):
             "all_assumption_candidates": [],
             "output_candidates": [],
         },
+    }
+
+
+def _candidate_without_source():
+    return {
+        "candidate_id": "candidate-secret-id",
+        "original_label": "secret-model-label",
+        "submitted_role": "hardcoded_input",
+        "raw_value": 0.25,
+    }
+
+
+def _candidate_with_source():
+    return {
+        **_candidate_without_source(),
+        "source_references": [{"sheet_name": "Model", "cell": "A1"}],
     }
 
 
@@ -204,6 +221,98 @@ def test_invalid_output_gets_one_same_partition_correction_only(monkeypatch):
 
     assert bodies[1]["previous_response_id"] == "resp-invalid"
     assert "previous_response_id" not in bodies[2]
+
+
+def test_missing_candidate_source_gets_one_targeted_correction(monkeypatch):
+    partition = _partition("partition-source-repair", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        arguments = _partition_args(partition)
+        arguments["result"]["all_assumption_candidates"] = [
+            _candidate_without_source()
+            if len(bodies) == 1
+            else _candidate_with_source()
+        ]
+        return _response(
+            request,
+            response_id=f"resp-source-{len(bodies)}",
+            tool_name="submit_partition_result",
+            arguments=arguments,
+        )
+
+    result = _driver(monkeypatch, handler).extract(
+        partition,
+        _envelope(partition),
+    )
+
+    assert len(bodies) == 2
+    assert bodies[1]["previous_response_id"] == "resp-source-1"
+    correction = bodies[1]["input"][0]["content"]
+    assert "candidate_source_missing" in correction
+    assert "source_references" in correction
+    assert "secret-model-label" not in correction
+    assert result["result"]["all_assumption_candidates"][0][
+        "source_references"
+    ] == [{"sheet_name": "Model", "cell": "A1"}]
+
+
+def test_two_source_less_results_raise_without_third_call(monkeypatch):
+    partition = _partition("partition-source-exhausted", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        arguments = _partition_args(partition)
+        arguments["result"]["all_assumption_candidates"] = [
+            _candidate_without_source()
+        ]
+        return _response(
+            request,
+            response_id=f"resp-exhausted-{len(bodies)}",
+            tool_name="submit_partition_result",
+            arguments=arguments,
+        )
+
+    driver = _driver(monkeypatch, handler)
+
+    with pytest.raises(PartitionStructuredOutputError):
+        driver.extract(partition, _envelope(partition))
+
+    assert len(bodies) == 2
+    assert driver.call_count == 2
+
+
+def test_source_repair_logs_only_static_issue_code(monkeypatch, caplog):
+    partition = _partition("partition-source-log", "A1:B2")
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        arguments = _partition_args(partition)
+        arguments["result"]["all_assumption_candidates"] = [
+            _candidate_without_source()
+            if calls == 1
+            else _candidate_with_source()
+        ]
+        return _response(
+            request,
+            response_id=f"resp-log-{calls}",
+            tool_name="submit_partition_result",
+            arguments=arguments,
+        )
+
+    caplog.set_level(logging.WARNING)
+    _driver(monkeypatch, handler).extract(partition, _envelope(partition))
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert "candidate_source_missing" in rendered
+    assert "secret-model-label" not in rendered
+    assert "secret-cell-sentinel" not in rendered
+    assert "secret-api-key-sentinel" not in rendered
 
 
 @pytest.mark.parametrize("status_code", [401, 403])

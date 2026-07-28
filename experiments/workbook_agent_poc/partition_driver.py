@@ -12,10 +12,12 @@ from openai import OpenAI, OpenAIError
 
 from partition_contract import (
     PARTITION_SYSTEM_PROMPT,
+    PartitionResultIssue,
     RECONCILIATION_SYSTEM_PROMPT,
     SUBMIT_PARTITION_TOOL,
     SUBMIT_RECONCILIATION_TOOL,
     serialize_partition_envelope,
+    validate_partition_tool_arguments,
 )
 from partition_planner import WorkbookPartition
 
@@ -137,6 +139,7 @@ class AzurePartitionDriver:
                 "result",
             },
             operation_id=partition.partition_id,
+            payload_validator=validate_partition_tool_arguments,
         )
         return result
 
@@ -181,6 +184,9 @@ class AzurePartitionDriver:
         expected_tool_name: str,
         required_fields: set[str],
         operation_id: str,
+        payload_validator: (
+            Callable[[dict[str, Any]], PartitionResultIssue | None] | None
+        ) = None,
     ) -> dict[str, Any]:
         previous_response_id: str | None = None
         next_input = initial_input
@@ -206,16 +212,38 @@ class AzurePartitionDriver:
                 expected_tool_name=expected_tool_name,
                 required_fields=required_fields,
             )
-            if parsed is not None:
+            issue = (
+                payload_validator(parsed)
+                if parsed is not None and payload_validator is not None
+                else None
+            )
+            if parsed is not None and issue is None:
                 return parsed
+            validation_code = (
+                issue.code
+                if issue is not None
+                else "partition_tool_call_invalid"
+            )
+            logger.warning(
+                "partition_structured_output_rejected operation_id=%s "
+                "validation_code=%s structured_attempt=%s",
+                operation_id,
+                validation_code,
+                structured_attempt,
+            )
             if structured_attempt == 0:
                 previous_response_id = response.id
-                next_input = [{
-                    "role": "user",
-                    "content": (
+                repair_instruction = (
+                    issue.repair_instruction
+                    if issue is not None
+                    else (
                         f"Return exactly one {expected_tool_name} function call "
                         "with every required field."
-                    ),
+                    )
+                )
+                next_input = [{
+                    "role": "user",
+                    "content": repair_instruction,
                 }]
         raise PartitionStructuredOutputError(
             "Azure response did not contain a valid structured partition result."

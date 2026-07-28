@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { CalculationPreparationPanel } from '@/components/calculation/CalculationPreparationPanel';
+import { ExtractionLoadingExperience } from '@/components/extraction/ExtractionLoadingExperience';
 import { uploadWorkbookForCalculation } from '@/lib/api';
 import {
   CalculationApiError,
@@ -16,6 +17,12 @@ import {
   persistUploadIdentity,
   readRestorableCalculationIdentity,
 } from '@/lib/calculation-storage';
+import {
+  createProgressDriver,
+  type ProgressDriver,
+  type ProgressSnapshot,
+} from '@/lib/extractionProgress';
+import { runUploadAttempt } from '@/lib/uploadAttempt';
 
 interface ActiveCalculationIdentity {
   modelVersionId: string;
@@ -57,6 +64,18 @@ export default function HomePage() {
   const [uploadError, setUploadError] = useState<Error | null>(null);
   const [activeIdentity, setActiveIdentity] =
     useState<ActiveCalculationIdentity | null>(null);
+  const [loadingState, setLoadingState] =
+    useState<'processing' | 'completed'>('processing');
+  const [progressSnapshot, setProgressSnapshot] = useState<ProgressSnapshot>({
+    progress: 0,
+    stage: 'upload',
+    phase: 'processing',
+  });
+  const activeDriverRef = useRef<ProgressDriver | null>(null);
+  const attemptInFlightRef = useRef(false);
+  const handoffTimerRef = useRef<number | null>(null);
+  const handoffResolveRef = useRef<(() => void) | null>(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     // Keep the legacy page migration for other application pages. Calculation
@@ -85,39 +104,134 @@ export default function HomePage() {
     }
   }, []);
 
-  const handleUpload = async () => {
-    if (!file || phase === 'uploading') {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      activeDriverRef.current?.stop();
+      if (handoffTimerRef.current !== null) {
+        window.clearTimeout(handoffTimerRef.current);
+      }
+      handoffResolveRef.current?.();
+      handoffResolveRef.current = null;
+    };
+  }, []);
+
+  const waitForCompletedState = useCallback(
+    () =>
+      new Promise<void>((resolve) => {
+        if (!mountedRef.current) {
+          resolve();
+          return;
+        }
+        handoffResolveRef.current = resolve;
+        handoffTimerRef.current = window.setTimeout(() => {
+          handoffTimerRef.current = null;
+          handoffResolveRef.current = null;
+          resolve();
+        }, 350);
+      }),
+    [],
+  );
+
+  const handleUpload = useCallback(async () => {
+    if (!file || attemptInFlightRef.current) {
       return;
     }
+    attemptInFlightRef.current = true;
     setActiveIdentity(null);
     setUploadResult(null);
     setUploadError(null);
-    setPhase('uploading');
+    setProgressSnapshot({
+      progress: 0,
+      stage: 'upload',
+      phase: 'processing',
+    });
+
+    const progress = createProgressDriver({
+      onUpdate: (snapshot) => {
+        if (mountedRef.current) {
+          setProgressSnapshot(snapshot);
+        }
+      },
+      reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    });
+    activeDriverRef.current = progress;
 
     try {
-      await clearCalculationArtifacts(localStorage);
-      const response = await uploadWorkbookForCalculation(file);
-      setUploadResult(response);
-      if (canStartCalculationFlow(response)) {
-        await persistUploadIdentity(localStorage, response);
-        setActiveIdentity({
-          modelVersionId: response.model_version_id,
-          workbookVersionId: response.workbook_version_id,
-          source: 'upload',
-        });
-        setPhase('uploaded');
-      } else {
-        setPhase('failed');
+      const attempt = await runUploadAttempt<WorkbookValidationResponse>({
+        request: async () => {
+          await clearCalculationArtifacts(localStorage);
+          return uploadWorkbookForCalculation(file);
+        },
+        progress,
+        onPending: () => {
+          if (!mountedRef.current) {
+            return;
+          }
+          setLoadingState('processing');
+          setPhase('uploading');
+        },
+        onCompleted: () => {
+          if (mountedRef.current) {
+            setLoadingState('completed');
+          }
+        },
+        waitForHandoff: waitForCompletedState,
+        onSucceeded: () => {},
+        onFailed: (caught) => {
+          if (!mountedRef.current) {
+            return;
+          }
+          setUploadError(
+            caught instanceof Error ? caught : new Error('Upload failed.'),
+          );
+          setPhase('failed');
+        },
+      });
+
+      if (attempt.status === 'succeeded' && mountedRef.current) {
+        const response = attempt.data;
+        setUploadResult(response);
+        if (canStartCalculationFlow(response)) {
+          await persistUploadIdentity(localStorage, response);
+          if (!mountedRef.current) {
+            return;
+          }
+          setActiveIdentity({
+            modelVersionId: response.model_version_id,
+            workbookVersionId: response.workbook_version_id,
+            source: 'upload',
+          });
+          setPhase('uploaded');
+        } else {
+          setPhase('failed');
+        }
       }
     } catch (caught) {
-      setUploadError(
-        caught instanceof Error ? caught : new Error('Upload failed.'),
-      );
-      setPhase('failed');
+      if (mountedRef.current) {
+        setUploadError(
+          caught instanceof Error ? caught : new Error('Upload failed.'),
+        );
+        setPhase('failed');
+      }
+    } finally {
+      activeDriverRef.current = null;
+      attemptInFlightRef.current = false;
     }
-  };
+  }, [file, waitForCompletedState]);
 
   const uploading = phase === 'uploading';
+
+  if (uploading) {
+    return (
+      <ExtractionLoadingExperience
+        progress={progressSnapshot.progress}
+        stage={progressSnapshot.stage}
+        state={loadingState}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">

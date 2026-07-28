@@ -61,6 +61,53 @@ input[type="number"]::-webkit-outer-spin-button { opacity: 1; }
 }
 .animate-fadeIn { animation: fadeIn 0.5s ease-out; }
 
+@keyframes extractionScan {
+  0% { opacity: 0; transform: translateX(-42px); }
+  18% { opacity: 0.9; }
+  82% { opacity: 0.9; }
+  100% { opacity: 0; transform: translateX(76px); }
+}
+
+@keyframes extractionParticleFlow {
+  0% { opacity: 0; transform: translateX(0); }
+  18% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(145px); }
+}
+
+@keyframes extractionStageIn {
+  from { opacity: 0.55; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.extraction-scan {
+  animation: extractionScan 3.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 4px rgba(229, 193, 113, 0.75));
+}
+
+.extraction-particle {
+  animation: extractionParticleFlow 3.8s linear infinite;
+  filter: drop-shadow(0 0 3px currentColor);
+}
+
+.extraction-particle-two { animation-delay: 0.9s; }
+.extraction-particle-three { animation-delay: 1.8s; }
+.extraction-stage-transition { animation: extractionStageIn 0.35s ease-out; }
+.extraction-progress-fill { transition: width 180ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fadeIn,
+  .extraction-scan,
+  .extraction-particle,
+  .extraction-stage-transition {
+    animation: none !important;
+  }
+
+  .extraction-progress-fill {
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ══════════════════════════════════════════════
    Light-mode readability overrides
    ══════════════════════════════════════════════ */

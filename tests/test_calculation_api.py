@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import uuid
 from pathlib import Path
 
@@ -26,8 +27,18 @@ from apps.api.app.model_extraction_models import (
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
+    ModelSemanticBinding,
     ModelVersion,
 )
+from apps.api.app.calculation_integration_service import (
+    CalculationIntegrationService,
+)
+from apps.api.app.model_extraction_read_service import (
+    ModelExtractionReadService,
+)
+from apps.api.app.monte_carlo_service import MonteCarloService
+from apps.api.app.analysis_models import MonteCarloRunRecord
+from apps.api.app.workbook_storage import DatabaseWorkbookStorage
 from apps.api.app.schemas import (
     CalculationBlankValue,
     CalculationBooleanValue,
@@ -262,12 +273,25 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
         ("/api/v1/calculation-runs/{calculation_run_id}/overview", "get"),
         ("/api/v1/calculation-runs/{calculation_run_id}/cash-flow", "get"),
         ("/api/v1/models/{model_version_id}/diagnostics", "get"),
+        ("/api/v1/models/{model_version_id}/monte-carlo/inputs", "get"),
+        ("/api/v1/models/{model_version_id}/monte-carlo-runs", "post"),
+        ("/api/v1/models/{model_version_id}/monte-carlo-runs", "get"),
+        ("/api/v1/monte-carlo-runs/{monte_carlo_run_id}", "get"),
+        (
+            "/api/v1/monte-carlo-runs/{monte_carlo_run_id}/cancel",
+            "post",
+        ),
     }
 
     for path, method in expected:
         operation = schema["paths"][path][method]
         assert operation["tags"] == ["Calculation"]
-        assert "200" in operation["responses"]
+        expected_status = (
+            "202"
+            if path.endswith("/monte-carlo-runs") and method == "post"
+            else "200"
+        )
+        assert expected_status in operation["responses"]
 
     calculate = schema["paths"][
         "/api/v1/models/{model_version_id}/calculations"
@@ -298,6 +322,233 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
     assert sensitivity["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/CalculationSensitivityResponse"}
+
+
+def test_monte_carlo_queue_is_idempotent_and_worker_persists_bounded_artifact(
+    api_context,
+) -> None:
+    model_id = api_context["model_version_id"]
+    parameter_id = api_context["parameter_id"]
+    client = api_context["client"]
+    with api_context["session_factory"]() as session:
+        parameter = session.get(ModelParameter, parameter_id)
+        parameter.stochastic_eligible = True
+        output = session.scalar(
+            select(CanonicalOutput).where(
+                CanonicalOutput.model_version_id == model_id
+            )
+        )
+        output.business_role = "project_irr"
+        session.add(
+            ModelSemanticBinding(
+                id=str(uuid.uuid4()),
+                model_version_id=model_id,
+                semantic_role="project_irr",
+                canonical_output_id=output.id,
+                binding_source="reviewed",
+            )
+        )
+        session.commit()
+
+    prepared = client.post(
+        f"/api/v1/models/{model_id}/calculation/prepare",
+        json={},
+    ).json()
+    baseline = client.post(
+        f"/api/v1/models/{model_id}/calculations",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    ).json()
+    catalog = client.get(
+        f"/api/v1/models/{model_id}/monte-carlo/inputs"
+    )
+    assert catalog.status_code == 200
+    assert [item["parameter_id"] for item in catalog.json()["inputs"]] == [
+        parameter_id
+    ]
+    assert catalog.json()["supported_output_roles"] == ["project_irr"]
+
+    payload = {
+        "graph_version_id": prepared["graph_version_id"],
+        "baseline_calculation_run_id": baseline["calculation_run_id"],
+        "current_calculation_run_id": baseline["calculation_run_id"],
+        "trial_count": 50_000,
+        "random_seed": 17,
+        "inputs": [
+            {
+                "parameter_id": parameter_id,
+                "distribution_type": "normal",
+                "distribution_parameters": {
+                    "mean": 2.0,
+                    "stddev": 0.1,
+                },
+            }
+        ],
+        "correlation_matrix": [[1.0]],
+        "selected_output_roles": ["project_irr"],
+        "idempotency_key": "api-monte-carlo-1",
+    }
+    created = client.post(
+        f"/api/v1/models/{model_id}/monte-carlo-runs",
+        json=payload,
+    )
+    duplicate = client.post(
+        f"/api/v1/models/{model_id}/monte-carlo-runs",
+        json=payload,
+    )
+    assert created.status_code == duplicate.status_code == 202
+    assert (
+        created.json()["monte_carlo_run_id"]
+        == duplicate.json()["monte_carlo_run_id"]
+    )
+
+    with api_context["session_factory"]() as session:
+        before = session.scalar(select(func.count(CalculationRunRecord.id)))
+        calculation_service = CalculationIntegrationService(
+            session,
+            ModelExtractionReadService(
+                session,
+                DatabaseWorkbookStorage(session),
+            ),
+        )
+        service = MonteCarloService(session, calculation_service)
+        run_id = service.claim_next("test-worker")
+        assert run_id == created.json()["monte_carlo_run_id"]
+        service.process_claimed(run_id)
+        after = session.scalar(select(func.count(CalculationRunRecord.id)))
+
+    completed = client.get(f"/api/v1/monte-carlo-runs/{run_id}")
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "completed", (
+        completed.json()["error_code"],
+        completed.json()["error_message"],
+    )
+    assert completed.json()["result_artifact"]["trial_count"] == 50_000
+    assert (
+        completed.json()["result_artifact"]["metrics"][0][
+            "availability_status"
+        ]
+        == "available"
+    )
+    assert after - before == 3
+
+    conflict_payload = {**payload, "random_seed": 18}
+    conflict = client.post(
+        f"/api/v1/models/{model_id}/monte-carlo-runs",
+        json=conflict_payload,
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+    restart_payload = {
+        **payload,
+        "random_seed": 99,
+        "idempotency_key": "api-monte-carlo-restart",
+    }
+    restart_run = client.post(
+        f"/api/v1/models/{model_id}/monte-carlo-runs",
+        json=restart_payload,
+    ).json()
+    with api_context["session_factory"]() as session:
+        calculation_service = CalculationIntegrationService(
+            session,
+            ModelExtractionReadService(
+                session,
+                DatabaseWorkbookStorage(session),
+            ),
+        )
+        service = MonteCarloService(session, calculation_service)
+        assert service.claim_next("worker-before-restart") == (
+            restart_run["monte_carlo_run_id"]
+        )
+        persisted = session.get(
+            MonteCarloRunRecord,
+            restart_run["monte_carlo_run_id"],
+        )
+        persisted.claimed_at = datetime.now(timezone.utc) - timedelta(
+            hours=1
+        )
+        session.commit()
+        assert service.requeue_stale(timeout_seconds=1) == 1
+        assert service.get_run(persisted.id).status == "queued"
+
+
+def test_queued_monte_carlo_run_can_be_cancelled_without_worker(
+    api_context,
+) -> None:
+    model_id = api_context["model_version_id"]
+    parameter_id = api_context["parameter_id"]
+    client = api_context["client"]
+    with api_context["session_factory"]() as session:
+        parameter = session.get(ModelParameter, parameter_id)
+        parameter.stochastic_eligible = True
+        output = session.scalar(
+            select(CanonicalOutput).where(
+                CanonicalOutput.model_version_id == model_id
+            )
+        )
+        output.business_role = "project_irr"
+        session.add(
+            ModelSemanticBinding(
+                id=str(uuid.uuid4()),
+                model_version_id=model_id,
+                semantic_role="project_irr",
+                canonical_output_id=output.id,
+                binding_source="reviewed",
+            )
+        )
+        session.commit()
+    prepared = client.post(
+        f"/api/v1/models/{model_id}/calculation/prepare",
+        json={},
+    ).json()
+    baseline = client.post(
+        f"/api/v1/models/{model_id}/calculations",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    ).json()
+    created = client.post(
+        f"/api/v1/models/{model_id}/monte-carlo-runs",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "baseline_calculation_run_id": baseline[
+                "calculation_run_id"
+            ],
+            "current_calculation_run_id": baseline[
+                "calculation_run_id"
+            ],
+            "trial_count": 100,
+            "random_seed": 1,
+            "inputs": [
+                {
+                    "parameter_id": parameter_id,
+                    "distribution_type": "uniform",
+                    "distribution_parameters": {
+                        "low": 1.0,
+                        "high": 3.0,
+                    },
+                }
+            ],
+            "correlation_matrix": [[1.0]],
+            "selected_output_roles": ["project_irr"],
+            "idempotency_key": "api-monte-carlo-cancel",
+        },
+    )
+    run_id = created.json()["monte_carlo_run_id"]
+
+    cancelled = client.post(
+        f"/api/v1/monte-carlo-runs/{run_id}/cancel"
+    )
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["result_artifact"] is None
 
 
 def test_semantic_binding_preview_and_review_require_exact_canonical_entities(

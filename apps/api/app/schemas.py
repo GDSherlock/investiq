@@ -501,6 +501,127 @@ class ModelDiagnosticsResponse(_CalculationDTO):
     error_count: int = 0
 
 
+MonteCarloDistributionFamily = Literal[
+    "normal",
+    "triangular",
+    "uniform",
+    "lognormal",
+    "discrete",
+]
+MonteCarloOutputRole = Literal[
+    "project_irr",
+    "equity_irr",
+    "project_npv",
+    "equity_npv",
+    "minimum_dscr",
+]
+
+
+class MonteCarloInputConfigurationItem(_CalculationDTO):
+    parameter_id: UUIDString
+    distribution_type: MonteCarloDistributionFamily
+    distribution_parameters: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_distribution_parameters(
+        self,
+    ) -> "MonteCarloInputConfigurationItem":
+        from .monte_carlo_engine import validate_distribution
+
+        validate_distribution(
+            self.distribution_type,
+            self.distribution_parameters,
+        )
+        return self
+
+
+class MonteCarloRunCreateRequest(_CalculationDTO):
+    graph_version_id: UUIDString
+    baseline_calculation_run_id: UUIDString
+    current_calculation_run_id: UUIDString
+    trial_count: int = Field(ge=1, le=50_000)
+    random_seed: int
+    inputs: list[MonteCarloInputConfigurationItem] = Field(
+        min_length=1,
+        max_length=32,
+    )
+    correlation_matrix: list[list[float]]
+    selected_output_roles: list[MonteCarloOutputRole] = Field(
+        min_length=1,
+        max_length=5,
+    )
+    idempotency_key: StrictStr = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_configuration(self) -> "MonteCarloRunCreateRequest":
+        from .monte_carlo_engine import validate_correlation_matrix
+
+        parameter_ids = [item.parameter_id for item in self.inputs]
+        if len(parameter_ids) != len(set(parameter_ids)):
+            raise ValueError("Duplicate Monte Carlo parameter")
+        if len(self.selected_output_roles) != len(
+            set(self.selected_output_roles)
+        ):
+            raise ValueError("Duplicate Monte Carlo output role")
+        validate_correlation_matrix(
+            self.correlation_matrix,
+            len(self.inputs),
+        )
+        return self
+
+
+class MonteCarloEligibleInputItem(_CalculationDTO):
+    parameter_id: UUIDString
+    business_role: str | None = None
+    label: str
+    unit: str | None = None
+    current_value: str
+
+
+class MonteCarloInputCatalogResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    inputs: list[MonteCarloEligibleInputItem] = Field(default_factory=list)
+    supported_distribution_types: list[
+        MonteCarloDistributionFamily
+    ] = Field(default_factory=list)
+    supported_output_roles: list[MonteCarloOutputRole] = Field(
+        default_factory=list
+    )
+
+
+class MonteCarloRunResponse(_CalculationDTO):
+    monte_carlo_run_id: UUIDString
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    baseline_calculation_run_id: UUIDString
+    current_calculation_run_id: UUIDString
+    status: Literal[
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+    ]
+    trial_count: int
+    random_seed: int
+    method_version: str
+    engine_version: str
+    runtime_ms: int | None = None
+    cancel_requested: bool
+    input_configuration: dict[str, Any]
+    result_artifact: dict[str, Any] | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+class MonteCarloRunHistoryResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    runs: list[MonteCarloRunResponse] = Field(default_factory=list)
+
+
 class CalculationSensitivityOverrideRequest(_CalculationDTO):
     target: CalculationOverrideTarget
     value: CalculationNumberValue

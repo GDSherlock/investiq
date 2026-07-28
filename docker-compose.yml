@@ -24,6 +24,27 @@ services:
       redis:
         condition: service_started
 
+  analysis-worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command:
+      - sh
+      - -c
+      - alembic -c apps/api/alembic.ini upgrade head && python -m apps.api.app.analysis_worker
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - DATABASE_URL=postgresql://investiq:investiq@postgres:5432/investiq
+      - USE_SQLITE=false
+      - UPLOAD_DIR=/app/uploads
+    volumes:
+      - upload_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # M1: Web UI (Next.js)
   ui:
     build:

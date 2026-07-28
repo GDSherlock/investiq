@@ -473,3 +473,111 @@ export interface ModelDiagnosticsResponse {
   detected_sheets: string[];
   error_count: number;
 }
+
+export type MonteCarloDistributionType =
+  | 'normal'
+  | 'triangular'
+  | 'uniform'
+  | 'lognormal'
+  | 'discrete';
+
+export type MonteCarloOutputRole =
+  | 'project_irr'
+  | 'equity_irr'
+  | 'project_npv'
+  | 'equity_npv'
+  | 'minimum_dscr';
+
+export interface MonteCarloEligibleInput {
+  parameter_id: string;
+  business_role: string | null;
+  label: string;
+  unit: string | null;
+  current_value: string;
+}
+
+export interface MonteCarloInputCatalogResponse {
+  model_version_id: string;
+  graph_version_id: string;
+  inputs: MonteCarloEligibleInput[];
+  supported_distribution_types: MonteCarloDistributionType[];
+  supported_output_roles: MonteCarloOutputRole[];
+}
+
+export interface MonteCarloConfiguredInput {
+  parameter_id: string;
+  distribution_type: MonteCarloDistributionType;
+  distribution_parameters: Record<string, unknown>;
+}
+
+export interface MonteCarloRunCreateRequest {
+  graph_version_id: string;
+  baseline_calculation_run_id: string;
+  current_calculation_run_id: string;
+  trial_count: number;
+  random_seed: number;
+  inputs: MonteCarloConfiguredInput[];
+  correlation_matrix: number[][];
+  selected_output_roles: MonteCarloOutputRole[];
+  idempotency_key: string;
+}
+
+export interface MonteCarloHistogramBin {
+  lower: number;
+  upper: number;
+  count: number;
+}
+
+export interface MonteCarloMetricResult {
+  role: MonteCarloOutputRole;
+  label: string;
+  availability_status: 'available' | 'unavailable';
+  unavailable_reason: string | null;
+  percentiles: {
+    p10: number;
+    p50: number;
+    p90: number;
+  } | null;
+  probabilities: Record<string, number>;
+  distribution: { bins: MonteCarloHistogramBin[] } | null;
+  rankings: {
+    parameter_id: string;
+    label: string;
+    correlation: number;
+    contribution: number;
+  }[];
+}
+
+export interface MonteCarloResultArtifact {
+  method_version: string;
+  trial_count: number;
+  random_seed: number;
+  evidence_hash: string;
+  metrics: MonteCarloMetricResult[];
+}
+
+export interface MonteCarloRunResponse {
+  monte_carlo_run_id: string;
+  model_version_id: string;
+  graph_version_id: string;
+  baseline_calculation_run_id: string;
+  current_calculation_run_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  trial_count: number;
+  random_seed: number;
+  method_version: string;
+  engine_version: string;
+  runtime_ms: number | null;
+  cancel_requested: boolean;
+  input_configuration: Record<string, unknown>;
+  result_artifact: MonteCarloResultArtifact | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface MonteCarloRunHistoryResponse {
+  model_version_id: string;
+  runs: MonteCarloRunResponse[];
+}

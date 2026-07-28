@@ -950,6 +950,53 @@ test('persisted line charts expose Line elements directly to Recharts', () => {
   );
 });
 
+test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => {
+  const source = readFileSync(
+    'src/app/montecarlo/page.tsx',
+    'utf8',
+  );
+
+  for (const required of [
+    'useActiveAnalysis',
+    'getMonteCarloInputs',
+    'createMonteCarloRun',
+    'getMonteCarloRun',
+    'cancelMonteCarloRun',
+    'queued',
+    'running',
+    'completed',
+    'failed',
+    'cancelled',
+    'normal',
+    'triangular',
+    'uniform',
+    'lognormal',
+    'discrete',
+    '50000',
+    'Sensitivity ranking',
+  ]) {
+    assert.ok(source.includes(required), `expected ${required}`);
+  }
+  for (const forbidden of [
+    'getModel',
+    'parsed_json',
+    'createScenario',
+    'runMonteCarlo',
+    'useScenario',
+    'Throughput fee',
+    'Utilisation rate',
+    'Gas demand growth',
+    'Carbon tax',
+    'Capex overrun',
+    'Opex inflation',
+    'Decision Confidence',
+  ]) {
+    assert.equal(source.includes(forbidden), false, `forbidden ${forbidden}`);
+  }
+  assert.doesNotMatch(source, /scenarios\//);
+  assert.doesNotMatch(source, /\b(?:10%|8\.5%|1\.25x|65:35)\b/);
+});
+
 test('existing run reload uses GET without recalculating', async () => {
   const originalFetch = globalThis.fetch;
   const calls: { url: string; method: string }[] = [];

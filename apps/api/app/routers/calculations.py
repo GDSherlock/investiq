@@ -13,6 +13,7 @@ from ..calculation_integration_service import (
     CalculationIntegrationService,
 )
 from ..calculation_sensitivity_service import CalculationSensitivityService
+from ..monte_carlo_service import MonteCarloService
 from ..database import get_db
 from ..model_extraction_read_service import ModelExtractionReadService
 from ..schemas import (
@@ -27,6 +28,10 @@ from ..schemas import (
     CalculationSensitivityRequest,
     CalculationSensitivityResponse,
     ModelDiagnosticsResponse,
+    MonteCarloInputCatalogResponse,
+    MonteCarloRunCreateRequest,
+    MonteCarloRunHistoryResponse,
+    MonteCarloRunResponse,
     OverviewAnalysisResponse,
     ParameterAnalysisReviewRequest,
     ParameterAnalysisReviewResponse,
@@ -74,6 +79,15 @@ def get_calculation_sensitivity_service(
     ),
 ) -> CalculationSensitivityService:
     return CalculationSensitivityService(session, calculation_service)
+
+
+def get_monte_carlo_service(
+    session: Session = Depends(get_db),
+    calculation_service: CalculationIntegrationService = Depends(
+        get_calculation_integration_service
+    ),
+) -> MonteCarloService:
+    return MonteCarloService(session, calculation_service)
 
 
 def _translate_error(error: CalculationIntegrationError) -> None:
@@ -177,6 +191,79 @@ def get_model_diagnostics(
 ) -> ModelDiagnosticsResponse:
     try:
         return service.diagnostics(str(model_version_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.get(
+    "/models/{model_version_id}/monte-carlo/inputs",
+    response_model=MonteCarloInputCatalogResponse,
+)
+def get_monte_carlo_inputs(
+    model_version_id: UUID,
+    service: MonteCarloService = Depends(get_monte_carlo_service),
+) -> MonteCarloInputCatalogResponse:
+    try:
+        return service.input_catalog(str(model_version_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.post(
+    "/models/{model_version_id}/monte-carlo-runs",
+    response_model=MonteCarloRunResponse,
+    status_code=202,
+)
+def create_monte_carlo_run(
+    model_version_id: UUID,
+    request: MonteCarloRunCreateRequest,
+    service: MonteCarloService = Depends(get_monte_carlo_service),
+) -> MonteCarloRunResponse:
+    try:
+        return service.create_run(str(model_version_id), request)
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.get(
+    "/monte-carlo-runs/{monte_carlo_run_id}",
+    response_model=MonteCarloRunResponse,
+)
+def get_monte_carlo_run(
+    monte_carlo_run_id: UUID,
+    service: MonteCarloService = Depends(get_monte_carlo_service),
+) -> MonteCarloRunResponse:
+    try:
+        return service.get_run(str(monte_carlo_run_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.post(
+    "/monte-carlo-runs/{monte_carlo_run_id}/cancel",
+    response_model=MonteCarloRunResponse,
+)
+def cancel_monte_carlo_run(
+    monte_carlo_run_id: UUID,
+    service: MonteCarloService = Depends(get_monte_carlo_service),
+) -> MonteCarloRunResponse:
+    try:
+        return service.cancel_run(str(monte_carlo_run_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.get(
+    "/models/{model_version_id}/monte-carlo-runs",
+    response_model=MonteCarloRunHistoryResponse,
+)
+def get_monte_carlo_run_history(
+    model_version_id: UUID,
+    limit: int = Query(default=20, ge=1, le=100),
+    service: MonteCarloService = Depends(get_monte_carlo_service),
+) -> MonteCarloRunHistoryResponse:
+    try:
+        return service.history(str(model_version_id), limit=limit)
     except CalculationIntegrationError as error:
         _translate_error(error)
 

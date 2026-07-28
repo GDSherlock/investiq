@@ -8,6 +8,10 @@ import type {
   CalculationRunResponse,
   CashFlowAnalysisResponse,
   ModelDiagnosticsResponse,
+  MonteCarloInputCatalogResponse,
+  MonteCarloRunCreateRequest,
+  MonteCarloRunHistoryResponse,
+  MonteCarloRunResponse,
   OverviewAnalysisResponse,
   WorkbookValidationResponse,
 } from './calculation-api-types';
@@ -233,6 +237,81 @@ export async function getModelDiagnostics(
   return parseJsonResponse<ModelDiagnosticsResponse>(
     await fetch(
       `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/diagnostics`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
+export async function getMonteCarloInputs(
+  modelVersionId: string,
+): Promise<MonteCarloInputCatalogResponse> {
+  return parseJsonResponse<MonteCarloInputCatalogResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/monte-carlo/inputs`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
+export async function createMonteCarloRun(
+  modelVersionId: string,
+  request: MonteCarloRunCreateRequest,
+): Promise<MonteCarloRunResponse> {
+  return parseJsonResponse<MonteCarloRunResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/monte-carlo-runs`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify(request),
+      },
+    ),
+  );
+}
+
+export async function getMonteCarloRun(
+  monteCarloRunId: string,
+): Promise<MonteCarloRunResponse> {
+  return parseJsonResponse<MonteCarloRunResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/monte-carlo-runs/${encodeURIComponent(monteCarloRunId)}`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
+export async function cancelMonteCarloRun(
+  monteCarloRunId: string,
+): Promise<MonteCarloRunResponse> {
+  return parseJsonResponse<MonteCarloRunResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/monte-carlo-runs/${encodeURIComponent(monteCarloRunId)}/cancel`,
+      {
+        method: 'POST',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
+export async function getMonteCarloRunHistory(
+  modelVersionId: string,
+): Promise<MonteCarloRunHistoryResponse> {
+  return parseJsonResponse<MonteCarloRunHistoryResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/monte-carlo-runs`,
       {
         cache: 'no-store',
         headers: { ...getAuthHeaders() },

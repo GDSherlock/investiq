@@ -46,7 +46,7 @@ test('loading view renders approved inspect state and semantic progress', () => 
     }),
   );
 
-  assert.match(markup, /Uploading your financial model\.\.\./);
+  assert.doesNotMatch(markup, /Uploading your financial model\.\.\./);
   assert.match(markup, /Inspecting workbook structure/);
   assert.match(markup, /Reading sheets, formulas and model relationships/);
   assert.match(markup, /What we&#x27;re doing/);
@@ -104,4 +104,36 @@ test('completed view exposes 100 percent and completion status', () => {
   assert.match(markup, /aria-valuenow="100"/);
   assert.match(markup, /Model and calculation rules ready/);
   assert.match(markup, />100%</);
+});
+
+test('idle view keeps all processing stages pending on the unified page', () => {
+  const { ExtractionLoadingExperience } = loadExperience();
+  const markup = renderToStaticMarkup(
+    React.createElement(ExtractionLoadingExperience, {
+      progress: 0,
+      stage: 'upload',
+      state: 'idle',
+    }),
+  );
+
+  assert.match(markup, /Ready for your workbook/);
+  assert.match(markup, /Pending/);
+  assert.doesNotMatch(markup, /In Progress/);
+  assert.match(markup, /aria-valuenow="0"/);
+});
+
+test('failed view marks the active stage as failed without claiming completion', () => {
+  const { ExtractionLoadingExperience } = loadExperience();
+  const markup = renderToStaticMarkup(
+    React.createElement(ExtractionLoadingExperience, {
+      progress: 58,
+      stage: 'extract',
+      state: 'failed',
+    }),
+  );
+
+  assert.match(markup, /Model preparation stopped/);
+  assert.match(markup, /Failed/);
+  assert.doesNotMatch(markup, /Model and calculation rules ready/);
+  assert.match(markup, /aria-valuenow="58"/);
 });

@@ -1104,6 +1104,10 @@ test('calculation panel rejects stale async storage writers before mutation', ()
     panelSource,
     /reconciled\.disposition === 'conflict'[\s\S]*setStateNotice\(reconciled\.notice\);[\s\S]*return;/,
   );
+  assert.match(
+    panelSource,
+    /return \(\) => \{\s*identityRevisionRef\.current \+= 1;/,
+  );
 });
 
 test('normal upload path does not explicitly prepare and baseline is re-entry guarded', () => {
@@ -1115,6 +1119,11 @@ test('normal upload path does not explicitly prepare and baseline is re-entry gu
 
   assert.doesNotMatch(pageSource, /prepareCalculation/);
   assert.match(pageSource, /uploadWorkbookForCalculation\(file\)/);
+  assert.match(pageSource, /const uploadInFlightRef = useRef\(false\)/);
+  assert.match(
+    pageSource,
+    /if \(uploadInFlightRef\.current\) \{\s*return;\s*\}[\s\S]*uploadInFlightRef\.current = true/,
+  );
   assert.match(panelSource, /const baselineInFlightRef = useRef\(false\)/);
   assert.match(
     panelSource,
@@ -1126,25 +1135,20 @@ test('normal upload path does not explicitly prepare and baseline is re-entry gu
   );
 });
 
-test('successful override shows an inline receipt before the returned inputs table', () => {
+test('calculation preparation stays baseline-only and exposes focused summary surfaces', () => {
   const preparationPanelSource = readFileSync(
     'src/components/calculation/CalculationPreparationPanel.tsx',
     'utf8',
   );
-  const inputPanelSource = readFileSync(
-    'src/components/calculation/CalculationInputPanel.tsx',
-    'utf8',
-  );
 
-  assert.match(preparationPanelSource, /setLastOverrideReceipt\(\{/);
-  assert.match(inputPanelSource, /Override submitted/);
-  assert.match(inputPanelSource, /Model input value before override/);
-  assert.match(inputPanelSource, /persisted formula values changed/);
-  assert.ok(
-    inputPanelSource.indexOf('Override submitted') <
-      inputPanelSource.indexOf('<details'),
-    'the override receipt should stay visible above the expandable input table',
-  );
+  assert.match(preparationPanelSource, /CalculationRunSummary/);
+  assert.match(preparationPanelSource, /PreparationNotifications/);
+  assert.match(preparationPanelSource, /buildPreparationNotifications/);
+  assert.match(preparationPanelSource, /buildTechnicalDetails/);
+  assert.doesNotMatch(preparationPanelSource, /getCalculationInputs/);
+  assert.doesNotMatch(preparationPanelSource, /CalculationInputPanel/);
+  assert.doesNotMatch(preparationPanelSource, /CalculationResultsDiff/);
+  assert.doesNotMatch(preparationPanelSource, /handleOverride/);
 });
 
 test('sensitivity adapter maps scalar KPIs by canonical role with real before and after values', () => {

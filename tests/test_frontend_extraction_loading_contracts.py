@@ -8,7 +8,6 @@ PAGE = UI / "src" / "app" / "page.tsx"
 GLOBALS = UI / "src" / "app" / "globals.css"
 COMPONENTS = UI / "src" / "components" / "extraction"
 PROGRESS = UI / "src" / "lib" / "extractionProgress.ts"
-ATTEMPT = UI / "src" / "lib" / "uploadAttempt.ts"
 API = UI / "src" / "lib" / "api.ts"
 
 
@@ -23,23 +22,26 @@ def test_loading_experience_has_focused_component_boundaries() -> None:
         "ExtractionStageStepper.tsx",
         "WorkbookTransformation.tsx",
         "ProcessingActivityList.tsx",
+        "WorkbookUploadZone.tsx",
     }
 
     assert expected == {path.name for path in COMPONENTS.glob("*.tsx")}
     assert PROGRESS.exists()
-    assert ATTEMPT.exists()
 
 
 def test_home_upload_uses_one_request_controller_and_existing_api_once() -> None:
     source = read(PAGE)
 
     assert "createProgressDriver" in source
-    assert "runUploadAttempt" in source
+    assert "progress.waitForPreparation()" in source
     assert "ExtractionLoadingExperience" in source
+    assert "WorkbookUploadZone" in source
     assert source.count("uploadWorkbookForCalculation(file)") == 1
     assert "persistUploadIdentity(localStorage, response)" in source
     assert "response.model_version_id" in source
     assert "response.workbook_version_id" in source
+    assert "Upload & Analyze" not in source
+    assert 'accept=".xlsx"' in read(COMPONENTS / "WorkbookUploadZone.tsx")
 
 
 def test_home_resets_mounted_guard_during_strict_mode_effect_setup() -> None:
@@ -55,7 +57,7 @@ def test_home_resets_mounted_guard_during_strict_mode_effect_setup() -> None:
 
 
 def test_loading_flow_adds_no_backend_pressure_or_fake_cancellation() -> None:
-    source = "\n".join(read(path) for path in (PAGE, PROGRESS, ATTEMPT))
+    source = "\n".join(read(path) for path in (PAGE, PROGRESS))
     forbidden = (
         "setInterval(",
         "EventSource(",

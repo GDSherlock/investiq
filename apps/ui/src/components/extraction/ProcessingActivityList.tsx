@@ -21,12 +21,12 @@ const ACTIVITIES = [
 
 interface ProcessingActivityListProps {
   stage: ExtractionStage;
-  completed: boolean;
+  state: 'idle' | 'processing' | 'completed' | 'failed';
 }
 
 export function ProcessingActivityList({
   stage,
-  completed,
+  state,
 }: ProcessingActivityListProps) {
   const activeIndex = Math.max(0, getStageIndex(stage) - 1);
 
@@ -37,8 +37,11 @@ export function ProcessingActivityList({
       </h3>
       <ol className="mt-5 space-y-0">
         {ACTIVITIES.map((activity, index) => {
-          const isCompleted = completed || index < activeIndex;
-          const isActive = !completed && index === activeIndex;
+          const isCompleted =
+            state === 'completed' ||
+            (state !== 'idle' && index < activeIndex);
+          const isActive = state === 'processing' && index === activeIndex;
+          const isFailed = state === 'failed' && index === activeIndex;
 
           return (
             <li
@@ -55,8 +58,10 @@ export function ProcessingActivityList({
               )}
               <span
                 className={`relative mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border-2 ${
-                  isCompleted
-                    ? 'border-green-400 bg-green-400/15'
+                  isFailed
+                    ? 'border-red-400 bg-red-500/15'
+                    : isCompleted
+                    ? 'border-emerald-400 bg-emerald-400/15'
                     : isActive
                       ? 'border-gold-400 bg-gold-500/10'
                       : 'border-slate-600 bg-d-card'
@@ -66,7 +71,7 @@ export function ProcessingActivityList({
                 {isCompleted ? (
                   <svg
                     viewBox="0 0 20 20"
-                    className="h-3.5 w-3.5 text-green-400"
+                    className="h-3.5 w-3.5 text-emerald-400"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth="2.2"
@@ -75,6 +80,8 @@ export function ProcessingActivityList({
                   >
                     <path d="m4 10 4 4 8-9" />
                   </svg>
+                ) : isFailed ? (
+                  <span className="text-xs font-bold text-red-300">!</span>
                 ) : isActive ? (
                   <span className="h-2 w-2 rounded-full bg-gold-400" />
                 ) : null}
@@ -83,7 +90,9 @@ export function ProcessingActivityList({
               <div>
                 <div
                   className={`text-sm font-medium ${
-                    isActive
+                    isFailed
+                      ? 'text-red-200'
+                      : isActive
                       ? 'text-white'
                       : isCompleted
                         ? 'text-slate-200'
@@ -92,12 +101,22 @@ export function ProcessingActivityList({
                 >
                   {activity.title}
                   <span className="sr-only">
-                    {isCompleted ? ', completed' : isActive ? ', in progress' : ', pending'}
+                    {isCompleted
+                      ? ', completed'
+                      : isFailed
+                        ? ', failed'
+                        : isActive
+                          ? ', in progress'
+                          : ', pending'}
                   </span>
                 </div>
                 <div
                   className={`mt-1 text-xs leading-5 sm:text-sm ${
-                    isActive ? 'text-slate-300' : 'text-slate-400'
+                    isFailed
+                      ? 'text-red-300'
+                      : isActive
+                        ? 'text-slate-300'
+                        : 'text-slate-400'
                   }`}
                 >
                   {activity.description}

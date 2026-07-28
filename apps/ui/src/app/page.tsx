@@ -2,17 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { CalculationPreparationPanel } from '@/components/calculation/CalculationPreparationPanel';
+import {
+  CalculationPreparationPanel,
+  type CalculationPreparationLifecycle,
+} from '@/components/calculation/CalculationPreparationPanel';
+import { CalculationRunSummary } from '@/components/calculation/CalculationRunSummary';
+import { PreparationNotifications } from '@/components/calculation/PreparationNotifications';
 import { ExtractionLoadingExperience } from '@/components/extraction/ExtractionLoadingExperience';
+import { WorkbookUploadZone } from '@/components/extraction/WorkbookUploadZone';
 import { uploadWorkbookForCalculation } from '@/lib/api';
 import {
   CalculationApiError,
-  type CalculationUiPhase,
   type WorkbookValidationResponse,
 } from '@/lib/calculation-api-types';
 import { canStartCalculationFlow } from '@/lib/calculation-flow';
 import {
-  CALCULATION_STORAGE_KEYS,
   clearCalculationArtifacts,
   persistUploadIdentity,
   readRestorableCalculationIdentity,
@@ -22,7 +26,11 @@ import {
   type ProgressDriver,
   type ProgressSnapshot,
 } from '@/lib/extractionProgress';
-import { runUploadAttempt } from '@/lib/uploadAttempt';
+import {
+  buildPreparationNotifications,
+  buildTechnicalDetails,
+  validateWorkbookFile,
+} from '@/lib/model-preparation-view';
 
 interface ActiveCalculationIdentity {
   modelVersionId: string;
@@ -30,56 +38,50 @@ interface ActiveCalculationIdentity {
   source: 'storage' | 'upload';
 }
 
-function UploadErrorDetails({ error }: { error: Error }) {
-  if (error instanceof CalculationApiError) {
-    return (
-      <dl className="mt-2 grid gap-1 font-mono text-xs">
-        <div>
-          <dt className="inline text-red-300">code: </dt>
-          <dd className="inline">{error.code}</dd>
-        </div>
-        <div>
-          <dt className="inline text-red-300">message: </dt>
-          <dd className="inline">{error.message}</dd>
-        </div>
-        <div>
-          <dt className="inline text-red-300">retryable: </dt>
-          <dd className="inline">{String(error.retryable)}</dd>
-        </div>
-        <div>
-          <dt className="inline text-red-300">resource_id: </dt>
-          <dd className="inline">{error.resourceId ?? 'null'}</dd>
-        </div>
-      </dl>
-    );
-  }
-  return <p className="mt-2 text-sm">{error.message}</p>;
+type PreparationPageState =
+  | 'idle'
+  | 'processing'
+  | 'completed'
+  | 'failed';
+
+function createUploadError(
+  status: number,
+  code: string,
+  message: string,
+  retryable: boolean,
+): CalculationApiError {
+  return new CalculationApiError(status, {
+    code,
+    message,
+    retryable,
+    resource_id: null,
+  });
 }
 
 export default function HomePage() {
-  const [file, setFile] = useState<File | null>(null);
-  const [phase, setPhase] = useState<CalculationUiPhase>('idle');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [pageState, setPageState] =
+    useState<PreparationPageState>('idle');
+  const [uploadInFlight, setUploadInFlight] = useState(false);
   const [uploadResult, setUploadResult] =
     useState<WorkbookValidationResponse | null>(null);
   const [uploadError, setUploadError] = useState<Error | null>(null);
   const [activeIdentity, setActiveIdentity] =
     useState<ActiveCalculationIdentity | null>(null);
-  const [loadingState, setLoadingState] =
-    useState<'processing' | 'completed'>('processing');
   const [progressSnapshot, setProgressSnapshot] = useState<ProgressSnapshot>({
     progress: 0,
     stage: 'upload',
     phase: 'processing',
   });
+
   const activeDriverRef = useRef<ProgressDriver | null>(null);
-  const attemptInFlightRef = useRef(false);
-  const handoffTimerRef = useRef<number | null>(null);
-  const handoffResolveRef = useRef<(() => void) | null>(null);
+  const uploadInFlightRef = useRef(false);
+  const uploadRevisionRef = useRef(0);
   const mountedRef = useRef(true);
 
   useEffect(() => {
-    // Keep the legacy page migration for other application pages. Calculation
-    // APIs never read investiq_model_id.
+    // Keep legacy navigation storage intact. Calculation APIs only use the
+    // versioned identity read below and never consume investiq_model_id.
     const migrations: [string, string][] = [
       ['projagent_model_id', 'investiq_model_id'],
       ['projagent_investment_id', 'investiq_investment_id'],
@@ -95,12 +97,17 @@ export default function HomePage() {
 
     const persisted = readRestorableCalculationIdentity(localStorage);
     if (persisted) {
+      setProgressSnapshot({
+        progress: 92,
+        stage: 'prepare',
+        phase: 'processing',
+      });
+      setPageState('processing');
       setActiveIdentity({
         modelVersionId: persisted.modelVersionId,
         workbookVersionId: persisted.workbookVersionId,
         source: 'storage',
       });
-      setPhase('uploaded');
     }
   }, []);
 
@@ -108,40 +115,95 @@ export default function HomePage() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      uploadRevisionRef.current += 1;
       activeDriverRef.current?.stop();
-      if (handoffTimerRef.current !== null) {
-        window.clearTimeout(handoffTimerRef.current);
-      }
-      handoffResolveRef.current?.();
-      handoffResolveRef.current = null;
+      activeDriverRef.current = null;
     };
   }, []);
 
-  const waitForCompletedState = useCallback(
-    () =>
-      new Promise<void>((resolve) => {
-        if (!mountedRef.current) {
-          resolve();
-          return;
+  const handlePreparationLifecycle = useCallback(
+    (lifecycle: CalculationPreparationLifecycle) => {
+      if (!mountedRef.current) {
+        return;
+      }
+      if (lifecycle === 'processing') {
+        setPageState('processing');
+        if (!activeDriverRef.current) {
+          setProgressSnapshot({
+            progress: 92,
+            stage: 'prepare',
+            phase: 'processing',
+          });
         }
-        handoffResolveRef.current = resolve;
-        handoffTimerRef.current = window.setTimeout(() => {
-          handoffTimerRef.current = null;
-          handoffResolveRef.current = null;
-          resolve();
-        }, 350);
-      }),
+        return;
+      }
+      if (lifecycle === 'failed') {
+        activeDriverRef.current?.stop();
+        activeDriverRef.current = null;
+        setPageState('failed');
+        setProgressSnapshot((current) => ({
+          progress: current.progress,
+          stage: 'prepare',
+          phase: 'processing',
+        }));
+        return;
+      }
+
+      const driver = activeDriverRef.current;
+      if (!driver) {
+        setProgressSnapshot({
+          progress: 100,
+          stage: 'prepare',
+          phase: 'completed',
+        });
+        setPageState('completed');
+        return;
+      }
+      void driver.complete().then(() => {
+        if (mountedRef.current && activeDriverRef.current === driver) {
+          activeDriverRef.current = null;
+          setPageState('completed');
+        }
+      });
+    },
     [],
   );
 
-  const handleUpload = useCallback(async () => {
-    if (!file || attemptInFlightRef.current) {
+  const startUpload = useCallback(async (file: File) => {
+    if (uploadInFlightRef.current) {
       return;
     }
-    attemptInFlightRef.current = true;
-    setActiveIdentity(null);
+
+    setSelectedFile(file);
+    const validationError = validateWorkbookFile(file);
+    if (validationError) {
+      setUploadResult(null);
+      setActiveIdentity(null);
+      setUploadError(
+        createUploadError(
+          400,
+          validationError.code,
+          validationError.message,
+          false,
+        ),
+      );
+      setProgressSnapshot({
+        progress: 0,
+        stage: 'upload',
+        phase: 'processing',
+      });
+      setPageState('failed');
+      return;
+    }
+
+    const requestRevision = ++uploadRevisionRef.current;
+    uploadInFlightRef.current = true;
+    setUploadInFlight(true);
+    activeDriverRef.current?.stop();
     setUploadResult(null);
     setUploadError(null);
+    setActiveIdentity(null);
+    setPageState('processing');
     setProgressSnapshot({
       progress: 0,
       stage: 'upload',
@@ -150,233 +212,163 @@ export default function HomePage() {
 
     const progress = createProgressDriver({
       onUpdate: (snapshot) => {
-        if (mountedRef.current) {
+        if (
+          mountedRef.current &&
+          requestRevision === uploadRevisionRef.current
+        ) {
           setProgressSnapshot(snapshot);
         }
       },
-      reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+      reducedMotion: window.matchMedia(
+        '(prefers-reduced-motion: reduce)',
+      ).matches,
     });
     activeDriverRef.current = progress;
 
     try {
-      const attempt = await runUploadAttempt<WorkbookValidationResponse>({
-        request: async () => {
-          await clearCalculationArtifacts(localStorage);
-          return uploadWorkbookForCalculation(file);
-        },
-        progress,
-        onPending: () => {
-          if (!mountedRef.current) {
-            return;
-          }
-          setLoadingState('processing');
-          setPhase('uploading');
-        },
-        onCompleted: () => {
-          if (mountedRef.current) {
-            setLoadingState('completed');
-          }
-        },
-        waitForHandoff: waitForCompletedState,
-        onSucceeded: () => {},
-        onFailed: (caught) => {
-          if (!mountedRef.current) {
-            return;
-          }
-          setUploadError(
-            caught instanceof Error ? caught : new Error('Upload failed.'),
-          );
-          setPhase('failed');
-        },
-      });
-
-      if (attempt.status === 'succeeded' && mountedRef.current) {
-        const response = attempt.data;
-        setUploadResult(response);
-        if (canStartCalculationFlow(response)) {
-          await persistUploadIdentity(localStorage, response);
-          if (!mountedRef.current) {
-            return;
-          }
-          setActiveIdentity({
-            modelVersionId: response.model_version_id,
-            workbookVersionId: response.workbook_version_id,
-            source: 'upload',
-          });
-          setPhase('uploaded');
-        } else {
-          setPhase('failed');
-        }
+      await clearCalculationArtifacts(localStorage);
+      const response = await uploadWorkbookForCalculation(file);
+      if (
+        !mountedRef.current ||
+        requestRevision !== uploadRevisionRef.current
+      ) {
+        return;
       }
-    } catch (caught) {
-      if (mountedRef.current) {
-        setUploadError(
-          caught instanceof Error ? caught : new Error('Upload failed.'),
+      setUploadResult(response);
+      if (!canStartCalculationFlow(response)) {
+        throw createUploadError(
+          422,
+          response.stop_reason || 'UPLOAD_REJECTED',
+          'The workbook stopped before model submission.',
+          false,
         );
-        setPhase('failed');
+      }
+
+      progress.waitForPreparation();
+      await persistUploadIdentity(localStorage, response);
+      if (
+        !mountedRef.current ||
+        requestRevision !== uploadRevisionRef.current
+      ) {
+        return;
+      }
+      setActiveIdentity({
+        modelVersionId: response.model_version_id,
+        workbookVersionId: response.workbook_version_id,
+        source: 'upload',
+      });
+    } catch (caught) {
+      if (
+        mountedRef.current &&
+        requestRevision === uploadRevisionRef.current
+      ) {
+        progress.stop();
+        if (activeDriverRef.current === progress) {
+          activeDriverRef.current = null;
+        }
+        setUploadError(
+          caught instanceof Error
+            ? caught
+            : new Error('Workbook upload failed.'),
+        );
+        setPageState('failed');
       }
     } finally {
-      activeDriverRef.current = null;
-      attemptInFlightRef.current = false;
+      if (
+        mountedRef.current &&
+        requestRevision === uploadRevisionRef.current
+      ) {
+        uploadInFlightRef.current = false;
+        setUploadInFlight(false);
+      }
     }
-  }, [file, waitForCompletedState]);
+  }, []);
 
-  const uploading = phase === 'uploading';
+  const notifications = activeIdentity
+    ? []
+    : buildPreparationNotifications({
+        uploadResult,
+        readiness: null,
+        activeRun: null,
+        error: uploadError,
+        stateNotice: null,
+      });
+  const technicalDetails = buildTechnicalDetails({
+    uploadResult,
+    readiness: null,
+    baselineRun: null,
+    overrideRun: null,
+  });
+  const hasFailure = pageState === 'failed';
+  const canRetryUpload =
+    uploadError instanceof CalculationApiError &&
+    uploadError.retryable;
 
-  if (uploading) {
-    return (
+  return (
+    <main className="mx-auto max-w-6xl space-y-5 pb-10 sm:space-y-6">
+      <header className="pb-1 pt-7 text-center sm:pt-10">
+        <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
+          InvestIQ
+        </h1>
+        <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-200 sm:text-base">
+          Upload your financial model. We&apos;ll analyze it and prepare the
+          calculation APIs.
+        </p>
+      </header>
+
+      <WorkbookUploadZone
+        selectedFile={selectedFile}
+        busy={uploadInFlight}
+        hasError={hasFailure}
+        canRetry={canRetryUpload}
+        onFileSelected={(file) => void startUpload(file)}
+        onRetry={() => {
+          if (selectedFile && canRetryUpload) {
+            void startUpload(selectedFile);
+          }
+        }}
+      />
+
       <ExtractionLoadingExperience
         progress={progressSnapshot.progress}
         stage={progressSnapshot.stage}
-        state={loadingState}
+        state={pageState}
       />
-    );
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="py-8 text-center">
-        <h1 className="text-3xl font-bold text-white">InvestIQ</h1>
-        <p className="mt-2 text-d-muted">
-          Upload a financial model, then exercise the persisted calculation
-          APIs.
-        </p>
-      </div>
-
-      <section className="mx-auto max-w-xl rounded-lg border border-d-border bg-d-card p-6 shadow">
-        <h2 className="mb-4 text-lg font-semibold text-white">
-          Upload Financial Model
-        </h2>
-        <div className="rounded-lg border-2 border-dashed border-d-border p-8 text-center">
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-            className="block w-full text-sm text-d-muted file:mr-4 file:cursor-pointer
-              file:rounded file:border-0 file:bg-gold-500 file:px-4 file:py-2
-              file:text-sm file:font-semibold file:text-white file:shadow-sm
-              hover:file:bg-gold-600"
-          />
-          {file ? (
-            <p className="mt-2 text-sm text-slate-300">
-              Selected: {file.name} ({(file.size / 1024).toFixed(1)} KB)
-            </p>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          onClick={() => void handleUpload()}
-          disabled={!file || uploading}
-          className="mt-4 w-full rounded bg-gold-500 px-4 py-2.5 font-semibold
-            text-white shadow-sm transition hover:bg-gold-600 disabled:cursor-not-allowed
-            disabled:bg-gray-500 disabled:text-gray-300"
-        >
-          {uploading
-            ? 'Processing…'
-            : phase === 'failed'
-              ? 'Retry upload'
-              : 'Upload & Analyze'}
-        </button>
-
-        {uploadError ? (
-          <div className="mt-3 rounded border border-red-700/60 bg-red-900/20 p-3 text-red-200">
-            <p className="font-semibold">Upload request failed</p>
-            <UploadErrorDetails error={uploadError} />
-          </div>
-        ) : null}
-      </section>
-
-      {uploadResult ? (
-        <section className="mx-auto max-w-4xl rounded-lg border border-d-border bg-d-card p-6 shadow">
-          <h2 className="text-lg font-semibold text-white">
-            Workbook validation response
-          </h2>
-          <dl className="mt-4 grid gap-3 text-sm md:grid-cols-2">
-            <div className="rounded bg-d-bg p-3">
-              <dt className="text-d-muted">submitted</dt>
-              <dd className="font-mono text-white">
-                {String(uploadResult.submitted)}
-              </dd>
-            </div>
-            <div className="rounded bg-d-bg p-3">
-              <dt className="text-d-muted">stop_reason</dt>
-              <dd className="font-mono text-white">
-                {uploadResult.stop_reason || '—'}
-              </dd>
-            </div>
-            <div className="rounded bg-d-bg p-3">
-              <dt className="text-d-muted">model_version_id</dt>
-              <dd className="break-all font-mono text-white">
-                {uploadResult.model_version_id ?? 'null'}
-              </dd>
-            </div>
-            <div className="rounded bg-d-bg p-3">
-              <dt className="text-d-muted">workbook_version_id</dt>
-              <dd className="break-all font-mono text-white">
-                {uploadResult.workbook_version_id ?? 'null'}
-              </dd>
-            </div>
-          </dl>
-
-          <div className="mt-4 rounded border border-d-border bg-d-bg p-3">
-            <h3 className="text-sm font-medium text-white">
-              Validation summary
-            </h3>
-            <pre className="mt-2 overflow-auto text-xs text-slate-200">
-              {JSON.stringify(uploadResult.validation_summary, null, 2)}
-            </pre>
-          </div>
-
-          {!uploadResult.submitted ? (
-            <div className="mt-4 rounded border border-red-700/60 bg-red-900/20 p-4 text-red-200">
-              <p className="font-semibold">
-                Upload stopped before model submission
-              </p>
-              <p className="mt-1 font-mono text-sm">
-                stop_reason: {uploadResult.stop_reason || 'unknown'}
-              </p>
-              <div className="mt-3">
-                <p className="text-sm font-medium">errors</p>
-                <pre className="mt-1 overflow-auto text-xs">
-                  {JSON.stringify(uploadResult.errors, null, 2)}
-                </pre>
-              </div>
-              <div className="mt-3">
-                <p className="text-sm font-medium">validation_summary</p>
-                <pre className="mt-1 overflow-auto text-xs">
-                  {JSON.stringify(uploadResult.validation_summary, null, 2)}
-                </pre>
-              </div>
-            </div>
-          ) : null}
-
-          {uploadResult.warnings.length > 0 ? (
-            <details className="mt-4">
-              <summary className="cursor-pointer text-sm font-medium text-yellow-300">
-                Upload warnings ({uploadResult.warnings.length})
-              </summary>
-              <pre className="mt-2 max-h-80 overflow-auto rounded bg-d-bg p-3 text-xs text-yellow-100">
-                {JSON.stringify(uploadResult.warnings, null, 2)}
-              </pre>
-            </details>
-          ) : null}
-        </section>
-      ) : null}
 
       {activeIdentity ? (
         <CalculationPreparationPanel
-          key={activeIdentity.modelVersionId}
+          key={`${activeIdentity.modelVersionId}:${activeIdentity.workbookVersionId}`}
           modelVersionId={activeIdentity.modelVersionId}
           workbookVersionId={activeIdentity.workbookVersionId}
           restoreFromStorage={activeIdentity.source === 'storage'}
+          uploadResult={uploadResult}
+          onLifecycleChange={handlePreparationLifecycle}
         />
-      ) : null}
+      ) : (
+        <>
+          <CalculationRunSummary
+            readiness={null}
+            phaseLabel={
+              pageState === 'failed'
+                ? 'Failed'
+                : pageState === 'processing'
+                  ? 'Processing'
+                  : 'Waiting'
+            }
+            hasWarnings={notifications.some(
+              ({ severity }) => severity === 'warning',
+            )}
+            hasError={hasFailure}
+            details={technicalDetails}
+          />
+          <PreparationNotifications notifications={notifications} />
+        </>
+      )}
 
-      <p className="mx-auto max-w-4xl break-all text-center font-mono text-[11px] text-d-muted">
-        Calculation identity keys:{' '}
-        {CALCULATION_STORAGE_KEYS.modelVersionId},{' '}
-        {CALCULATION_STORAGE_KEYS.workbookVersionId}
+      <p className="flex items-center justify-center gap-2 pt-2 text-center text-xs text-d-muted sm:text-sm">
+        <span aria-hidden="true">▣</span>
+        Your data is secure and private. We never store your file permanently.
       </p>
-    </div>
+    </main>
   );
 }

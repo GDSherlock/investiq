@@ -49,6 +49,7 @@ export interface AnimationScheduler {
 }
 
 export interface ProgressDriver {
+  waitForPreparation: () => void;
   complete: () => Promise<void>;
   stop: () => void;
 }
@@ -188,6 +189,12 @@ export function createProgressDriver({
   emit(0, 'upload', 'processing', true);
   scheduleSimulationFrame();
 
+  const waitForPreparation = () => {
+    if (stopped || completionPromise) return;
+    cancelScheduledFrame();
+    emit(SIMULATION_CAP, 'prepare', 'processing', true);
+  };
+
   const complete = (): Promise<void> => {
     if (completionPromise) return completionPromise;
     if (stopped) return Promise.resolve();
@@ -245,5 +252,5 @@ export function createProgressDriver({
     resolveCompletion = null;
   };
 
-  return { complete, stop };
+  return { waitForPreparation, complete, stop };
 }

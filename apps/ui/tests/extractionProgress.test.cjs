@@ -135,6 +135,31 @@ test('progress driver animates real success to 100 percent', async () => {
   assert.equal(updates.at(-1).phase, 'completed');
 });
 
+test('upload response advances to Prepare but stays capped until readiness completes', async () => {
+  const { createProgressDriver } = loadProgressModule();
+  const fake = createFakeScheduler();
+  const updates = [];
+  const driver = createProgressDriver({
+    onUpdate: (snapshot) => updates.push(snapshot),
+    scheduler: fake.scheduler,
+  });
+
+  fake.frameAt(12_000);
+  driver.waitForPreparation();
+
+  assert.equal(fake.pendingFrames(), 0);
+  assert.deepEqual(updates.at(-1), {
+    progress: 92,
+    stage: 'prepare',
+    phase: 'processing',
+  });
+
+  const completed = driver.complete();
+  fake.frameAt(12_750);
+  await completed;
+  assert.equal(updates.at(-1).progress, 100);
+});
+
 test('progress driver never moves backward when frame time regresses', () => {
   const { createProgressDriver } = loadProgressModule();
   const fake = createFakeScheduler();

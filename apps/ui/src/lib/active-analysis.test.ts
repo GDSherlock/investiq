@@ -233,12 +233,12 @@ test('hydration validates the selected override run identity', async () => {
     getReadiness: async () => readiness(),
     getRun: async (runId) => {
       runRequests.push(runId);
-      return run({ calculation_run_id: 'override-run' });
+      return run({ calculation_run_id: runId });
     },
   });
 
   assert.equal(result.activeRunId, 'override-run');
-  assert.deepEqual(runRequests, ['override-run']);
+  assert.deepEqual(runRequests, ['baseline-run', 'override-run']);
 });
 
 test('hydration rejects a persisted run from a different calculation identity', async () => {
@@ -251,5 +251,86 @@ test('hydration rejects a persisted run from a different calculation identity', 
       getRun: async () => run({ graph_version_id: 'other-graph' }),
     }),
     /does not match the active model and graph/,
+  );
+});
+
+function missingRun(runId: string): Error & {
+  status: number;
+  detail: { code: string; resource_id: string };
+} {
+  return Object.assign(new Error('Calculation run was not found.'), {
+    status: 404,
+    detail: {
+      code: 'CALCULATION_RUN_NOT_FOUND',
+      resource_id: runId,
+    },
+  });
+}
+
+test('hydration clears a stale override and falls back to its valid baseline', async () => {
+  const storage = new MemoryStorage();
+  storeState(storage, state({ overrideRunId: 'override-run' }));
+
+  const result = await hydrateActiveAnalysis(storage, {
+    getReadiness: async () => readiness(),
+    getRun: async (runId) => {
+      if (runId === 'override-run') {
+        throw missingRun(runId);
+      }
+      return run({ calculation_run_id: runId });
+    },
+    lockManager,
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.activeRunId, 'baseline-run');
+  assert.equal(result.activeRunKind, 'baseline');
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
+    null,
+  );
+});
+
+test('hydration clears a stale baseline and requires a new calculation', async () => {
+  const storage = new MemoryStorage();
+  storeState(storage, state({ overrideRunId: 'override-run' }));
+  const runRequests: string[] = [];
+
+  const result = await hydrateActiveAnalysis(storage, {
+    getReadiness: async () => readiness(),
+    getRun: async (runId) => {
+      runRequests.push(runId);
+      throw missingRun(runId);
+    },
+    lockManager,
+  });
+
+  assert.equal(result.status, 'needs_calculation');
+  assert.equal(result.baselineRunId, null);
+  assert.equal(result.activeRunId, null);
+  assert.deepEqual(runRequests, ['baseline-run']);
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.baselineRunId),
+    null,
+  );
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.overrideRunId),
+    null,
+  );
+});
+
+test('active analysis does not accept an override without a baseline', () => {
+  assert.deepEqual(
+    resolveActiveAnalysis(
+      state({ baselineRunId: null, overrideRunId: 'override-run' }),
+    ),
+    {
+      status: 'needs_calculation',
+      modelVersionId: 'model-version',
+      graphVersionId: 'graph-version',
+      baselineRunId: null,
+      activeRunId: null,
+      activeRunKind: null,
+    },
   );
 });

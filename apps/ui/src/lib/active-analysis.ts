@@ -5,6 +5,7 @@ import type {
 import {
   persistGraphVersionId,
   readPersistedCalculationState,
+  removePersistedCalculationRunId,
   type PersistedCalculationState,
   type SensitivityWorkbenchLockManager,
   type StorageLike,
@@ -56,13 +57,16 @@ export function resolveActiveAnalysis(
       activeRunKind: null,
     };
   }
-  const activeRunId = state.overrideRunId ?? state.baselineRunId;
+  const activeRunId =
+    state.baselineRunId === null
+      ? null
+      : state.overrideRunId ?? state.baselineRunId;
   const activeRunKind =
-    state.overrideRunId !== null
+    state.baselineRunId === null
+      ? null
+      : state.overrideRunId !== null
       ? 'override'
-      : state.baselineRunId !== null
-        ? 'baseline'
-        : null;
+      : 'baseline';
   return {
     status: activeRunId === null ? 'needs_calculation' : 'ready',
     modelVersionId: state.modelVersionId,
@@ -71,6 +75,57 @@ export function resolveActiveAnalysis(
     activeRunId,
     activeRunKind,
   };
+}
+
+function isStructuredRunNotFound(
+  error: unknown,
+  requestedRunId: string,
+): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const candidate = error as {
+    status?: unknown;
+    detail?: unknown;
+  };
+  if (
+    candidate.status !== 404 ||
+    typeof candidate.detail !== 'object' ||
+    candidate.detail === null
+  ) {
+    return false;
+  }
+  const detail = candidate.detail as {
+    code?: unknown;
+    resource_id?: unknown;
+  };
+  return (
+    detail.code === 'CALCULATION_RUN_NOT_FOUND' &&
+    (detail.resource_id === undefined ||
+      detail.resource_id === null ||
+      detail.resource_id === requestedRunId)
+  );
+}
+
+function validatePersistedRun(
+  run: CalculationRunResponse,
+  runId: string,
+  resolution: ActiveAnalysisResolution,
+): void {
+  if (
+    run.calculation_run_id !== runId ||
+    run.model_version_id !== resolution.modelVersionId ||
+    run.graph_version_id !== resolution.graphVersionId
+  ) {
+    throw new Error(
+      'Persisted calculation run does not match the active model and graph.',
+    );
+  }
+  if (!['completed', 'completed_with_warning'].includes(run.status)) {
+    throw new Error(
+      `Persisted calculation run is not available (${run.status}).`,
+    );
+  }
 }
 
 export async function hydrateActiveAnalysis(
@@ -107,24 +162,55 @@ export async function hydrateActiveAnalysis(
     }
   }
 
-  if (
-    resolution.status === 'ready' &&
-    resolution.activeRunId !== null
-  ) {
-    const run = await dependencies.getRun(resolution.activeRunId);
-    if (
-      run.calculation_run_id !== resolution.activeRunId ||
-      run.model_version_id !== resolution.modelVersionId ||
-      run.graph_version_id !== resolution.graphVersionId
-    ) {
-      throw new Error(
-        'Persisted calculation run does not match the active model and graph.',
+  if (resolution.status === 'ready' && persisted.baselineRunId !== null) {
+    try {
+      const baselineRun = await dependencies.getRun(
+        persisted.baselineRunId,
+      );
+      validatePersistedRun(
+        baselineRun,
+        persisted.baselineRunId,
+        resolution,
+      );
+    } catch (error) {
+      if (!isStructuredRunNotFound(error, persisted.baselineRunId)) {
+        throw error;
+      }
+      await removePersistedCalculationRunId(
+        storage,
+        'baseline',
+        persisted,
+        dependencies.lockManager,
+      );
+      return resolveActiveAnalysis(
+        readPersistedCalculationState(storage),
       );
     }
-    if (!['completed', 'completed_with_warning'].includes(run.status)) {
-      throw new Error(
-        `Persisted calculation run is not available (${run.status}).`,
-      );
+
+    if (persisted.overrideRunId !== null) {
+      try {
+        const overrideRun = await dependencies.getRun(
+          persisted.overrideRunId,
+        );
+        validatePersistedRun(
+          overrideRun,
+          persisted.overrideRunId,
+          resolution,
+        );
+      } catch (error) {
+        if (!isStructuredRunNotFound(error, persisted.overrideRunId)) {
+          throw error;
+        }
+        await removePersistedCalculationRunId(
+          storage,
+          'override',
+          persisted,
+          dependencies.lockManager,
+        );
+        return resolveActiveAnalysis(
+          readPersistedCalculationState(storage),
+        );
+      }
     }
   }
 

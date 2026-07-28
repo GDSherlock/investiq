@@ -16,6 +16,7 @@ from ..calculation_sensitivity_service import CalculationSensitivityService
 from ..database import get_db
 from ..model_extraction_read_service import ModelExtractionReadService
 from ..schemas import (
+    CashFlowAnalysisResponse,
     CalculationInputsResponse,
     CalculationOutputsResponse,
     CalculationPrepareRequest,
@@ -25,12 +26,15 @@ from ..schemas import (
     CalculationRunResponse,
     CalculationSensitivityRequest,
     CalculationSensitivityResponse,
+    ModelDiagnosticsResponse,
+    OverviewAnalysisResponse,
     ParameterAnalysisReviewRequest,
     ParameterAnalysisReviewResponse,
     SemanticBindingReviewRequest,
     SemanticBindingSlotItem,
     SemanticBindingsPreviewResponse,
 )
+from ..analysis_presentation_service import AnalysisPresentationService
 from ..semantic_binding_service import SemanticBindingService
 from ..workbook_storage import DatabaseWorkbookStorage
 
@@ -52,6 +56,15 @@ def get_calculation_integration_service(
         DatabaseWorkbookStorage(session),
     )
     return CalculationIntegrationService(session, read_service)
+
+
+def get_analysis_presentation_service(
+    session: Session = Depends(get_db),
+    calculation_service: CalculationIntegrationService = Depends(
+        get_calculation_integration_service
+    ),
+) -> AnalysisPresentationService:
+    return AnalysisPresentationService(session, calculation_service)
 
 
 def get_calculation_sensitivity_service(
@@ -116,6 +129,54 @@ def review_analysis_parameter(
             str(parameter_id),
             request,
         )
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.get(
+    "/calculation-runs/{calculation_run_id}/overview",
+    response_model=OverviewAnalysisResponse,
+)
+def get_overview_analysis(
+    calculation_run_id: UUID,
+    service: AnalysisPresentationService = Depends(
+        get_analysis_presentation_service
+    ),
+) -> OverviewAnalysisResponse:
+    try:
+        return service.overview(str(calculation_run_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.get(
+    "/calculation-runs/{calculation_run_id}/cash-flow",
+    response_model=CashFlowAnalysisResponse,
+)
+def get_cash_flow_analysis(
+    calculation_run_id: UUID,
+    service: AnalysisPresentationService = Depends(
+        get_analysis_presentation_service
+    ),
+) -> CashFlowAnalysisResponse:
+    try:
+        return service.cash_flow(str(calculation_run_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.get(
+    "/models/{model_version_id}/diagnostics",
+    response_model=ModelDiagnosticsResponse,
+)
+def get_model_diagnostics(
+    model_version_id: UUID,
+    service: AnalysisPresentationService = Depends(
+        get_analysis_presentation_service
+    ),
+) -> ModelDiagnosticsResponse:
+    try:
+        return service.diagnostics(str(model_version_id))
     except CalculationIntegrationError as error:
         _translate_error(error)
 

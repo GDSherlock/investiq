@@ -259,6 +259,9 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
             "/api/v1/models/{model_version_id}/analysis-parameters/{parameter_id}",
             "put",
         ),
+        ("/api/v1/calculation-runs/{calculation_run_id}/overview", "get"),
+        ("/api/v1/calculation-runs/{calculation_run_id}/cash-flow", "get"),
+        ("/api/v1/models/{model_version_id}/diagnostics", "get"),
     }
 
     for path, method in expected:
@@ -362,6 +365,130 @@ def test_parameter_analysis_review_controls_role_and_stochastic_eligibility(
     )
     assert discount_rate["status"] == "candidate"
     assert discount_rate["candidates"][0]["entity_id"] == parameter_id
+
+
+def test_persisted_analysis_views_do_not_fabricate_unbound_values_or_new_runs(
+    api_context,
+) -> None:
+    context = api_context
+    client = context["client"]
+    prepared = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculation/prepare",
+        json={},
+    ).json()
+    baseline = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculations",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    ).json()
+    with context["session_factory"]() as session:
+        before = session.scalar(select(func.count()).select_from(CalculationRunRecord))
+
+    overview = client.get(
+        f"/api/v1/calculation-runs/{baseline['calculation_run_id']}/overview"
+    )
+    cash_flow = client.get(
+        f"/api/v1/calculation-runs/{baseline['calculation_run_id']}/cash-flow"
+    )
+    diagnostics = client.get(
+        f"/api/v1/models/{context['model_version_id']}/diagnostics"
+    )
+
+    assert overview.status_code == 200
+    assert len(overview.json()["kpis"]) == 6
+    assert all(
+        item["availability_status"] == "unavailable"
+        and item["value"] is None
+        and item["display_value"] == "Unavailable"
+        for item in overview.json()["kpis"]
+    )
+    assert [chart["slot"] for chart in cash_flow.json()["charts"]] == [
+        "annual_project_free_cash_flow",
+        "annual_equity_cash_flow",
+        "cfads_vs_debt_service",
+        "dscr_vs_covenant",
+        "cumulative_cash_flow",
+        "debt_balance_profile",
+        "capex_construction_profile",
+        "interest_and_principal_profile",
+    ]
+    assert all(
+        chart["availability_status"] == "unavailable"
+        for chart in cash_flow.json()["charts"]
+    )
+    assert diagnostics.status_code == 200
+    assert diagnostics.json()["model_version_id"] == context["model_version_id"]
+    with context["session_factory"]() as session:
+        after = session.scalar(select(func.count()).select_from(CalculationRunRecord))
+    assert after == before
+
+
+def test_overview_reads_reviewed_kpi_and_benchmark_from_persisted_run(
+    api_context,
+) -> None:
+    context = api_context
+    client = context["client"]
+    with context["session_factory"]() as session:
+        output = session.scalar(select(CanonicalOutput))
+        output.business_role = "project_irr"
+        output.label = "Project IRR"
+        output_id = output.id
+        session.commit()
+    parameter_review = client.put(
+        f"/api/v1/models/{context['model_version_id']}"
+        f"/analysis-parameters/{context['parameter_id']}",
+        json={
+            "business_role": "project_irr_hurdle",
+            "stochastic_eligible": False,
+        },
+    )
+    assert parameter_review.status_code == 200
+    for role, entity_kind, entity_id in (
+        ("project_irr", "canonical_output", output_id),
+        (
+            "project_irr_hurdle",
+            "model_parameter",
+            context["parameter_id"],
+        ),
+    ):
+        reviewed = client.put(
+            f"/api/v1/models/{context['model_version_id']}"
+            f"/semantic-bindings/{role}",
+            json={"entity_kind": entity_kind, "entity_id": entity_id},
+        )
+        assert reviewed.status_code == 200
+    prepared = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculation/prepare",
+        json={},
+    ).json()
+    baseline = client.post(
+        f"/api/v1/models/{context['model_version_id']}/calculations",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    ).json()
+
+    overview = client.get(
+        f"/api/v1/calculation-runs/{baseline['calculation_run_id']}/overview"
+    )
+
+    assert overview.status_code == 200
+    primary = overview.json()["kpis"][0]
+    assert primary["role"] == "project_irr"
+    assert primary["value"] == "5"
+    assert primary["display_value"] == "500.0%"
+    assert primary["benchmark"]["value"] == "2"
+    assert primary["status"] == "above_hurdle"
+    assert primary["source_ids"] == [output_id]
+    assert all(
+        item["availability_status"] == "unavailable"
+        for item in overview.json()["kpis"][1:]
+    )
 
 
 @pytest.mark.parametrize(

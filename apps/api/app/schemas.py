@@ -420,6 +420,87 @@ class ParameterAnalysisReviewResponse(_CalculationDTO):
     stochastic_eligible: bool
 
 
+class AnalysisBenchmarkItem(_CalculationDTO):
+    role: str
+    value: str
+    display_value: str
+    source_ids: list[UUIDString] = Field(default_factory=list)
+
+
+class AnalysisKpiItem(_CalculationDTO):
+    slot: str
+    role: str
+    label: str
+    value: str | None = None
+    unit: str | None = None
+    display_value: str
+    benchmark: AnalysisBenchmarkItem | None = None
+    status: str
+    source_type: Literal["calculated", "derived", "unavailable"]
+    availability_status: Literal["available", "partial", "unavailable"]
+    quality_status: str
+    validation_status: str | None = None
+    calculation_run_id: UUIDString
+    source_ids: list[UUIDString] = Field(default_factory=list)
+
+
+class AnalysisSeriesPointItem(_CalculationDTO):
+    period_index: int
+    period: str | None = None
+    value: str | None = None
+    availability_status: Literal["available", "unavailable"]
+    validation_status: str | None = None
+    source_ids: list[UUIDString] = Field(default_factory=list)
+
+
+class AnalysisSeriesItem(_CalculationDTO):
+    role: str
+    label: str
+    unit: str | None = None
+    source_type: Literal["calculated", "derived"]
+    availability_status: Literal["available", "partial", "unavailable"]
+    source_ids: list[UUIDString] = Field(default_factory=list)
+    points: list[AnalysisSeriesPointItem] = Field(default_factory=list)
+
+
+class AnalysisChartItem(_CalculationDTO):
+    slot: str
+    title: str
+    availability_status: Literal["available", "partial", "unavailable"]
+    source_type: Literal["calculated", "derived", "unavailable"]
+    fallback_used: str | None = None
+    series: list[AnalysisSeriesItem] = Field(default_factory=list)
+
+
+class OverviewAnalysisResponse(_CalculationDTO):
+    calculation_run_id: UUIDString
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    kpis: list[AnalysisKpiItem] = Field(default_factory=list)
+    charts: list[AnalysisChartItem] = Field(default_factory=list)
+
+
+class CashFlowAnalysisResponse(_CalculationDTO):
+    calculation_run_id: UUIDString
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    charts: list[AnalysisChartItem] = Field(default_factory=list)
+
+
+class ModelDiagnosticsResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    status: str
+    validation_status: str
+    submitted: bool
+    stop_reason: str | None = None
+    error_code: str | None = None
+    coverage: dict[str, Any] = Field(default_factory=dict)
+    validation_summary: dict[str, Any] = Field(default_factory=dict)
+    time_series_summary: dict[str, Any] = Field(default_factory=dict)
+    detected_sheets: list[str] = Field(default_factory=list)
+    error_count: int = 0
+
+
 class CalculationSensitivityOverrideRequest(_CalculationDTO):
     target: CalculationOverrideTarget
     value: CalculationNumberValue

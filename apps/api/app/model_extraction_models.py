@@ -25,11 +25,21 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from .database import Base
-from .model_extraction_types import BUSINESS_OUTPUT_ROLES
+from .model_extraction_types import (
+    BUSINESS_OUTPUT_ROLES,
+    BUSINESS_PARAMETER_ROLES,
+    SEMANTIC_BINDING_ROLES,
+)
 
 
 _BUSINESS_OUTPUT_ROLES_SQL = ", ".join(
     f"'{role}'" for role in BUSINESS_OUTPUT_ROLES
+)
+_BUSINESS_PARAMETER_ROLES_SQL = ", ".join(
+    f"'{role}'" for role in BUSINESS_PARAMETER_ROLES
+)
+_SEMANTIC_BINDING_ROLES_SQL = ", ".join(
+    f"'{role}'" for role in SEMANTIC_BINDING_ROLES
 )
 
 
@@ -129,6 +139,12 @@ class ModelVersion(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    semantic_bindings = relationship(
+        "ModelSemanticBinding",
+        back_populates="model_version",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class ModelParameter(Base):
@@ -142,6 +158,10 @@ class ModelParameter(Base):
             name="uq_model_parameters_source_cell",
         ),
         Index("ix_model_parameters_model_role", "model_version_id", "validated_role"),
+        CheckConstraint(
+            f"business_role IS NULL OR business_role IN ({_BUSINESS_PARAMETER_ROLES_SQL})",
+            name="ck_model_parameters_business_role",
+        ),
     )
 
     id = Column(Uuid(as_uuid=False), primary_key=True)
@@ -156,6 +176,8 @@ class ModelParameter(Base):
     label = Column(Text, nullable=False)
     category = Column(String(100), nullable=True)
     canonical_name = Column(String(255), nullable=True)
+    business_role = Column(String(64), nullable=True)
+    stochastic_eligible = Column(Boolean, nullable=False, default=False)
     submitted_role = Column(String(64), nullable=False)
     validated_role = Column(String(64), nullable=False)
     raw_value_json = Column(JSON, nullable=True)
@@ -179,6 +201,80 @@ class ModelParameter(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     model_version = relationship("ModelVersion", back_populates="parameters")
+
+
+class ModelSemanticBinding(Base):
+    __tablename__ = "model_semantic_bindings"
+    __table_args__ = (
+        CheckConstraint(
+            f"semantic_role IN ({_SEMANTIC_BINDING_ROLES_SQL})",
+            name="ck_model_semantic_bindings_role",
+        ),
+        CheckConstraint(
+            "binding_source IN ('extracted', 'reviewed')",
+            name="ck_model_semantic_bindings_source",
+        ),
+        CheckConstraint(
+            "("
+            "canonical_output_id IS NOT NULL AND "
+            "financial_series_id IS NULL AND model_parameter_id IS NULL"
+            ") OR ("
+            "canonical_output_id IS NULL AND "
+            "financial_series_id IS NOT NULL AND model_parameter_id IS NULL"
+            ") OR ("
+            "canonical_output_id IS NULL AND "
+            "financial_series_id IS NULL AND model_parameter_id IS NOT NULL"
+            ")",
+            name="ck_model_semantic_bindings_exactly_one_entity",
+        ),
+        UniqueConstraint(
+            "model_version_id",
+            "semantic_role",
+            name="uq_model_semantic_bindings_model_role",
+        ),
+        Index(
+            "ix_model_semantic_bindings_model_role",
+            "model_version_id",
+            "semantic_role",
+        ),
+    )
+
+    id = Column(Uuid(as_uuid=False), primary_key=True)
+    model_version_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey("model_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    semantic_role = Column(String(64), nullable=False)
+    canonical_output_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey("canonical_outputs.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    financial_series_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey("financial_series.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    model_parameter_id = Column(
+        Uuid(as_uuid=False),
+        ForeignKey("model_parameters.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    binding_source = Column(String(32), nullable=False, default="reviewed")
+    evidence_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    model_version = relationship("ModelVersion", back_populates="semantic_bindings")
+    canonical_output = relationship("CanonicalOutput")
+    financial_series = relationship("FinancialSeries")
+    model_parameter = relationship("ModelParameter")
 
 
 class CanonicalOutput(Base):

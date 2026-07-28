@@ -25,11 +25,23 @@ from ..schemas import (
     CalculationRunResponse,
     CalculationSensitivityRequest,
     CalculationSensitivityResponse,
+    ParameterAnalysisReviewRequest,
+    ParameterAnalysisReviewResponse,
+    SemanticBindingReviewRequest,
+    SemanticBindingSlotItem,
+    SemanticBindingsPreviewResponse,
 )
+from ..semantic_binding_service import SemanticBindingService
 from ..workbook_storage import DatabaseWorkbookStorage
 
 
 router = APIRouter(tags=["Calculation"])
+
+
+def get_semantic_binding_service(
+    session: Session = Depends(get_db),
+) -> SemanticBindingService:
+    return SemanticBindingService(session)
 
 
 def get_calculation_integration_service(
@@ -56,6 +68,56 @@ def _translate_error(error: CalculationIntegrationError) -> None:
         status_code=error.status_code,
         detail=error.detail(),
     ) from error
+
+
+@router.get(
+    "/models/{model_version_id}/semantic-bindings",
+    response_model=SemanticBindingsPreviewResponse,
+)
+def get_semantic_bindings(
+    model_version_id: UUID,
+    service: SemanticBindingService = Depends(get_semantic_binding_service),
+) -> SemanticBindingsPreviewResponse:
+    try:
+        return service.preview(str(model_version_id))
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.put(
+    "/models/{model_version_id}/semantic-bindings/{semantic_role}",
+    response_model=SemanticBindingSlotItem,
+)
+def review_semantic_binding(
+    model_version_id: UUID,
+    semantic_role: str,
+    request: SemanticBindingReviewRequest,
+    service: SemanticBindingService = Depends(get_semantic_binding_service),
+) -> SemanticBindingSlotItem:
+    try:
+        return service.review(str(model_version_id), semantic_role, request)
+    except CalculationIntegrationError as error:
+        _translate_error(error)
+
+
+@router.put(
+    "/models/{model_version_id}/analysis-parameters/{parameter_id}",
+    response_model=ParameterAnalysisReviewResponse,
+)
+def review_analysis_parameter(
+    model_version_id: UUID,
+    parameter_id: UUID,
+    request: ParameterAnalysisReviewRequest,
+    service: SemanticBindingService = Depends(get_semantic_binding_service),
+) -> ParameterAnalysisReviewResponse:
+    try:
+        return service.review_parameter(
+            str(model_version_id),
+            str(parameter_id),
+            request,
+        )
+    except CalculationIntegrationError as error:
+        _translate_error(error)
 
 
 @router.get(

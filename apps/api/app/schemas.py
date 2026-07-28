@@ -370,6 +370,56 @@ class CalculationRunOutputsResponse(_CalculationDTO):
     outputs: list[CalculationRunOutputItem] = Field(default_factory=list)
 
 
+class SemanticBindingEntityItem(_CalculationDTO):
+    entity_kind: Literal["canonical_output", "financial_series", "model_parameter"]
+    entity_id: UUIDString
+    label: str
+    business_role: str | None = None
+    unit: str | None = None
+
+
+class SemanticBindingSlotItem(_CalculationDTO):
+    semantic_role: str
+    status: Literal[
+        "unresolved",
+        "candidate",
+        "ambiguous",
+        "extracted",
+        "reviewed",
+    ]
+    binding: SemanticBindingEntityItem | None = None
+    candidates: list[SemanticBindingEntityItem] = Field(default_factory=list)
+
+
+class SemanticBindingsPreviewResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    slots: list[SemanticBindingSlotItem] = Field(default_factory=list)
+
+
+class SemanticBindingReviewRequest(_CalculationDTO):
+    entity_kind: Literal["canonical_output", "financial_series", "model_parameter"]
+    entity_id: UUIDString
+
+
+class ParameterAnalysisReviewRequest(_CalculationDTO):
+    business_role: Literal[
+        "discount_rate",
+        "project_irr_hurdle",
+        "equity_irr_hurdle",
+        "dscr_covenant",
+        "debt_ratio",
+        "equity_ratio",
+    ] | None = None
+    stochastic_eligible: StrictBool
+
+
+class ParameterAnalysisReviewResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    parameter_id: UUIDString
+    business_role: str | None = None
+    stochastic_eligible: bool
+
+
 class CalculationSensitivityOverrideRequest(_CalculationDTO):
     target: CalculationOverrideTarget
     value: CalculationNumberValue

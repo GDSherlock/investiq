@@ -173,6 +173,18 @@ def test_metadata_creates_all_model_extraction_tables(schema_session) -> None:
     } <= set(inspect(engine).get_table_names())
 
 
+def test_metadata_creates_semantic_binding_and_parameter_eligibility_contract(
+    schema_session,
+) -> None:
+    engine, _session = schema_session
+
+    assert "model_semantic_bindings" in set(inspect(engine).get_table_names())
+    parameter_columns = {
+        column["name"] for column in inspect(engine).get_columns("model_parameters")
+    }
+    assert {"business_role", "stochastic_eligible"} <= parameter_columns
+
+
 def test_workbook_sha256_is_unique(schema_session) -> None:
     _engine, session = schema_session
     session.add_all([_workbook(), _workbook(id=new_id(), storage_ref="another-ref")])
@@ -331,6 +343,12 @@ def test_alembic_upgrades_empty_sqlite_database_to_persistence_head(tmp_path: Pa
         assert "business_role" in {
             column["name"] for column in inspect(engine).get_columns("financial_series")
         }
+        series_role_constraint = next(
+            constraint["sqltext"]
+            for constraint in inspect(engine).get_check_constraints("financial_series")
+            if constraint["name"] == "ck_financial_series_business_role"
+        )
+        assert "project_free_cash_flow" in series_role_constraint
     finally:
         engine.dispose()
 

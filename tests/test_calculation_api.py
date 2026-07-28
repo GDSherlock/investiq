@@ -250,6 +250,15 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
         ("/api/v1/models/{model_version_id}/calculations", "post"),
         ("/api/v1/calculation-runs/{calculation_run_id}", "get"),
         ("/api/v1/calculation-runs/{calculation_run_id}/outputs", "get"),
+        ("/api/v1/models/{model_version_id}/semantic-bindings", "get"),
+        (
+            "/api/v1/models/{model_version_id}/semantic-bindings/{semantic_role}",
+            "put",
+        ),
+        (
+            "/api/v1/models/{model_version_id}/analysis-parameters/{parameter_id}",
+            "put",
+        ),
     }
 
     for path, method in expected:
@@ -286,6 +295,73 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
     assert sensitivity["responses"]["200"]["content"]["application/json"][
         "schema"
     ] == {"$ref": "#/components/schemas/CalculationSensitivityResponse"}
+
+
+def test_semantic_binding_preview_and_review_require_exact_canonical_entities(
+    api_context,
+) -> None:
+    model_id = api_context["model_version_id"]
+    client = api_context["client"]
+
+    preview = client.get(f"/api/v1/models/{model_id}/semantic-bindings")
+
+    assert preview.status_code == 200
+    slots = {slot["semantic_role"]: slot for slot in preview.json()["slots"]}
+    assert slots["revenue"]["status"] == "candidate"
+    assert slots["revenue"]["candidates"][0]["entity_kind"] == "financial_series"
+    assert slots["project_irr"] == {
+        "semantic_role": "project_irr",
+        "status": "unresolved",
+        "binding": None,
+        "candidates": [],
+    }
+
+    revenue_id = slots["revenue"]["candidates"][0]["entity_id"]
+    reviewed = client.put(
+        f"/api/v1/models/{model_id}/semantic-bindings/revenue",
+        json={"entity_kind": "financial_series", "entity_id": revenue_id},
+    )
+
+    assert reviewed.status_code == 200
+    assert reviewed.json()["status"] == "reviewed"
+    assert reviewed.json()["binding"]["entity_id"] == revenue_id
+
+    wrong_role = client.put(
+        f"/api/v1/models/{model_id}/semantic-bindings/project_irr",
+        json={"entity_kind": "financial_series", "entity_id": revenue_id},
+    )
+
+    assert wrong_role.status_code == 409
+    assert wrong_role.json()["detail"]["code"] == "SEMANTIC_ENTITY_ROLE_MISMATCH"
+
+
+def test_parameter_analysis_review_controls_role_and_stochastic_eligibility(
+    api_context,
+) -> None:
+    model_id = api_context["model_version_id"]
+    parameter_id = api_context["parameter_id"]
+    client = api_context["client"]
+
+    reviewed = client.put(
+        f"/api/v1/models/{model_id}/analysis-parameters/{parameter_id}",
+        json={"business_role": "discount_rate", "stochastic_eligible": True},
+    )
+
+    assert reviewed.status_code == 200
+    assert reviewed.json() == {
+        "model_version_id": model_id,
+        "parameter_id": parameter_id,
+        "business_role": "discount_rate",
+        "stochastic_eligible": True,
+    }
+    preview = client.get(f"/api/v1/models/{model_id}/semantic-bindings")
+    discount_rate = next(
+        slot
+        for slot in preview.json()["slots"]
+        if slot["semantic_role"] == "discount_rate"
+    )
+    assert discount_rate["status"] == "candidate"
+    assert discount_rate["candidates"][0]["entity_id"] == parameter_id
 
 
 @pytest.mark.parametrize(

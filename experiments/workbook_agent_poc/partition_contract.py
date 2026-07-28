@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import json
 from typing import Any
 
@@ -25,6 +26,96 @@ RECONCILIATION_SYSTEM_PROMPT = (
     "otherwise return review_required. Do not author values, formulas, ranges, "
     "or new source references."
 )
+
+
+SOURCE_BOUND_PARTIAL_BUCKETS = (
+    "metadata",
+    "all_assumption_candidates",
+    "parameter_candidates",
+    "derived_value_candidates",
+    "output_candidates",
+    "financial_series_candidates",
+    "unclassified_inputs",
+    "review_candidates",
+    "scenario_structures",
+    "sensitivity_structures",
+)
+REQUIRED_PARTIAL_BUCKETS = (
+    "all_assumption_candidates",
+    "output_candidates",
+)
+
+
+@dataclass(frozen=True)
+class PartitionResultIssue:
+    code: str
+    repair_instruction: str
+
+
+def _issue(code: str, instruction: str) -> PartitionResultIssue:
+    return PartitionResultIssue(
+        code=code,
+        repair_instruction=(
+            "The previous submit_partition_result was rejected with "
+            f"{code}. {instruction} Return one complete replacement "
+            "submit_partition_result function call."
+        ),
+    )
+
+
+def validate_partition_tool_arguments(
+    arguments: dict[str, Any],
+) -> PartitionResultIssue | None:
+    result = arguments.get("result")
+    if not isinstance(result, dict):
+        return _issue(
+            "partition_result_missing",
+            "The result field must be an object.",
+        )
+
+    for bucket in REQUIRED_PARTIAL_BUCKETS:
+        if bucket not in result:
+            return _issue(
+                "partition_bucket_missing",
+                f"The result must include the {bucket} list.",
+            )
+
+    for bucket in SOURCE_BOUND_PARTIAL_BUCKETS:
+        if bucket not in result:
+            continue
+        items = result[bucket]
+        if not isinstance(items, list):
+            return _issue(
+                "partition_bucket_invalid",
+                f"The {bucket} field must be a list.",
+            )
+        for item in items:
+            if not isinstance(item, dict):
+                return _issue(
+                    "partition_candidate_invalid",
+                    f"Every item in {bucket} must be an object.",
+                )
+            sources = item.get("source_references")
+            if not isinstance(sources, list) or not sources:
+                return _issue(
+                    "candidate_source_missing",
+                    "Every candidate and structure must include a non-empty "
+                    "source_references list citing exact supplied evidence.",
+                )
+            for source in sources:
+                if (
+                    not isinstance(source, dict)
+                    or not isinstance(source.get("sheet_name"), str)
+                    or not source["sheet_name"].strip()
+                    or not isinstance(source.get("cell"), str)
+                    or not source["cell"].strip()
+                ):
+                    return _issue(
+                        "candidate_source_invalid",
+                        "Every source reference must contain non-empty string "
+                        "sheet_name and cell fields from supplied evidence.",
+                    )
+    return None
 
 
 def _partial_result_schema() -> dict[str, Any]:
@@ -161,11 +252,14 @@ def request_measurement_payload(envelope: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "PARTITION_SYSTEM_PROMPT",
+    "PartitionResultIssue",
     "RECONCILIATION_SYSTEM_PROMPT",
+    "SOURCE_BOUND_PARTIAL_BUCKETS",
     "SUBMIT_PARTITION_TOOL",
     "SUBMIT_RECONCILIATION_TOOL",
     "build_partition_envelope",
     "compact_manifest",
     "request_measurement_payload",
     "serialize_partition_envelope",
+    "validate_partition_tool_arguments",
 ]

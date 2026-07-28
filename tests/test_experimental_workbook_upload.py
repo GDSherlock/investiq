@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from apps.api.app.calculation_rules.models import CalculationRuleExtraction
 from apps.api.app.calculation_rules.phase2_models import CalculationGraphVersionRecord
 from apps.api.app.database import Base
+from apps.api.app.model_extraction_models import ModelVersion
 from apps.api.app.model_extraction_read_service import ModelExtractionReadService
 from apps.api.app.model_extraction_types import ModelExtractionPersistenceError
 from apps.api.app.routers import models
@@ -318,7 +319,7 @@ def test_corrupt_xlsx_returns_structured_422(api_context):
         ("WorkbookValidationError", 500, "WORKBOOK_VALIDATION_ERROR"),
     ],
 )
-def test_adapter_errors_map_to_sanitized_http_errors(
+def test_adapter_errors_map_to_sanitized_http_errors_and_new_failed_model_id(
     monkeypatch,
     exception_name,
     status_code,
@@ -334,14 +335,40 @@ def test_adapter_errors_map_to_sanitized_http_errors(
     monkeypatch.setattr(models, "run_workbook_validation", fail, raising=False)
     client = TestClient(app, raise_server_exceptions=False)
 
-    response = client.post(
+    first_response = client.post(
         "/api/v1/models/upload",
         files={"file": ("benchmark.xlsx", persistence_workbook_bytes())},
     )
 
-    assert response.status_code == status_code
-    assert response.json()["detail"]["code"] == error_code
-    assert "secret-value" not in response.text
+    assert first_response.status_code == status_code
+    assert first_response.json()["detail"]["code"] == error_code
+    assert "secret-value" not in first_response.text
+
+    session = _session_factory()
+    try:
+        first_versions = session.scalars(select(ModelVersion)).all()
+        assert len(first_versions) == 1
+        assert first_versions[0].status == "extraction_failed"
+        first_model_version_id = first_versions[0].id
+    finally:
+        session.close()
+
+    second_response = client.post(
+        "/api/v1/models/upload",
+        files={"file": ("benchmark.xlsx", persistence_workbook_bytes())},
+    )
+
+    assert second_response.status_code == status_code
+    session = _session_factory()
+    try:
+        model_version_ids = session.scalars(
+            select(ModelVersion.id).order_by(ModelVersion.created_at)
+        ).all()
+        assert len(model_version_ids) == 2
+        assert model_version_ids[0] == first_model_version_id
+        assert model_version_ids[1] != first_model_version_id
+    finally:
+        session.close()
 
 
 def test_upload_route_has_database_but_not_auth_dependency(api_context):

@@ -25,6 +25,11 @@ if str(_POC_DIR) not in sys.path:
 
 from agent_loop import AzureDriver, run_loop  # noqa: E402
 from coverage_gate import HardCaps  # noqa: E402
+from partition_driver import AzurePartitionDriver  # noqa: E402
+from partition_pipeline import (  # noqa: E402
+    PartitionPipelineError,
+    run_partitioned_extraction,
+)
 from roles import family as role_family  # noqa: E402
 from validator import validate_extraction  # noqa: E402
 from workbook_tools import WorkbookToolset  # noqa: E402
@@ -79,7 +84,17 @@ def _validation_warnings(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return warnings
 
 
-def _driver_meta(driver: Any) -> dict[str, Any]:
+def _partitioned_enabled(explicit: bool | None) -> bool:
+    if explicit is not None:
+        return explicit
+    configured = os.getenv(
+        "WORKBOOK_AGENT_PARTITIONED_EXTRACTION_ENABLED",
+        "true",
+    )
+    return configured.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _driver_meta(driver: Any, *, partitioned: bool) -> dict[str, Any]:
     return {
         "api": "responses",
         "deployment": getattr(
@@ -89,6 +104,9 @@ def _driver_meta(driver: Any) -> dict[str, Any]:
         ),
         "prompt_tokens": getattr(driver, "usage_prompt", 0),
         "completion_tokens": getattr(driver, "usage_completion", 0),
+        "partitioned": partitioned,
+        "azure_call_count": getattr(driver, "call_count", 0),
+        "request_ids": list(getattr(driver, "request_ids", [])),
     }
 
 
@@ -96,9 +114,13 @@ def run_workbook_validation(
     file_bytes: bytes,
     filename: str,
     driver_factory: Callable[[], Any] = AzureDriver,
+    *,
+    partitioned: bool | None = None,
+    partition_driver_factory: Callable[[], Any] = AzurePartitionDriver,
 ) -> dict[str, Any]:
     """Run controlled workbook exploration and deterministic validation synchronously."""
     started = time.monotonic()
+    use_partitioned = _partitioned_enabled(partitioned)
 
     with tempfile.TemporaryDirectory(prefix="investiq-workbook-") as temp_dir:
         workbook_path = Path(temp_dir) / "uploaded.xlsx"
@@ -110,20 +132,35 @@ def run_workbook_validation(
             raise InvalidWorkbookError("The upload is not a readable OOXML workbook.") from exc
 
         try:
-            driver = driver_factory()
+            driver = (
+                partition_driver_factory()
+                if use_partitioned
+                else driver_factory()
+            )
         except KeyError as exc:
             raise AzureConfigurationError("Required Azure OpenAI configuration is missing.") from exc
         except OpenAIError as exc:
             raise AzureResponsesError("Azure Responses API initialization failed.") from exc
 
         try:
-            run = run_loop(driver, tools, caps=HardCaps())
+            if use_partitioned:
+                run = run_partitioned_extraction(driver, tools)
+            else:
+                run = run_loop(driver, tools, caps=HardCaps())
             series_outcome = materialize_financial_series(tools, run["final_extraction"])
             validation_results = validate_extraction(
                 tools,
                 run["final_extraction"],
                 financial_series_outcome=series_outcome,
             )
+        except PartitionPipelineError as exc:
+            if exc.azure_failure:
+                raise AzureResponsesError(
+                    "Azure Responses API execution failed."
+                ) from exc
+            raise WorkbookValidationError(
+                "Workbook-agent validation failed."
+            ) from exc
         except OpenAIError as exc:
             raise AzureResponsesError("Azure Responses API execution failed.") from exc
         except Exception as exc:
@@ -141,7 +178,7 @@ def run_workbook_validation(
             "endpoint_mode": "experimental_workbook_agent_validation",
             "filename": filename,
             "runtime_seconds": round(time.monotonic() - started, 2),
-            "driver_meta": _driver_meta(driver),
+            "driver_meta": _driver_meta(driver, partitioned=use_partitioned),
             "submitted": run["submitted"],
             "stop_reason": run["stop_reason"],
             "coverage": run["coverage"],

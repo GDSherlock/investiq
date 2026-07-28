@@ -581,3 +581,64 @@ export interface MonteCarloRunHistoryResponse {
   model_version_id: string;
   runs: MonteCarloRunResponse[];
 }
+
+export interface CanonicalReportPersona {
+  id: string;
+  name: string;
+  tone: string;
+  emphasis: string[];
+}
+
+export interface CanonicalReportCreateRequest {
+  graph_version_id: string;
+  calculation_run_id: string;
+  sensitivity_analysis_id: string | null;
+  monte_carlo_run_id: string | null;
+  template_version: 'canonical-ic-paper-v1';
+  persona: CanonicalReportPersona;
+  idempotency_key: string;
+}
+
+export interface CanonicalReportSection {
+  ordinal: number;
+  key: string;
+  title: string;
+  availability_status: 'available' | 'partial' | 'unavailable';
+  body: string;
+  source_ids: string[];
+}
+
+export interface CanonicalReportArtifact {
+  title: string;
+  template_id: string;
+  template_version: string;
+  persona: CanonicalReportPersona;
+  final_recommendation: 'Pending IC review';
+  evidence_hash: string;
+  sections: CanonicalReportSection[];
+}
+
+export interface CanonicalReportResponse {
+  report_id: string;
+  model_version_id: string;
+  graph_version_id: string;
+  calculation_run_id: string;
+  sensitivity_analysis_id: string | null;
+  monte_carlo_run_id: string | null;
+  template_id: string;
+  template_version: string;
+  persona: CanonicalReportPersona;
+  evidence_hash: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  runtime_ms: number | null;
+  artifact: CanonicalReportArtifact | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface CanonicalReportHistoryResponse {
+  model_version_id: string;
+  reports: CanonicalReportResponse[];
+}

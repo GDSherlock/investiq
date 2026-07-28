@@ -44,7 +44,19 @@ from . import model_extraction_models  # noqa: F401
 from . import analysis_models  # noqa: F401
 from .calculation_rules import models as calculation_rule_models  # noqa: F401
 from .calculation_rules import phase2_models as calculation_engine_models  # noqa: F401
-from .routers import calculations, models, scenarios, debt_analysis, reports, alerts, audit, market_data, assistant, monitor
+from .routers import (
+    alerts,
+    assistant,
+    audit,
+    calculations,
+    canonical_reports,
+    debt_analysis,
+    market_data,
+    models,
+    monitor,
+    reports,
+    scenarios,
+)
 from .routers import auth as auth_router
 
 
@@ -81,6 +93,7 @@ app.add_middleware(
 app.include_router(auth_router.router, prefix="/api/v1", tags=["Auth"])
 app.include_router(models.router, prefix="/api/v1", tags=["Models"])
 app.include_router(calculations.router, prefix="/api/v1")
+app.include_router(canonical_reports.router, prefix="/api/v1")
 app.include_router(scenarios.router, prefix="/api/v1", tags=["Scenarios"])
 app.include_router(debt_analysis.router, prefix="/api/v1", tags=["Debt Analysis"])
 app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])

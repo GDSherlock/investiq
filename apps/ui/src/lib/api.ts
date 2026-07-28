@@ -1,4 +1,7 @@
 import type {
+  CanonicalReportCreateRequest,
+  CanonicalReportHistoryResponse,
+  CanonicalReportResponse,
   CalculationInputsResponse,
   CalculationReadinessResponse,
   CalculationRequest,
@@ -312,6 +315,53 @@ export async function getMonteCarloRunHistory(
   return parseJsonResponse<MonteCarloRunHistoryResponse>(
     await fetch(
       `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/monte-carlo-runs`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
+export async function createCanonicalReport(
+  modelVersionId: string,
+  request: CanonicalReportCreateRequest,
+): Promise<CanonicalReportResponse> {
+  return parseJsonResponse<CanonicalReportResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/reports`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify(request),
+      },
+    ),
+  );
+}
+
+export async function getCanonicalReport(
+  reportId: string,
+): Promise<CanonicalReportResponse> {
+  return parseJsonResponse<CanonicalReportResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/report-runs/${encodeURIComponent(reportId)}`,
+      {
+        cache: 'no-store',
+        headers: { ...getAuthHeaders() },
+      },
+    ),
+  );
+}
+
+export async function getCanonicalReportHistory(
+  modelVersionId: string,
+): Promise<CanonicalReportHistoryResponse> {
+  return parseJsonResponse<CanonicalReportHistoryResponse>(
+    await fetch(
+      `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}/reports`,
       {
         cache: 'no-store',
         headers: { ...getAuthHeaders() },

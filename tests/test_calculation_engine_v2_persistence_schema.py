@@ -345,7 +345,7 @@ def test_alembic_upgrades_downgrades_and_reupgrades_sqlite(tmp_path: Path) -> No
     script = ScriptDirectory.from_config(config)
     engine = create_engine(f"sqlite:///{database_path}")
     try:
-        assert script.get_current_head() == "20260728_0008"
+        assert script.get_current_head() == "20260728_0009"
         assert PHASE2_TABLES <= set(inspect(engine).get_table_names())
         assert "canonical_outputs" in inspect(engine).get_table_names()
         assert (

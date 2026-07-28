@@ -622,6 +622,72 @@ class MonteCarloRunHistoryResponse(_CalculationDTO):
     runs: list[MonteCarloRunResponse] = Field(default_factory=list)
 
 
+class CanonicalReportPersona(_CalculationDTO):
+    id: StrictStr = Field(min_length=1, max_length=32)
+    name: StrictStr = Field(min_length=1, max_length=100)
+    tone: StrictStr = Field(min_length=1, max_length=300)
+    emphasis: list[StrictStr] = Field(default_factory=list, max_length=12)
+
+
+class CanonicalReportCreateRequest(_CalculationDTO):
+    graph_version_id: UUIDString
+    calculation_run_id: UUIDString
+    sensitivity_analysis_id: UUIDString | None = None
+    monte_carlo_run_id: UUIDString | None = None
+    template_version: Literal["canonical-ic-paper-v1"] = (
+        "canonical-ic-paper-v1"
+    )
+    persona: CanonicalReportPersona
+    idempotency_key: StrictStr = Field(min_length=1, max_length=128)
+
+
+class CanonicalReportSection(_CalculationDTO):
+    ordinal: int = Field(ge=1, le=13)
+    key: str
+    title: str
+    availability_status: Literal["available", "partial", "unavailable"]
+    body: str
+    source_ids: list[UUIDString] = Field(default_factory=list)
+
+
+class CanonicalReportArtifact(_CalculationDTO):
+    title: str
+    template_id: str
+    template_version: str
+    persona: dict[str, Any]
+    final_recommendation: Literal["Pending IC review"]
+    evidence_hash: StrictStr
+    sections: list[CanonicalReportSection] = Field(
+        min_length=13,
+        max_length=13,
+    )
+
+
+class CanonicalReportResponse(_CalculationDTO):
+    report_id: UUIDString
+    model_version_id: UUIDString
+    graph_version_id: UUIDString
+    calculation_run_id: UUIDString
+    sensitivity_analysis_id: UUIDString | None = None
+    monte_carlo_run_id: UUIDString | None = None
+    template_id: str
+    template_version: str
+    persona: CanonicalReportPersona
+    evidence_hash: StrictStr
+    status: Literal["queued", "running", "completed", "failed"]
+    runtime_ms: int | None = None
+    artifact: CanonicalReportArtifact | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+class CanonicalReportHistoryResponse(_CalculationDTO):
+    model_version_id: UUIDString
+    reports: list[CanonicalReportResponse] = Field(default_factory=list)
+
+
 class CalculationSensitivityOverrideRequest(_CalculationDTO):
     target: CalculationOverrideTarget
     value: CalculationNumberValue

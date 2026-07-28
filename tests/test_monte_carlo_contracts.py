@@ -81,7 +81,7 @@ def test_monte_carlo_migration_creates_queue_configuration_and_artifact(
     script = ScriptDirectory.from_config(config)
     engine = create_engine(f"sqlite:///{database_path}")
     try:
-        assert script.get_current_head() == "20260728_0008"
+        assert script.get_current_head() == "20260728_0009"
         assert {
             "monte_carlo_runs",
             "monte_carlo_input_configurations",

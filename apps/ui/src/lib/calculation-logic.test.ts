@@ -997,6 +997,40 @@ test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => 
   assert.doesNotMatch(source, /\b(?:10%|8\.5%|1\.25x|65:35)\b/);
 });
 
+test('reports page uses frozen canonical evidence and fixed IC sections', () => {
+  const source = readFileSync('src/app/reports/page.tsx', 'utf8');
+
+  for (const required of [
+    'useActiveAnalysis',
+    'createCanonicalReport',
+    'getCanonicalReport',
+    'getCanonicalReportHistory',
+    'Investment Committee Paper',
+    'Pending IC review',
+    'Executive recommendation',
+    'Approval conditions',
+    'source_ids',
+    'queued',
+    'running',
+    'completed',
+    'failed',
+  ]) {
+    assert.ok(source.includes(required), `expected ${required}`);
+  }
+  for (const forbidden of [
+    'getModel',
+    'generatePersonaReport',
+    'investiq_model_id',
+    'model_snapshot_id',
+    'parsed_json',
+    'dangerouslySetInnerHTML',
+    'Approved for IC Submission',
+  ]) {
+    assert.equal(source.includes(forbidden), false, `forbidden ${forbidden}`);
+  }
+  assert.doesNotMatch(source, /scenarios\//);
+});
+
 test('existing run reload uses GET without recalculating', async () => {
   const originalFetch = globalThis.fetch;
   const calls: { url: string; method: string }[] = [];

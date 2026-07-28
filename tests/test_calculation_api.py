@@ -16,6 +16,7 @@ from apps.api.app.calculation_rules.phase2_models import (
     CalculationGraphVersionRecord,
     CalculationRunRecord,
     CalculationRunValueRecord,
+    CalculationSensitivityAnalysisRecord,
 )
 from apps.api.app.database import Base, get_db
 from apps.api.app.main import app
@@ -37,7 +38,16 @@ from apps.api.app.model_extraction_read_service import (
     ModelExtractionReadService,
 )
 from apps.api.app.monte_carlo_service import MonteCarloService
-from apps.api.app.analysis_models import MonteCarloRunRecord
+from apps.api.app.analysis_models import (
+    CanonicalReportRunRecord,
+    MonteCarloInputConfigurationRecord,
+    MonteCarloResultArtifactRecord,
+    MonteCarloRunRecord,
+)
+from apps.api.app.analysis_presentation_service import (
+    AnalysisPresentationService,
+)
+from apps.api.app.canonical_report_service import CanonicalReportService
 from apps.api.app.workbook_storage import DatabaseWorkbookStorage
 from apps.api.app.schemas import (
     CalculationBlankValue,
@@ -281,14 +291,26 @@ def test_all_calculation_endpoints_and_openapi_contract_are_registered() -> None
             "/api/v1/monte-carlo-runs/{monte_carlo_run_id}/cancel",
             "post",
         ),
+        ("/api/v1/models/{model_version_id}/reports", "post"),
+        ("/api/v1/models/{model_version_id}/reports", "get"),
+        ("/api/v1/report-runs/{report_id}", "get"),
     }
 
     for path, method in expected:
         operation = schema["paths"][path][method]
-        assert operation["tags"] == ["Calculation"]
+        expected_tag = (
+            "Canonical Reports" if "report" in path else "Calculation"
+        )
+        assert operation["tags"] == [expected_tag]
         expected_status = (
             "202"
-            if path.endswith("/monte-carlo-runs") and method == "post"
+            if (
+                method == "post"
+                and (
+                    path.endswith("/monte-carlo-runs")
+                    or path.endswith("/reports")
+                )
+            )
             else "200"
         )
         assert expected_status in operation["responses"]
@@ -549,6 +571,285 @@ def test_queued_monte_carlo_run_can_be_cancelled_without_worker(
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
     assert cancelled.json()["result_artifact"] is None
+
+
+def test_canonical_report_queue_freezes_evidence_and_reloads_artifact(
+    api_context,
+) -> None:
+    model_id = api_context["model_version_id"]
+    client = api_context["client"]
+    prepared = client.post(
+        f"/api/v1/models/{model_id}/calculation/prepare",
+        json={},
+    ).json()
+    baseline = client.post(
+        f"/api/v1/models/{model_id}/calculations",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    ).json()
+    payload = {
+        "graph_version_id": prepared["graph_version_id"],
+        "calculation_run_id": baseline["calculation_run_id"],
+        "sensitivity_analysis_id": None,
+        "monte_carlo_run_id": None,
+        "template_version": "canonical-ic-paper-v1",
+        "persona": {
+            "id": "IM",
+            "name": "Investment Manager",
+            "tone": "Formal, IC-ready",
+            "emphasis": ["returns", "approval conditions"],
+        },
+        "idempotency_key": "canonical-report-api-1",
+    }
+    created = client.post(
+        f"/api/v1/models/{model_id}/reports",
+        json=payload,
+    )
+    duplicate = client.post(
+        f"/api/v1/models/{model_id}/reports",
+        json=payload,
+    )
+
+    assert created.status_code == duplicate.status_code == 202
+    assert created.json()["report_id"] == duplicate.json()["report_id"]
+    assert created.json()["status"] == "queued"
+    assert created.json()["artifact"] is None
+
+    report_id = created.json()["report_id"]
+    with api_context["session_factory"]() as session:
+        persisted = session.get(CanonicalReportRunRecord, report_id)
+        assert persisted.frozen_evidence_json["calculation"][
+            "calculation_run_id"
+        ] == baseline["calculation_run_id"]
+        assert persisted.frozen_evidence_json["sensitivity"] is None
+        assert persisted.frozen_evidence_json["monte_carlo"] is None
+        assert persisted.evidence_hash == created.json()["evidence_hash"]
+
+        calculation_service = CalculationIntegrationService(
+            session,
+            ModelExtractionReadService(
+                session,
+                DatabaseWorkbookStorage(session),
+            ),
+        )
+        service = CanonicalReportService(
+            session,
+            calculation_service,
+            AnalysisPresentationService(session, calculation_service),
+            MonteCarloService(session, calculation_service),
+        )
+        assert service.claim_next("report-worker") == report_id
+        service.process_claimed(report_id)
+
+    completed = client.get(f"/api/v1/report-runs/{report_id}")
+    assert completed.status_code == 200
+    body = completed.json()
+    assert body["status"] == "completed"
+    assert body["artifact"]["final_recommendation"] == "Pending IC review"
+    assert len(body["artifact"]["sections"]) == 13
+    assert body["artifact"]["sections"][8]["availability_status"] == (
+        "unavailable"
+    )
+    assert body["artifact"]["sections"][9]["availability_status"] == (
+        "unavailable"
+    )
+    assert body["artifact"]["sections"][11]["availability_status"] == (
+        "unavailable"
+    )
+
+    history = client.get(f"/api/v1/models/{model_id}/reports")
+    assert history.status_code == 200
+    assert [item["report_id"] for item in history.json()["reports"]] == [
+        report_id
+    ]
+
+    conflict = client.post(
+        f"/api/v1/models/{model_id}/reports",
+        json={
+            **payload,
+            "persona": {**payload["persona"], "tone": "Different"},
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+
+def test_canonical_report_auto_freezes_matching_sensitivity_and_monte_carlo(
+    api_context,
+) -> None:
+    model_id = api_context["model_version_id"]
+    client = api_context["client"]
+    prepared = client.post(
+        f"/api/v1/models/{model_id}/calculation/prepare",
+        json={},
+    ).json()
+    baseline = client.post(
+        f"/api/v1/models/{model_id}/calculations",
+        json={
+            "graph_version_id": prepared["graph_version_id"],
+            "overrides": [],
+            "idempotency_key": None,
+        },
+    ).json()
+    sensitivity_id = str(uuid.uuid4())
+    monte_carlo_id = str(uuid.uuid4())
+    with api_context["session_factory"]() as session:
+        session.add(
+            CalculationSensitivityAnalysisRecord(
+                id=sensitivity_id,
+                model_version_id=model_id,
+                graph_version_id=prepared["graph_version_id"],
+                comparison_baseline_run_id=baseline[
+                    "calculation_run_id"
+                ],
+                current_run_id=baseline["calculation_run_id"],
+                compiler_version="test",
+                engine_version="test",
+                function_registry_version="test",
+                semantics_profile="test",
+                request_hash="a" * 64,
+                request_json={},
+                response_json={
+                    "case_count": 2,
+                    "selected_output": {"label": "Project IRR"},
+                    "drivers": [{"target": {"kind": "parameter"}}],
+                },
+                status="completed",
+                case_count=2,
+            )
+        )
+        session.add(
+            MonteCarloRunRecord(
+                id=monte_carlo_id,
+                model_version_id=model_id,
+                graph_version_id=prepared["graph_version_id"],
+                baseline_calculation_run_id=baseline[
+                    "calculation_run_id"
+                ],
+                current_calculation_run_id=baseline[
+                    "calculation_run_id"
+                ],
+                request_hash="b" * 64,
+                idempotency_key="report-source-monte-carlo",
+                trial_count=100,
+                random_seed=1,
+                method_version="test",
+                engine_version="test",
+                status="completed",
+            )
+        )
+        session.flush()
+        session.add(
+            MonteCarloInputConfigurationRecord(
+                id=str(uuid.uuid4()),
+                monte_carlo_run_id=monte_carlo_id,
+                inputs_json=[],
+                correlation_matrix_json=[],
+                selected_output_roles_json=["project_irr"],
+            )
+        )
+        session.add(
+            MonteCarloResultArtifactRecord(
+                id=str(uuid.uuid4()),
+                monte_carlo_run_id=monte_carlo_id,
+                calibration_json={},
+                result_json={
+                    "method_version": "test",
+                    "trial_count": 100,
+                    "random_seed": 1,
+                    "evidence_hash": "c" * 64,
+                    "metrics": [
+                        {
+                            "role": "project_irr",
+                            "label": "Project IRR",
+                            "availability_status": "available",
+                            "unavailable_reason": None,
+                            "percentiles": {
+                                "p10": 0.08,
+                                "p50": 0.12,
+                                "p90": 0.16,
+                            },
+                            "probabilities": {
+                                "above_hurdle": 0.75,
+                            },
+                            "distribution": {"bins": []},
+                            "rankings": [],
+                        }
+                    ],
+                },
+                evidence_hash="c" * 64,
+            )
+        )
+        session.commit()
+
+    payload = {
+        "graph_version_id": prepared["graph_version_id"],
+        "calculation_run_id": baseline["calculation_run_id"],
+        "sensitivity_analysis_id": None,
+        "monte_carlo_run_id": None,
+        "template_version": "canonical-ic-paper-v1",
+        "persona": {
+            "id": "IM",
+            "name": "Investment Manager",
+            "tone": "Formal",
+            "emphasis": [],
+        },
+        "idempotency_key": "canonical-report-with-analysis",
+    }
+    created = client.post(
+        f"/api/v1/models/{model_id}/reports",
+        json=payload,
+    )
+
+    assert created.status_code == 202
+    assert created.json()["sensitivity_analysis_id"] == sensitivity_id
+    assert created.json()["monte_carlo_run_id"] == monte_carlo_id
+    report_id = created.json()["report_id"]
+    with api_context["session_factory"]() as session:
+        persisted = session.get(CanonicalReportRunRecord, report_id)
+        assert persisted.frozen_evidence_json["sensitivity"][
+            "analysis_id"
+        ] == sensitivity_id
+        assert persisted.frozen_evidence_json["monte_carlo"][
+            "monte_carlo_run_id"
+        ] == monte_carlo_id
+        calculation_service = CalculationIntegrationService(
+            session,
+            ModelExtractionReadService(
+                session,
+                DatabaseWorkbookStorage(session),
+            ),
+        )
+        service = CanonicalReportService(
+            session,
+            calculation_service,
+            AnalysisPresentationService(session, calculation_service),
+            MonteCarloService(session, calculation_service),
+        )
+        service.claim_next("report-worker")
+        service.process_claimed(report_id)
+
+    artifact = client.get(f"/api/v1/report-runs/{report_id}").json()[
+        "artifact"
+    ]
+    assert artifact["sections"][8]["availability_status"] == "available"
+    assert artifact["sections"][9]["availability_status"] == "available"
+
+    cross_graph = client.post(
+        f"/api/v1/models/{model_id}/reports",
+        json={
+            **payload,
+            "graph_version_id": str(uuid.uuid4()),
+            "idempotency_key": "canonical-report-cross-graph",
+        },
+    )
+    assert cross_graph.status_code == 409
+    assert cross_graph.json()["detail"]["code"] == (
+        "REPORT_CALCULATION_IDENTITY_MISMATCH"
+    )
 
 
 def test_semantic_binding_preview_and_review_require_exact_canonical_entities(

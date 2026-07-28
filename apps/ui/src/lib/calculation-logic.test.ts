@@ -890,6 +890,15 @@ test('navigation consumes the shared canonical analysis context', () => {
   assert.doesNotMatch(navBarSource, /parsed_json/);
 });
 
+test('navigation exposes Upload before Overview and routes it to the unified upload page', () => {
+  const navBarSource = readFileSync('src/app/NavBar.tsx', 'utf8');
+  const uploadLink = "{ href: '/', label: 'Upload' }";
+  const overviewLink = "{ href: '/dashboard', label: 'Overview' }";
+
+  assert.ok(navBarSource.includes(uploadLink));
+  assert.ok(navBarSource.indexOf(uploadLink) < navBarSource.indexOf(overviewLink));
+});
+
 test('overview and cash flow pages use persisted canonical read models only', () => {
   const overviewSource = readFileSync(
     'src/app/dashboard/page.tsx',

@@ -9,6 +9,7 @@ import { useActiveAnalysis } from './ActiveAnalysisContext';
 
 /* ── Nav links with optional badges ── */
 const NAV_LINKS: { href: string; label: string; badge?: string; badgeColor?: string }[] = [
+  { href: '/', label: 'Upload' },
   { href: '/dashboard', label: 'Overview' },
   { href: '/sensitivity', label: 'Sensitivity' },
   { href: '/cashflows', label: 'Cash Flow' },

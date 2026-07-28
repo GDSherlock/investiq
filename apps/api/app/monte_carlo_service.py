@@ -12,6 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .analysis_output_resolver import (
+    resolve_analysis_output,
+    resolve_analysis_parameter,
+)
 from .analysis_models import (
     MonteCarloInputConfigurationRecord,
     MonteCarloResultArtifactRecord,
@@ -26,10 +30,7 @@ from .calculation_rules.phase2_types import (
     PHASE2_ENGINE_VERSION,
     canonical_hash,
 )
-from .model_extraction_models import (
-    ModelParameter,
-    ModelSemanticBinding,
-)
+from .model_extraction_models import ModelParameter
 from .monte_carlo_engine import (
     MONTE_CARLO_METHOD_VERSION,
     MonteCarloCancelled,
@@ -104,38 +105,62 @@ class MonteCarloService:
                 status_code=409,
                 resource_id=model_version_id,
             )
+        parameters = {
+            parameter.id: parameter
+            for parameter in self._session.scalars(
+                select(ModelParameter)
+                .where(ModelParameter.model_version_id == model_version_id)
+                .order_by(ModelParameter.id)
+            )
+        }
         inputs: list[MonteCarloEligibleInputItem] = []
-        for parameter in self._session.scalars(
-            select(ModelParameter)
-            .where(
-                ModelParameter.model_version_id == model_version_id,
-                ModelParameter.stochastic_eligible.is_(True),
-            )
-            .order_by(ModelParameter.id)
-        ):
-            candidate = self._calculation_service.get_input(
+        cursor: str | None = None
+        while True:
+            page = self._calculation_service.list_inputs(
                 model_version_id,
-                "parameter",
-                parameter.id,
+                target_kind="parameter",
+                editable_only=True,
+                limit=500,
+                cursor=cursor,
             )
-            if (
-                not candidate.editable
-                or candidate.current_value.value_type != "number"
-            ):
-                continue
-            inputs.append(
-                MonteCarloEligibleInputItem(
-                    parameter_id=parameter.id,
-                    business_role=parameter.business_role,
-                    label=candidate.label,
-                    unit=candidate.unit,
-                    current_value=candidate.current_value.value,
+            if page.graph_version_id != readiness.graph_version_id:
+                raise CalculationIntegrationError(
+                    "GRAPH_VERSION_MISMATCH",
+                    "Monte Carlo inputs changed during catalog loading.",
+                    status_code=409,
+                    resource_id=model_version_id,
                 )
-            )
+            for candidate in page.inputs:
+                if candidate.current_value.value_type != "number":
+                    continue
+                parameter = parameters.get(candidate.target_id)
+                inputs.append(
+                    MonteCarloEligibleInputItem(
+                        parameter_id=candidate.target_id,
+                        business_role=(
+                            parameter.business_role
+                            if parameter is not None
+                            else None
+                        ),
+                        label=candidate.label,
+                        unit=candidate.unit,
+                        current_value=candidate.current_value.value,
+                    )
+                )
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        definitions = self._calculation_service.list_outputs(
+            model_version_id
+        )
         supported_outputs = [
             role
             for role in sorted(_OUTPUT_ROLES)
-            if self._reviewed_output_binding(model_version_id, role)
+            if resolve_analysis_output(
+                definitions.outputs,
+                role,
+                entity_kind="scalar",
+            )
             is not None
         ]
         return MonteCarloInputCatalogResponse(
@@ -197,8 +222,8 @@ class MonteCarloService:
         if missing_inputs:
             raise CalculationIntegrationError(
                 "INVALID_MONTE_CARLO_INPUT",
-                "Every Monte Carlo input must be editable and "
-                "stochastic-eligible.",
+                "Every Monte Carlo input must be an editable numeric "
+                "canonical parameter.",
                 status_code=422,
                 resource_id=missing_inputs[0],
             )
@@ -210,8 +235,8 @@ class MonteCarloService:
         if unsupported_outputs:
             raise CalculationIntegrationError(
                 "INVALID_MONTE_CARLO_OUTPUT",
-                "Every Monte Carlo output requires an explicit reviewed "
-                "canonical binding.",
+                "Every Monte Carlo output must resolve unambiguously from "
+                "the canonical calculation outputs.",
                 status_code=422,
                 resource_id=model_version_id,
             )
@@ -554,16 +579,9 @@ class MonteCarloService:
         current_projection = self._calculation_service.get_run_outputs(
             run.current_calculation_run_id
         )
-        output_ids = {
-            role: self._reviewed_output_binding(
-                run.model_version_id,
-                role,
-            )
-            for role in configuration.selected_output_roles_json
-        }
         current_outputs = self._numeric_outputs(
             current_projection,
-            output_ids,
+            configuration.selected_output_roles_json,
         )
         centers = {
             str(item["parameter_id"]): Decimal(
@@ -595,7 +613,10 @@ class MonteCarloService:
                     calculated.calculation_run_id
                 )
                 endpoint_outputs[parameter_id][endpoint] = (
-                    self._numeric_outputs(projection, output_ids)
+                    self._numeric_outputs(
+                        projection,
+                        configuration.selected_output_roles_json,
+                    )
                 )
 
         surrogates = []
@@ -687,7 +708,7 @@ class MonteCarloService:
         )
         actual_holdout = self._numeric_outputs(
             holdout_projection,
-            output_ids,
+            configuration.selected_output_roles_json,
         )
         for surrogate in surrogates:
             if surrogate["availability_status"] != "available":
@@ -769,15 +790,18 @@ class MonteCarloService:
     @staticmethod
     def _numeric_outputs(
         projection: Any,
-        output_ids: Mapping[str, str | None],
+        roles: Sequence[str],
     ) -> dict[str, Decimal | None]:
-        by_id = {item.output_id: item for item in projection.outputs}
         values: dict[str, Decimal | None] = {}
-        for role, output_id in output_ids.items():
-            output = by_id.get(output_id) if output_id else None
+        for role in roles:
+            output = resolve_analysis_output(
+                projection.outputs,
+                role,
+                entity_kind="scalar",
+            )
             values[role] = (
                 _number_from_projected(output)
-                if output is not None and output.entity_kind == "scalar"
+                if output is not None
                 else None
             )
         return values
@@ -800,47 +824,32 @@ class MonteCarloService:
             if item.get("target_kind") == "parameter"
         }
         result: dict[str, float] = {}
+        parameters = list(
+            self._session.scalars(
+                select(ModelParameter).where(
+                    ModelParameter.model_version_id == model_version_id
+                )
+            )
+        )
         for role in roles:
             benchmark_role = benchmark_roles.get(role)
             if benchmark_role is None:
                 continue
-            binding = self._session.scalar(
-                select(ModelSemanticBinding).where(
-                    ModelSemanticBinding.model_version_id
-                    == model_version_id,
-                    ModelSemanticBinding.semantic_role
-                    == benchmark_role,
-                    ModelSemanticBinding.binding_source == "reviewed",
-                )
+            parameter = resolve_analysis_parameter(
+                parameters,
+                benchmark_role,
             )
-            if binding is None or binding.model_parameter is None:
+            if parameter is None:
                 continue
             value = overrides.get(
-                binding.model_parameter_id,
-                binding.model_parameter.validated_value_json,
+                parameter.id,
+                parameter.validated_value_json,
             )
             try:
                 result[role] = float(value)
             except (TypeError, ValueError):
                 continue
         return result
-
-    def _reviewed_output_binding(
-        self,
-        model_version_id: str,
-        role: str,
-    ) -> str | None:
-        binding = self._session.scalar(
-            select(ModelSemanticBinding).where(
-                ModelSemanticBinding.model_version_id
-                == model_version_id,
-                ModelSemanticBinding.semantic_role == role,
-                ModelSemanticBinding.binding_source == "reviewed",
-            )
-        )
-        if binding is None:
-            return None
-        return binding.canonical_output_id
 
     def _require_run(
         self,

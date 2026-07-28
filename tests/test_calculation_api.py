@@ -28,7 +28,6 @@ from apps.api.app.model_extraction_models import (
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
-    ModelSemanticBinding,
     ModelVersion,
 )
 from apps.api.app.calculation_integration_service import (
@@ -353,23 +352,12 @@ def test_monte_carlo_queue_is_idempotent_and_worker_persists_bounded_artifact(
     parameter_id = api_context["parameter_id"]
     client = api_context["client"]
     with api_context["session_factory"]() as session:
-        parameter = session.get(ModelParameter, parameter_id)
-        parameter.stochastic_eligible = True
         output = session.scalar(
             select(CanonicalOutput).where(
                 CanonicalOutput.model_version_id == model_id
             )
         )
         output.business_role = "project_irr"
-        session.add(
-            ModelSemanticBinding(
-                id=str(uuid.uuid4()),
-                model_version_id=model_id,
-                semantic_role="project_irr",
-                canonical_output_id=output.id,
-                binding_source="reviewed",
-            )
-        )
         session.commit()
 
     prepared = client.post(
@@ -505,23 +493,12 @@ def test_queued_monte_carlo_run_can_be_cancelled_without_worker(
     parameter_id = api_context["parameter_id"]
     client = api_context["client"]
     with api_context["session_factory"]() as session:
-        parameter = session.get(ModelParameter, parameter_id)
-        parameter.stochastic_eligible = True
         output = session.scalar(
             select(CanonicalOutput).where(
                 CanonicalOutput.model_version_id == model_id
             )
         )
         output.business_role = "project_irr"
-        session.add(
-            ModelSemanticBinding(
-                id=str(uuid.uuid4()),
-                model_version_id=model_id,
-                semantic_role="project_irr",
-                canonical_output_id=output.id,
-                binding_source="reviewed",
-            )
-        )
         session.commit()
     prepared = client.post(
         f"/api/v1/models/{model_id}/calculation/prepare",
@@ -578,6 +555,14 @@ def test_canonical_report_queue_freezes_evidence_and_reloads_artifact(
 ) -> None:
     model_id = api_context["model_version_id"]
     client = api_context["client"]
+    with api_context["session_factory"]() as session:
+        output = session.scalar(
+            select(CanonicalOutput).where(
+                CanonicalOutput.model_version_id == model_id
+            )
+        )
+        output.business_role = "project_irr"
+        session.commit()
     prepared = client.post(
         f"/api/v1/models/{model_id}/calculation/prepare",
         json={},
@@ -627,6 +612,12 @@ def test_canonical_report_queue_freezes_evidence_and_reloads_artifact(
         assert persisted.frozen_evidence_json["sensitivity"] is None
         assert persisted.frozen_evidence_json["monte_carlo"] is None
         assert persisted.evidence_hash == created.json()["evidence_hash"]
+        assert persisted.frozen_evidence_json["calculation"]["overview"][
+            "kpis"
+        ][0]["availability_status"] == "available"
+        assert persisted.frozen_evidence_json["assumptions"][0][
+            "parameter_id"
+        ] == api_context["parameter_id"]
 
         calculation_service = CalculationIntegrationService(
             session,

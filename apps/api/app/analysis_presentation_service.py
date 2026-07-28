@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .analysis_output_resolver import (
-    normalized_analysis_label,
     resolve_analysis_output,
+    resolve_analysis_parameter,
 )
 from .calculation_integration_service import (
     CalculationIntegrationError,
@@ -85,20 +85,6 @@ _CASH_FLOW_CHARTS = (
         ("interest_expense", "principal_repayment"),
     ),
 )
-
-_PARAMETER_LABEL_ALIASES = {
-    "discount_rate": frozenset({"discount rate", "wacc"}),
-    "project_irr_hurdle": frozenset(
-        {"project irr hurdle", "project irr hurdle rate"}
-    ),
-    "equity_irr_hurdle": frozenset(
-        {"equity irr hurdle", "equity irr hurdle rate"}
-    ),
-    "dscr_covenant": frozenset(
-        {"dscr covenant", "minimum dscr covenant"}
-    ),
-}
-
 
 class AnalysisPresentationService:
     def __init__(
@@ -407,23 +393,7 @@ class AnalysisPresentationService:
                 )
             )
         )
-        direct = [
-            parameter
-            for parameter in parameters
-            if parameter.business_role == role
-        ]
-        if len(direct) == 1:
-            return direct[0]
-        if direct:
-            return None
-        aliases = _PARAMETER_LABEL_ALIASES.get(role, frozenset())
-        legacy = [
-            parameter
-            for parameter in parameters
-            if parameter.business_role is None
-            and normalized_analysis_label(parameter.label) in aliases
-        ]
-        return legacy[0] if len(legacy) == 1 else None
+        return resolve_analysis_parameter(parameters, role)
 
     def _current_parameter_value(
         self,

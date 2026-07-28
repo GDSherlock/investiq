@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-
-from .schemas import CalculationRunOutputItem
+from typing import Protocol, TypeVar
 
 
 _TRAILING_UNIT = re.compile(
@@ -42,6 +41,34 @@ _LABEL_ALIASES: dict[str, frozenset[str]] = {
     "equity_ratio": frozenset({"equity ratio", "equity percentage"}),
 }
 
+_PARAMETER_LABEL_ALIASES: dict[str, frozenset[str]] = {
+    "discount_rate": frozenset({"discount rate", "wacc"}),
+    "project_irr_hurdle": frozenset(
+        {"project irr hurdle", "project irr hurdle rate"}
+    ),
+    "equity_irr_hurdle": frozenset(
+        {"equity irr hurdle", "equity irr hurdle rate"}
+    ),
+    "dscr_covenant": frozenset(
+        {"dscr covenant", "minimum dscr covenant"}
+    ),
+}
+
+
+class _OutputLike(Protocol):
+    entity_kind: str
+    business_role: str
+    label: str
+
+
+class _ParameterLike(Protocol):
+    business_role: str | None
+    label: str
+
+
+_OutputT = TypeVar("_OutputT", bound=_OutputLike)
+_ParameterT = TypeVar("_ParameterT", bound=_ParameterLike)
+
 
 def normalized_analysis_label(label: str) -> str:
     """Normalize presentation-only differences without fuzzy matching."""
@@ -51,11 +78,11 @@ def normalized_analysis_label(label: str) -> str:
 
 
 def resolve_analysis_output(
-    outputs: Iterable[CalculationRunOutputItem],
+    outputs: Iterable[_OutputT],
     semantic_role: str,
     *,
     entity_kind: str | None = None,
-) -> CalculationRunOutputItem | None:
+) -> _OutputT | None:
     """Resolve one unambiguous output by role, then strict legacy label."""
 
     eligible = [
@@ -98,3 +125,29 @@ def resolve_analysis_output(
         and normalized_analysis_label(output.label) in aliases
     ]
     return labelled_legacy[0] if len(labelled_legacy) == 1 else None
+
+
+def resolve_analysis_parameter(
+    parameters: Iterable[_ParameterT],
+    semantic_role: str,
+) -> _ParameterT | None:
+    """Resolve one benchmark parameter without requiring a binding row."""
+
+    candidates = list(parameters)
+    direct = [
+        parameter
+        for parameter in candidates
+        if parameter.business_role == semantic_role
+    ]
+    if len(direct) == 1:
+        return direct[0]
+    if direct:
+        return None
+    aliases = _PARAMETER_LABEL_ALIASES.get(semantic_role, frozenset())
+    legacy = [
+        parameter
+        for parameter in candidates
+        if parameter.business_role is None
+        and normalized_analysis_label(parameter.label) in aliases
+    ]
+    return legacy[0] if len(legacy) == 1 else None

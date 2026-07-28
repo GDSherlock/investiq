@@ -21,6 +21,7 @@ from .calculation_integration_service import (
     CalculationIntegrationService,
 )
 from .calculation_rules.phase2_models import (
+    CalculationRunRecord,
     CalculationSensitivityAnalysisRecord,
 )
 from .calculation_rules.phase2_types import canonical_hash
@@ -332,24 +333,11 @@ class CanonicalReportService:
             request.calculation_run_id,
             request.monte_carlo_run_id,
         )
-        assumptions = [
-            {
-                "parameter_id": parameter.id,
-                "business_role": parameter.business_role,
-                "label": parameter.label,
-                "value": parameter.validated_value_json,
-                "unit": parameter.unit,
-                "validation_status": parameter.validation_status,
-            }
-            for parameter in self._session.scalars(
-                select(ModelParameter)
-                .where(
-                    ModelParameter.model_version_id == model_version_id,
-                    ModelParameter.business_role.is_not(None),
-                )
-                .order_by(ModelParameter.business_role, ModelParameter.id)
-            )
-        ]
+        assumptions = self._assumptions_snapshot(
+            model_version_id,
+            request.graph_version_id,
+            request.calculation_run_id,
+        )
         sensitivity_snapshot = (
             {
                 "analysis_id": sensitivity.id,
@@ -394,6 +382,89 @@ class CanonicalReportService:
             sensitivity.id if sensitivity is not None else None,
             monte_carlo.id if monte_carlo is not None else None,
         )
+
+    def _assumptions_snapshot(
+        self,
+        model_version_id: str,
+        graph_version_id: str,
+        calculation_run_id: str,
+    ) -> list[dict[str, object]]:
+        parameters = {
+            parameter.id: parameter
+            for parameter in self._session.scalars(
+                select(ModelParameter)
+                .where(ModelParameter.model_version_id == model_version_id)
+                .order_by(ModelParameter.id)
+            )
+        }
+        persisted_run = self._session.get(
+            CalculationRunRecord,
+            calculation_run_id,
+        )
+        overrides: dict[str, object] = {}
+        for override in (
+            persisted_run.overrides_json
+            if persisted_run is not None
+            else []
+        ) or []:
+            if override.get("target_kind") != "parameter":
+                continue
+            value: object = override.get("value")
+            typed = override.get("typed_value")
+            if isinstance(typed, dict) and typed.get("kind") == "number":
+                value = typed.get("number")
+            overrides[str(override.get("target_id"))] = value
+
+        assumptions: list[dict[str, object]] = []
+        cursor: str | None = None
+        while True:
+            page = self._calculation_service.list_inputs(
+                model_version_id,
+                target_kind="parameter",
+                editable_only=True,
+                limit=500,
+                cursor=cursor,
+            )
+            if page.graph_version_id != graph_version_id:
+                raise CalculationIntegrationError(
+                    "REPORT_CALCULATION_IDENTITY_MISMATCH",
+                    "Report assumptions changed during evidence freezing.",
+                    status_code=409,
+                    resource_id=calculation_run_id,
+                )
+            for candidate in page.inputs:
+                if candidate.current_value.value_type != "number":
+                    continue
+                parameter = parameters.get(candidate.target_id)
+                assumptions.append(
+                    {
+                        "parameter_id": candidate.target_id,
+                        "business_role": (
+                            parameter.business_role
+                            if parameter is not None
+                            else None
+                        ),
+                        "label": candidate.label,
+                        "value": overrides.get(
+                            candidate.target_id,
+                            candidate.current_value.value,
+                        ),
+                        "unit": candidate.unit,
+                        "validation_status": (
+                            parameter.validation_status
+                            if parameter is not None
+                            else None
+                        ),
+                        "source_type": (
+                            "override"
+                            if candidate.target_id in overrides
+                            else "calculated_input"
+                        ),
+                    }
+                )
+            if page.next_cursor is None:
+                return assumptions
+            cursor = page.next_cursor
 
     def _select_sensitivity(
         self,

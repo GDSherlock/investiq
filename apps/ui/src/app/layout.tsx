@@ -5,6 +5,7 @@ import { PersonaProvider } from './PersonaContext';
 import { AuthProvider } from './AuthContext';
 import { ThemeProvider } from './ThemeContext';
 import { ScenarioProvider } from './ScenarioContext';
+import { ActiveAnalysisProvider } from './ActiveAnalysisContext';
 import AuthGuard from './AuthGuard';
 
 export const metadata: Metadata = {
@@ -23,12 +24,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <PersonaProvider>
             <ScenarioProvider>
               <ThemeProvider>
-                <AuthGuard>
-                  <div className="min-h-screen overflow-x-hidden bg-d-bg">
-                    <NavBar />
-                    <main className="max-w-[1600px] mx-auto px-4 py-6">{children}</main>
-                  </div>
-                </AuthGuard>
+                <ActiveAnalysisProvider>
+                  <AuthGuard>
+                    <div className="min-h-screen overflow-x-hidden bg-d-bg">
+                      <NavBar />
+                      <main className="max-w-[1600px] mx-auto px-4 py-6">{children}</main>
+                    </div>
+                  </AuthGuard>
+                </ActiveAnalysisProvider>
               </ThemeProvider>
             </ScenarioProvider>
           </PersonaProvider>

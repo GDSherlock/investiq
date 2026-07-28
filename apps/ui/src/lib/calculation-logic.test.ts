@@ -879,15 +879,15 @@ test('introduction Skip does not lose restore state', () => {
   );
 });
 
-test('no repeated failing requests without a usable legacy id', () => {
+test('navigation consumes the shared canonical analysis context', () => {
   const navBarSource = readFileSync('src/app/NavBar.tsx', 'utf8');
+  const layoutSource = readFileSync('src/app/layout.tsx', 'utf8');
 
-  assert.match(navBarSource, /loadLegacyModelIfAvailable/);
-  assert.doesNotMatch(
-    navBarSource,
-    /fetch\(`\/api\/v1\/models\/\$\{id\}`/,
-  );
-  assert.match(navBarSource, /isUsableLegacyModelId/);
+  assert.match(navBarSource, /useActiveAnalysis/);
+  assert.match(layoutSource, /ActiveAnalysisProvider/);
+  assert.doesNotMatch(navBarSource, /investiq_model_id/);
+  assert.doesNotMatch(navBarSource, /getModel/);
+  assert.doesNotMatch(navBarSource, /parsed_json/);
 });
 
 test('existing run reload uses GET without recalculating', async () => {

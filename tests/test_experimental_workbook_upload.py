@@ -8,7 +8,10 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import func, select
 
+from apps.api.app.calculation_rules.models import CalculationRuleExtraction
+from apps.api.app.calculation_rules.phase2_models import CalculationGraphVersionRecord
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_read_service import ModelExtractionReadService
 from apps.api.app.model_extraction_types import ModelExtractionPersistenceError
@@ -229,6 +232,44 @@ def test_success_returns_committed_workbook_and_model_version_ids(
     assert UUID(response.json()["model_version_id"])
 
 
+def test_successful_upload_prepares_rules_and_graph_before_return(
+    monkeypatch,
+    api_context,
+):
+    app, session_factory = api_context
+    monkeypatch.setattr(
+        models,
+        "run_workbook_validation",
+        lambda file_bytes, filename: _result(filename),
+        raising=False,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/v1/models/upload",
+        files={"file": ("benchmark.xlsx", persistence_workbook_bytes())},
+    )
+
+    assert response.status_code == 200
+    session = session_factory()
+    try:
+        extraction = session.scalar(select(CalculationRuleExtraction))
+        graph = session.scalar(select(CalculationGraphVersionRecord))
+        assert extraction is not None
+        assert extraction.model_version_id == response.json()["model_version_id"]
+        assert extraction.status in {"completed", "completed_with_warning"}
+        assert graph is not None
+        assert graph.workbook_version_id == response.json()["workbook_version_id"]
+        assert session.scalar(
+            select(func.count()).select_from(CalculationRuleExtraction)
+        ) == 1
+        assert session.scalar(
+            select(func.count()).select_from(CalculationGraphVersionRecord)
+        ) == 1
+    finally:
+        session.close()
+
+
 def test_submitted_false_returns_null_version_ids(monkeypatch, api_context):
     app, _session_factory = api_context
     incomplete = _result()
@@ -322,7 +363,7 @@ def test_persistence_failure_is_sanitized_and_not_returned_as_success(
 ):
     app, _session_factory = api_context
 
-    class FailingPersistenceService:
+    class FailingUploadOrchestrationService:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -331,8 +372,8 @@ def test_persistence_failure_is_sanitized_and_not_returned_as_success(
 
     monkeypatch.setattr(
         models,
-        "ModelExtractionPersistenceService",
-        FailingPersistenceService,
+        "ModelUploadOrchestrationService",
+        FailingUploadOrchestrationService,
         raising=False,
     )
     client = TestClient(app, raise_server_exceptions=False)

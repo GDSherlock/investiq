@@ -578,6 +578,24 @@ test('persisted run reload suppresses automatic recalculation', () => {
   assert.equal(persisted.overrideRunId, 'override-run');
 });
 
+test('fresh upload identity allows one automatic baseline then suppresses repeats', () => {
+  const storage = new MemoryStorage();
+  storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-version');
+  storage.setItem(CALCULATION_STORAGE_KEYS.workbookVersionId, 'workbook-version');
+  storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'graph-version');
+
+  assert.equal(
+    shouldAutoRunBaseline(readPersistedCalculationState(storage)),
+    true,
+  );
+
+  storage.setItem(CALCULATION_STORAGE_KEYS.baselineRunId, 'baseline-run');
+  assert.equal(
+    shouldAutoRunBaseline(readPersistedCalculationState(storage)),
+    false,
+  );
+});
+
 test('stale run IDs are cleared without mixing model or graph values', async () => {
   const storage = new MemoryStorage();
   storage.setItem(CALCULATION_STORAGE_KEYS.baselineRunId, 'stale-run');
@@ -944,6 +962,26 @@ test('calculation panel rejects stale async storage writers before mutation', ()
   assert.match(
     panelSource,
     /reconciled\.disposition === 'conflict'[\s\S]*setStateNotice\(reconciled\.notice\);[\s\S]*return;/,
+  );
+});
+
+test('normal upload path does not explicitly prepare and baseline is re-entry guarded', () => {
+  const pageSource = readFileSync('src/app/page.tsx', 'utf8');
+  const panelSource = readFileSync(
+    'src/components/calculation/CalculationPreparationPanel.tsx',
+    'utf8',
+  );
+
+  assert.doesNotMatch(pageSource, /prepareCalculation/);
+  assert.match(pageSource, /uploadWorkbookForCalculation\(file\)/);
+  assert.match(panelSource, /const baselineInFlightRef = useRef\(false\)/);
+  assert.match(
+    panelSource,
+    /if \(baselineInFlightRef\.current\) \{\s*return;\s*\}[\s\S]*baselineInFlightRef\.current = true/,
+  );
+  assert.match(
+    panelSource,
+    /if \(shouldAutoRunBaseline\(expectedIdentity\)\) \{\s*await executeBaseline/,
   );
 });
 

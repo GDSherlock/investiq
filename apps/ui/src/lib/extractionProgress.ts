@@ -24,10 +24,11 @@ export const EXTRACTION_STAGES = [
     description: 'Checking consistency and data quality',
   },
   {
-    id: 'finalize',
-    label: 'Finalize',
-    title: 'Finalizing your model',
-    description: 'Preparing the extracted model for review',
+    id: 'prepare',
+    label: 'Prepare',
+    title: 'Preparing calculation model',
+    description:
+      'Extracting calculation rules and compiling the calculation graph',
   },
 ] as const;
 
@@ -103,7 +104,7 @@ export function getStageForElapsed(elapsedMs: number): ExtractionStage {
   if (elapsed < 12_000) return 'inspect';
   if (elapsed < 70_000) return 'extract';
   if (elapsed < 100_000) return 'validate';
-  return 'finalize';
+  return 'prepare';
 }
 
 export function getStageIndex(stage: ExtractionStage): number {
@@ -194,7 +195,7 @@ export function createProgressDriver({
     cancelScheduledFrame();
 
     if (reducedMotion) {
-      emit(100, 'finalize', 'completed', true);
+      emit(100, 'prepare', 'completed', true);
       return Promise.resolve();
     }
 
@@ -218,7 +219,7 @@ export function createProgressDriver({
           + (100 - completionStartedFrom) * easedRatio;
         emit(
           ratio === 1 ? 100 : progress,
-          'finalize',
+          'prepare',
           ratio === 1 ? 'completed' : 'completing',
           true,
         );

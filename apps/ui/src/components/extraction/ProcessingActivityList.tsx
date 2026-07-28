@@ -14,8 +14,8 @@ const ACTIVITIES = [
     description: 'Checking consistency and quality',
   },
   {
-    title: 'Finalizing model',
-    description: 'Preparing for review',
+    title: 'Preparing calculation model',
+    description: 'Extracting rules and compiling the graph',
   },
 ] as const;
 

@@ -22,7 +22,7 @@ export function ExtractionLoadingExperience({
   const completed = state === 'completed';
   const roundedProgress = Math.round(progress);
   const statusText = completed
-    ? 'Model extraction complete'
+    ? 'Model and calculation rules ready'
     : `${currentStage.title}, ${roundedProgress} percent complete`;
 
   return (
@@ -44,11 +44,13 @@ export function ExtractionLoadingExperience({
         <div className="min-w-0 p-5 sm:p-8">
           <div className="extraction-stage-transition" key={currentStage.id}>
             <h2 className="text-base font-semibold text-white sm:text-lg">
-              {completed ? 'Model extraction complete' : currentStage.title}
+              {completed
+                ? 'Model and calculation rules ready'
+                : currentStage.title}
             </h2>
             <p className="mt-1 text-sm text-slate-300 sm:text-base">
               {completed
-                ? 'Your financial model is ready for review'
+                ? 'Your financial model and calculation graph are ready'
                 : currentStage.description}
             </p>
           </div>
@@ -58,7 +60,7 @@ export function ExtractionLoadingExperience({
           <div className="mt-1">
             <div className="flex items-end justify-between gap-4">
               <span className="text-sm font-semibold text-white sm:text-base">
-                Overall progress
+                Estimated progress
               </span>
               <span className="text-2xl font-bold tabular-nums text-gold-400 sm:text-3xl">
                 {roundedProgress}%
@@ -67,7 +69,7 @@ export function ExtractionLoadingExperience({
             <div
               className="mt-3 h-3 overflow-hidden rounded-full bg-slate-600/50 sm:h-4"
               role="progressbar"
-              aria-label="Overall model extraction progress"
+              aria-label="Estimated model preparation progress"
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={roundedProgress}

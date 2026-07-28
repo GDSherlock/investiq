@@ -16,8 +16,8 @@ from ..database import get_db
 from ..models import FinancialModel, Investment, ModelAssumption, AuditLog, User
 from ..schemas import ModelUploadResponse, ModelParseResponse, WorkbookValidationResponse
 from ..auth import get_current_user
-from ..model_extraction_service import ModelExtractionPersistenceService
 from ..model_extraction_types import ModelExtractionPersistenceError, WorkbookTooLargeError
+from ..model_upload_orchestration_service import ModelUploadOrchestrationService
 from ..vector_service import vectorize_and_store
 from ..workbook_validation import (
     AzureConfigurationError,
@@ -72,7 +72,7 @@ def upload_model(
         raise _api_error(400, "EMPTY_FILE", "Uploaded workbook is empty.")
 
     try:
-        service = ModelExtractionPersistenceService(
+        service = ModelUploadOrchestrationService(
             session=db,
             validation_runner=run_workbook_validation,
         )

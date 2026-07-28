@@ -72,17 +72,36 @@ test('loading view always displays Your model and no uploaded filename', () => {
   assert.doesNotMatch(markup, /actual-upload\.xlsx/);
 });
 
+test('preparation stage identifies estimated progress and backend work', () => {
+  const { ExtractionLoadingExperience } = loadExperience();
+  const markup = renderToStaticMarkup(
+    React.createElement(ExtractionLoadingExperience, {
+      progress: 90,
+      stage: 'prepare',
+      state: 'processing',
+    }),
+  );
+
+  assert.match(markup, /Preparing calculation model/);
+  assert.match(
+    markup,
+    /Extracting calculation rules and compiling the calculation graph/,
+  );
+  assert.match(markup, /Estimated progress/);
+  assert.match(markup, /aria-label="Estimated model preparation progress"/);
+});
+
 test('completed view exposes 100 percent and completion status', () => {
   const { ExtractionLoadingExperience } = loadExperience();
   const markup = renderToStaticMarkup(
     React.createElement(ExtractionLoadingExperience, {
       progress: 100,
-      stage: 'finalize',
+      stage: 'prepare',
       state: 'completed',
     }),
   );
 
   assert.match(markup, /aria-valuenow="100"/);
-  assert.match(markup, /Model extraction complete/);
+  assert.match(markup, /Model and calculation rules ready/);
   assert.match(markup, />100%</);
 });

@@ -57,6 +57,18 @@ function createFakeScheduler() {
   };
 }
 
+test('fifth stage prepares calculation rules and graph compilation', () => {
+  const { EXTRACTION_STAGES } = loadProgressModule();
+
+  assert.deepEqual(EXTRACTION_STAGES.at(-1), {
+    id: 'prepare',
+    label: 'Prepare',
+    title: 'Preparing calculation model',
+    description:
+      'Extracting calculation rules and compiling the calculation graph',
+  });
+});
+
 test('simulated progress matches every elapsed-time boundary', () => {
   const { getSimulatedProgress } = loadProgressModule();
 
@@ -96,7 +108,7 @@ test('stage selection changes at the required time ranges', () => {
   assert.equal(getStageForElapsed(69_999), 'extract');
   assert.equal(getStageForElapsed(70_000), 'validate');
   assert.equal(getStageForElapsed(99_999), 'validate');
-  assert.equal(getStageForElapsed(100_000), 'finalize');
+  assert.equal(getStageForElapsed(100_000), 'prepare');
 });
 
 test('progress driver animates real success to 100 percent', async () => {
@@ -119,7 +131,7 @@ test('progress driver animates real success to 100 percent', async () => {
   await completed;
 
   assert.equal(updates.at(-1).progress, 100);
-  assert.equal(updates.at(-1).stage, 'finalize');
+  assert.equal(updates.at(-1).stage, 'prepare');
   assert.equal(updates.at(-1).phase, 'completed');
 });
 

@@ -191,6 +191,62 @@ def test_partition_envelope_contains_bound_primary_and_dependency_evidence():
     assert envelope["dependency_evidence"][0]["source_reference"] == "Inputs!B2"
 
 
+def test_partition_evidence_omits_only_redundant_empty_observation_metadata():
+    index = _index(value_size=10)
+    first = {
+        **index.facts["Model"][0],
+        "is_external_ref": False,
+        "is_error": False,
+        "python_type": "str",
+        "parse_warnings": ["displayed_value_unavailable_via_openpyxl"],
+    }
+    formula = {
+        **index.facts["Model"][-1],
+        "is_external_ref": True,
+        "is_error": True,
+        "python_type": "NoneType",
+        "parse_warnings": [
+            "displayed_value_unavailable_via_openpyxl",
+            "external_reference_value_unavailable",
+        ],
+    }
+    index = WorkbookIndex(
+        **{
+            **index.__dict__,
+            "facts": {
+                **index.facts,
+                "Model": (first, *index.facts["Model"][1:-1], formula),
+            },
+        }
+    )
+
+    partitions = PartitionPlanner().plan(index)
+    facts = [
+        fact
+        for partition in partitions
+        for fact in partition.primary_facts
+    ]
+    compact_first = next(
+        fact for fact in facts if fact["source_reference"] == "Model!A1"
+    )
+    compact_formula = next(
+        fact for fact in facts if fact["source_reference"] == "Model!D4"
+    )
+
+    assert compact_first["raw_value"] == first["raw_value"]
+    assert compact_first["formula_status"] == "static_value"
+    assert "displayed_value" not in compact_first
+    assert "is_external_ref" not in compact_first
+    assert "is_error" not in compact_first
+    assert "python_type" not in compact_first
+    assert "parse_warnings" not in compact_first
+    assert compact_formula["is_external_ref"] is True
+    assert compact_formula["is_error"] is True
+    assert compact_formula["parse_warnings"] == [
+        "external_reference_value_unavailable"
+    ]
+
+
 def test_partial_contract_requires_binding_and_has_no_final_submit_tool():
     parameters = SUBMIT_PARTITION_TOOL["function"]["parameters"]
 

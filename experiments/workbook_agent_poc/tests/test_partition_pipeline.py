@@ -38,7 +38,7 @@ def _tools(tmp_path):
 def _limits(**overrides):
     values = {
         "max_total_tokens": 13_000,
-        "max_raw_evidence_tokens": 3_000,
+        "max_raw_evidence_tokens": 2_000,
         "max_request_bytes": 26_000,
         "max_azure_calls": 100,
         "deadline_seconds": 60,

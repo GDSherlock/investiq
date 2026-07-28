@@ -79,6 +79,28 @@ def estimate_tokens(value: Any) -> int:
     return max(1, math.ceil(len(_json_bytes(value)) / 2))
 
 
+def _compact_fact(fact: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(fact)
+    compact.pop("python_type", None)
+    if compact.get("displayed_value") is None:
+        compact.pop("displayed_value", None)
+    if compact.get("is_external_ref") is False:
+        compact.pop("is_external_ref", None)
+    if compact.get("is_error") is False:
+        compact.pop("is_error", None)
+
+    warnings = [
+        warning
+        for warning in compact.get("parse_warnings", ())
+        if warning != "displayed_value_unavailable_via_openpyxl"
+    ]
+    if warnings:
+        compact["parse_warnings"] = warnings
+    else:
+        compact.pop("parse_warnings", None)
+    return compact
+
+
 def stable_partition_id(
     workbook_version: str,
     sheet_name: str,
@@ -199,7 +221,10 @@ class PartitionPlanner:
         parent_partition_id: str | None,
         split_depth: int,
     ) -> WorkbookPartition:
-        primary_facts = index.facts_for_range(sheet_name, cell_range)
+        primary_facts = tuple(
+            _compact_fact(fact)
+            for fact in index.facts_for_range(sheet_name, cell_range)
+        )
         dependency_references = index.related_references(sheet_name, cell_range)
         dependency_facts = self._dependency_facts(index, dependency_references)
         raw_evidence = {
@@ -243,7 +268,10 @@ class PartitionPlanner:
         for reference in references:
             try:
                 sheet_name, cell_range = reference.rsplit("!", 1)
-                facts.extend(index.facts_for_range(sheet_name, cell_range))
+                facts.extend(
+                    _compact_fact(fact)
+                    for fact in index.facts_for_range(sheet_name, cell_range)
+                )
             except (TypeError, ValueError):
                 continue
         seen: set[str] = set()

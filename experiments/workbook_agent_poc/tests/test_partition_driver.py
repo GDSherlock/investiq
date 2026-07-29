@@ -84,13 +84,6 @@ def _candidate_without_source():
     }
 
 
-def _candidate_with_source():
-    return {
-        **_candidate_without_source(),
-        "source_references": [{"sheet_name": "Model", "cell": "A1"}],
-    }
-
-
 def _response(
     request,
     *,
@@ -239,73 +232,8 @@ def test_invalid_output_gets_one_same_partition_correction_only(monkeypatch):
     assert "previous_response_id" not in bodies[2]
 
 
-def test_missing_candidate_source_gets_protocol_correct_correction(monkeypatch):
-    partition = _partition("partition-source-repair", "A1:B2")
-    bodies = []
-
-    def handler(request):
-        body = json.loads(request.content)
-        bodies.append(body)
-        if len(bodies) == 2:
-            correction_items = body["input"]
-            if (
-                len(correction_items) != 1
-                or correction_items[0].get("type") != "function_call_output"
-                or correction_items[0].get("call_id")
-                != "call-resp-source-1"
-            ):
-                return httpx.Response(
-                    400,
-                    request=request,
-                    json={
-                        "error": {
-                            "message": (
-                                "No tool output found for function call "
-                                "call-resp-source-1."
-                            ),
-                            "type": "invalid_request_error",
-                            "param": "input",
-                            "code": None,
-                        }
-                    },
-                )
-        arguments = _partition_args(partition)
-        arguments["result"]["all_assumption_candidates"] = [
-            _candidate_without_source()
-            if len(bodies) == 1
-            else _candidate_with_source()
-        ]
-        return _response(
-            request,
-            response_id=f"resp-source-{len(bodies)}",
-            tool_name="submit_partition_result",
-            arguments=arguments,
-        )
-
-    result = _driver(monkeypatch, handler).extract(
-        partition,
-        _envelope(partition),
-    )
-
-    assert len(bodies) == 2
-    assert bodies[1]["previous_response_id"] == "resp-source-1"
-    correction_items = bodies[1]["input"]
-    assert correction_items[0]["type"] == "function_call_output"
-    assert correction_items[0]["call_id"] == "call-resp-source-1"
-    rejection = json.loads(correction_items[0]["output"])
-    assert rejection["accepted"] is False
-    assert rejection["validation_code"] == "candidate_source_missing"
-    assert "source_references" in rejection["repair_instruction"]
-    rendered_correction = json.dumps(correction_items)
-    assert '"role": "user"' not in rendered_correction
-    assert "secret-model-label" not in rendered_correction
-    assert result["result"]["all_assumption_candidates"][0][
-        "source_references"
-    ] == [{"sheet_name": "Model", "cell": "A1"}]
-
-
-def test_missing_call_id_fails_without_correction_call(monkeypatch):
-    partition = _partition("partition-missing-call-id", "A1:B2")
+def test_missing_candidate_source_returns_without_correction(monkeypatch):
+    partition = _partition("partition-source-local-rejection", "A1:B2")
     bodies = []
 
     def handler(request):
@@ -316,10 +244,44 @@ def test_missing_call_id_fails_without_correction_call(monkeypatch):
         ]
         return _response(
             request,
-            response_id="resp-missing-call-id",
+            response_id="resp-source-local-rejection",
             tool_name="submit_partition_result",
             arguments=arguments,
-            call_id="",
+        )
+
+    result = _driver(monkeypatch, handler).extract(
+        partition,
+        _envelope(partition),
+    )
+
+    assert len(bodies) == 1
+    assert result["result"]["all_assumption_candidates"][0].get(
+        "source_references"
+    ) is None
+
+
+def test_missing_call_id_fails_without_correction_call(monkeypatch):
+    partition = _partition("partition-missing-call-id", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "resp-missing-call-id",
+                "object": "response",
+                "created_at": 0,
+                "model": "custom-full-deployment",
+                "output": [{
+                    "id": "fc-missing-call-id",
+                    "type": "function_call",
+                    "call_id": "",
+                    "name": "submit_partition_result",
+                    "arguments": "{",
+                }],
+            },
         )
 
     driver = _driver(monkeypatch, handler)
@@ -442,33 +404,38 @@ def test_malformed_arguments_get_function_output_correction(monkeypatch):
     assert rejection["validation_code"] == "partition_tool_call_invalid"
 
 
-def test_two_source_less_results_raise_without_third_call(monkeypatch):
-    partition = _partition("partition-source-exhausted", "A1:B2")
+def test_invalid_candidate_source_shape_is_not_retried(monkeypatch):
+    partition = _partition("partition-source-shape", "A1:B2")
     bodies = []
 
     def handler(request):
         bodies.append(json.loads(request.content))
         arguments = _partition_args(partition)
-        arguments["result"]["all_assumption_candidates"] = [
-            _candidate_without_source()
-        ]
+        candidate = _candidate_without_source()
+        candidate["source_references"] = ["Model!A1"]
+        arguments["result"]["all_assumption_candidates"] = [candidate]
         return _response(
             request,
-            response_id=f"resp-exhausted-{len(bodies)}",
+            response_id="resp-source-shape",
             tool_name="submit_partition_result",
             arguments=arguments,
         )
 
-    driver = _driver(monkeypatch, handler)
+    result = _driver(monkeypatch, handler).extract(
+        partition,
+        _envelope(partition),
+    )
 
-    with pytest.raises(PartitionStructuredOutputError):
-        driver.extract(partition, _envelope(partition))
+    assert len(bodies) == 1
+    assert result["result"]["all_assumption_candidates"][0][
+        "source_references"
+    ] == ["Model!A1"]
 
-    assert len(bodies) == 2
-    assert driver.call_count == 2
 
-
-def test_source_repair_logs_only_static_issue_code(monkeypatch, caplog):
+def test_source_defect_does_not_log_structured_output_rejection(
+    monkeypatch,
+    caplog,
+):
     partition = _partition("partition-source-log", "A1:B2")
     calls = 0
 
@@ -478,8 +445,6 @@ def test_source_repair_logs_only_static_issue_code(monkeypatch, caplog):
         arguments = _partition_args(partition)
         arguments["result"]["all_assumption_candidates"] = [
             _candidate_without_source()
-            if calls == 1
-            else _candidate_with_source()
         ]
         return _response(
             request,
@@ -492,7 +457,8 @@ def test_source_repair_logs_only_static_issue_code(monkeypatch, caplog):
     _driver(monkeypatch, handler).extract(partition, _envelope(partition))
 
     rendered = "\n".join(record.getMessage() for record in caplog.records)
-    assert "candidate_source_missing" in rendered
+    assert calls == 1
+    assert "partition_structured_output_rejected" not in rendered
     assert "secret-model-label" not in rendered
     assert "secret-cell-sentinel" not in rendered
     assert "secret-api-key-sentinel" not in rendered

@@ -49,7 +49,7 @@ def _arguments():
 
 
 @pytest.mark.parametrize("bucket", SOURCE_BOUND_BUCKETS)
-def test_every_source_bound_bucket_rejects_missing_source_references(bucket):
+def test_source_defect_does_not_reject_complete_partition_arguments(bucket):
     arguments = _arguments()
     arguments["result"][bucket] = [{
         key: value
@@ -57,12 +57,7 @@ def test_every_source_bound_bucket_rejects_missing_source_references(bucket):
         if key != "source_references"
     }]
 
-    issue = validate_partition_tool_arguments(arguments)
-
-    assert issue is not None
-    assert issue.code == "candidate_source_missing"
-    assert "source_references" in issue.repair_instruction
-    assert "Tax rate" not in issue.repair_instruction
+    assert validate_partition_tool_arguments(arguments) is None
 
 
 @pytest.mark.parametrize(
@@ -77,16 +72,23 @@ def test_every_source_bound_bucket_rejects_missing_source_references(bucket):
         [{"sheet_name": "Inputs", "cell": None}],
     ],
 )
-def test_invalid_source_reference_shape_is_rejected(source_references):
+def test_invalid_source_shape_is_deferred_to_candidate_validator(source_references):
     arguments = _arguments()
     candidate = _valid_candidate()
     candidate["source_references"] = source_references
     arguments["result"]["all_assumption_candidates"] = [candidate]
 
+    assert validate_partition_tool_arguments(arguments) is None
+
+
+def test_non_object_candidate_item_is_still_rejected():
+    arguments = _arguments()
+    arguments["result"]["all_assumption_candidates"] = ["Inputs!B2"]
+
     issue = validate_partition_tool_arguments(arguments)
 
     assert issue is not None
-    assert issue.code in {"candidate_source_missing", "candidate_source_invalid"}
+    assert issue.code == "partition_candidate_invalid"
 
 
 @pytest.mark.parametrize(

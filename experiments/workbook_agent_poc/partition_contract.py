@@ -95,26 +95,6 @@ def validate_partition_tool_arguments(
                     "partition_candidate_invalid",
                     f"Every item in {bucket} must be an object.",
                 )
-            sources = item.get("source_references")
-            if not isinstance(sources, list) or not sources:
-                return _issue(
-                    "candidate_source_missing",
-                    "Every candidate and structure must include a non-empty "
-                    "source_references list citing exact supplied evidence.",
-                )
-            for source in sources:
-                if (
-                    not isinstance(source, dict)
-                    or not isinstance(source.get("sheet_name"), str)
-                    or not source["sheet_name"].strip()
-                    or not isinstance(source.get("cell"), str)
-                    or not source["cell"].strip()
-                ):
-                    return _issue(
-                        "candidate_source_invalid",
-                        "Every source reference must contain non-empty string "
-                        "sheet_name and cell fields from supplied evidence.",
-                    )
     return None
 
 

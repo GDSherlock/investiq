@@ -347,6 +347,65 @@ def test_source_rejected_review_candidate_is_not_canonicalized(
     )
 
 
+def test_range_rejected_series_is_audited_but_not_canonicalized(
+    lifecycle_context,
+) -> None:
+    _engine, _session_factory, session = lifecycle_context
+    result = deterministic_extraction_result()
+    result["final_extraction"]["review_candidates"].append({
+        "candidate_id": "range-rejected-series",
+        "original_label": "Invalid series",
+        "submitted_role": "financial_series",
+        "raw_value": None,
+        "source_references": [],
+        "source_contract_bucket": "financial_series",
+        "reconciliation_rejection_reason": "series_range_invalid",
+        "period_range": "",
+        "value_range": "P&L!B2:C2",
+    })
+    result["validation_results"].append({
+        "candidate_id": "range-rejected-series",
+        "original_label": "Invalid series",
+        "source_validation_status": "rejected",
+        "submitted_role": "financial_series",
+        "validated_role": None,
+        "validation_status": "rejected",
+        "invalid_source": False,
+        "rejection_reason": "series_range_invalid",
+        "review_required": True,
+        "_bucket": "review_candidates",
+    })
+    service = ModelExtractionPersistenceService(
+        session,
+        validation_runner=RecordingRunner(result),
+    )
+
+    response = service.process_upload(
+        persistence_workbook_bytes(),
+        "model.xlsx",
+    )
+
+    assert _count(session, FinancialSeries) == 1
+    assert _count(session, FinancialSeriesValue) == 2
+    assert _count(session, ModelParameter) == 2
+    assert _count(session, CanonicalOutput) == 1
+    model_version = session.get(ModelVersion, response["model_version_id"])
+    assert any(
+        item.get("candidate_id") == "range-rejected-series"
+        and item.get("reconciliation_rejection_reason")
+        == "series_range_invalid"
+        for item in model_version.extraction_snapshot_json[
+            "final_extraction"
+        ]["review_candidates"]
+    )
+    assert any(
+        item.get("candidate_id") == "range-rejected-series"
+        and item.get("rejection_reason") == "series_range_invalid"
+        and item.get("validation_status") == "rejected"
+        for item in model_version.validation_results_json
+    )
+
+
 def test_formula_derived_parameter_reloads_exact_formula_and_null_cache(
     lifecycle_context,
 ) -> None:

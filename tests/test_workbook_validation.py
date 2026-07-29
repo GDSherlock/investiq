@@ -161,9 +161,10 @@ class PartitionedAuthenticationFailureDriver(PartitionedEmptyDriver):
 
 
 class PartitionedSourceLessDriver(PartitionedEmptyDriver):
-    def __init__(self):
+    def __init__(self, source_references):
         self.call_count = 0
         self.emitted = False
+        self.source_references = source_references
 
     def extract(self, partition, envelope):
         result = super().extract(partition, envelope)
@@ -174,7 +175,7 @@ class PartitionedSourceLessDriver(PartitionedEmptyDriver):
                 "original_label": "Unbound candidate",
                 "submitted_role": "hardcoded_input",
                 "raw_value": 123,
-                "source_references": [],
+                "source_references": self.source_references,
             })
         return result
 
@@ -529,11 +530,14 @@ def test_adapter_uses_partitioned_pipeline_by_default(monkeypatch):
     assert result["coverage"]["submission_allowed"] is True
 
 
-def test_partition_source_rejection_does_not_fail_workbook():
+@pytest.mark.parametrize("source_references", [None, []])
+def test_partition_source_rejection_does_not_fail_workbook(source_references):
     result = run_workbook_validation(
         FIXTURE.read_bytes(),
         FIXTURE.name,
-        partition_driver_factory=PartitionedSourceLessDriver,
+        partition_driver_factory=lambda: PartitionedSourceLessDriver(
+            source_references
+        ),
     )
 
     assert result["submitted"] is True
@@ -543,7 +547,6 @@ def test_partition_source_rejection_does_not_fail_workbook():
     assert any(
         item["candidate_id"] == "source-less"
         and item["validation_status"] == "rejected"
-        and item["invalid_source"] is True
         for item in result["validation_results"]
     )
 

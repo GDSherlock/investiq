@@ -291,8 +291,10 @@ def test_metadata_remains_snapshot_only_and_output_is_materialized(
     assert final_extraction["output_candidates"][0]["original_label"] == "Displayed revenue"
 
 
+@pytest.mark.parametrize("source_references", [None, []])
 def test_source_rejected_review_candidate_is_not_canonicalized(
     lifecycle_context,
+    source_references,
 ) -> None:
     _engine, _session_factory, session = lifecycle_context
     result = deterministic_extraction_result()
@@ -301,7 +303,7 @@ def test_source_rejected_review_candidate_is_not_canonicalized(
         "original_label": "Unbound candidate",
         "submitted_role": "hardcoded_input",
         "raw_value": 123,
-        "source_references": [],
+        "source_references": source_references,
         "source_contract_bucket": "all_assumption_candidates",
     })
     result["validation_results"].append({
@@ -333,7 +335,11 @@ def test_source_rejected_review_candidate_is_not_canonicalized(
     review = model_version.extraction_snapshot_json["final_extraction"][
         "review_candidates"
     ]
-    assert any(candidate["candidate_id"] == "source-less" for candidate in review)
+    source_less = next(
+        candidate for candidate in review
+        if candidate["candidate_id"] == "source-less"
+    )
+    assert source_less["source_references"] == source_references
     assert any(
         validation.get("candidate_id") == "source-less"
         and validation.get("validation_status") == "rejected"

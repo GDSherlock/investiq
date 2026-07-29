@@ -124,9 +124,10 @@ class FailAfterOnePartitionDriver(RecordingPartitionDriver):
 
 
 class MixedSourcePartitionDriver(RecordingPartitionDriver):
-    def __init__(self):
+    def __init__(self, source_references):
         super().__init__()
         self.emitted = False
+        self.source_references = source_references
 
     def extract(self, partition, envelope):
         result = super().extract(partition, envelope)
@@ -137,7 +138,7 @@ class MixedSourcePartitionDriver(RecordingPartitionDriver):
                 "original_label": "Unbound candidate",
                 "submitted_role": "hardcoded_input",
                 "raw_value": 123,
-                "source_references": [],
+                "source_references": self.source_references,
             })
         return result
 
@@ -179,10 +180,14 @@ def test_pipeline_output_is_accepted_by_existing_materializer_and_validator(tmp_
     assert all(item["validation_status"] != "rejected" for item in validation)
 
 
-def test_source_less_candidate_is_rejected_without_failing_workbook(tmp_path):
+@pytest.mark.parametrize("source_references", [None, []])
+def test_source_less_candidate_is_rejected_without_failing_workbook(
+    tmp_path,
+    source_references,
+):
     tools = _tools(tmp_path)
     run = run_partitioned_extraction(
-        MixedSourcePartitionDriver(),
+        MixedSourcePartitionDriver(source_references),
         tools,
         limits=_limits(),
     )
@@ -199,12 +204,13 @@ def test_source_less_candidate_is_rejected_without_failing_workbook(tmp_path):
     assert run["submitted"] is True
     assert run["stop_reason"] == "submitted"
     assert run["coverage"]["submission_allowed"] is True
-    assert any(
-        item["candidate_id"] == "source-less"
-        and item["validation_status"] == "rejected"
-        and item["invalid_source"] is True
-        for item in validation
+    rejected = next(
+        item for item in validation
+        if item["candidate_id"] == "source-less"
     )
+    assert rejected["validation_status"] == "rejected"
+    assert rejected["invalid_source"] is True
+    assert rejected["rejection_reason"] == "no_source"
     assert any(
         item["validation_status"] != "rejected"
         for item in validation

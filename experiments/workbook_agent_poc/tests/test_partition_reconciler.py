@@ -351,6 +351,7 @@ def test_source_less_structure_moves_to_rejected_review_candidate():
         ("", "Forecast!C8:J8", "Forecast"),
         ("Forecast!C3:J3", "", "Forecast"),
         ("C3:J3", "C8:J8", None),
+        ("!C3:J3", "Forecast!C8:J8", None),
         ("Forecast!not-a-range", "Forecast!C8:J8", "Forecast"),
     ],
 )

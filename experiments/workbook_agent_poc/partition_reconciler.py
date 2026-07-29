@@ -578,6 +578,11 @@ def _parse_range(value: Any, *, default_sheet: Any = None) -> _RangeRef:
     if "!" in raw:
         sheet_token, cell_range = raw.rsplit("!", 1)
         sheet_name = sheet_token.strip("'").replace("''", "'")
+        if not sheet_name.strip():
+            raise ReconciliationError(
+                "series_range_invalid",
+                "Qualified financial-series range requires a sheet name.",
+            )
     elif isinstance(default_sheet, str) and default_sheet:
         sheet_name = default_sheet
         cell_range = raw

@@ -291,6 +291,56 @@ def test_metadata_remains_snapshot_only_and_output_is_materialized(
     assert final_extraction["output_candidates"][0]["original_label"] == "Displayed revenue"
 
 
+def test_source_rejected_review_candidate_is_not_canonicalized(
+    lifecycle_context,
+) -> None:
+    _engine, _session_factory, session = lifecycle_context
+    result = deterministic_extraction_result()
+    result["final_extraction"]["review_candidates"].append({
+        "candidate_id": "source-less",
+        "original_label": "Unbound candidate",
+        "submitted_role": "hardcoded_input",
+        "raw_value": 123,
+        "source_references": [],
+        "source_contract_bucket": "all_assumption_candidates",
+    })
+    result["validation_results"].append({
+        "candidate_id": "source-less",
+        "original_label": "Unbound candidate",
+        "submitted_value": 123,
+        "source_reference": None,
+        "source_validation_status": "rejected",
+        "submitted_role": "hardcoded_input",
+        "validated_role": None,
+        "role_validation_status": "not_evaluated",
+        "validation_status": "rejected",
+        "validated_value": None,
+        "invalid_source": True,
+        "rejection_reason": "no_source",
+        "review_required": True,
+        "_bucket": "review_candidates",
+    })
+    service = ModelExtractionPersistenceService(
+        session,
+        validation_runner=RecordingRunner(result),
+    )
+
+    response = service.process_upload(persistence_workbook_bytes(), "model.xlsx")
+
+    assert _count(session, ModelParameter) == 2
+    assert _count(session, CanonicalOutput) == 1
+    model_version = session.get(ModelVersion, response["model_version_id"])
+    review = model_version.extraction_snapshot_json["final_extraction"][
+        "review_candidates"
+    ]
+    assert any(candidate["candidate_id"] == "source-less" for candidate in review)
+    assert any(
+        validation.get("candidate_id") == "source-less"
+        and validation.get("validation_status") == "rejected"
+        for validation in model_version.validation_results_json
+    )
+
+
 def test_formula_derived_parameter_reloads_exact_formula_and_null_cache(
     lifecycle_context,
 ) -> None:

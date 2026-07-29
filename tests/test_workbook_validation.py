@@ -160,6 +160,25 @@ class PartitionedAuthenticationFailureDriver(PartitionedEmptyDriver):
         )
 
 
+class PartitionedSourceLessDriver(PartitionedEmptyDriver):
+    def __init__(self):
+        self.call_count = 0
+        self.emitted = False
+
+    def extract(self, partition, envelope):
+        result = super().extract(partition, envelope)
+        if not self.emitted:
+            self.emitted = True
+            result["result"]["all_assumption_candidates"].append({
+                "candidate_id": "source-less",
+                "original_label": "Unbound candidate",
+                "submitted_role": "hardcoded_input",
+                "raw_value": 123,
+                "source_references": [],
+            })
+        return result
+
+
 class FinancialModelCoverageDriver:
     _deployment = "deterministic-financial-model-coverage-driver"
     usage_prompt = 0
@@ -508,6 +527,25 @@ def test_adapter_uses_partitioned_pipeline_by_default(monkeypatch):
         == result["coverage"]["planned_partition_count"]
     )
     assert result["coverage"]["submission_allowed"] is True
+
+
+def test_partition_source_rejection_does_not_fail_workbook():
+    result = run_workbook_validation(
+        FIXTURE.read_bytes(),
+        FIXTURE.name,
+        partition_driver_factory=PartitionedSourceLessDriver,
+    )
+
+    assert result["submitted"] is True
+    assert result["stop_reason"] == "submitted"
+    assert result["errors"] == []
+    assert result["validation_summary"]["rejected"] == 1
+    assert any(
+        item["candidate_id"] == "source-less"
+        and item["validation_status"] == "rejected"
+        and item["invalid_source"] is True
+        for item in result["validation_results"]
+    )
 
 
 def test_false_environment_switch_uses_current_agent_loop(monkeypatch):

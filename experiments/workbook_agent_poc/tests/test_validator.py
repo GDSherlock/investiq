@@ -84,6 +84,42 @@ def test_missing_source_rejected():
     assert r["validation_status"] == "rejected"
 
 
+def test_non_list_source_references_rejected_without_exception():
+    r = V("no_assumptions_sheet").run({
+        "candidate_id": "shape-1",
+        "submitted_role": "hardcoded_input",
+        "raw_value": 1,
+        "source_references": "Funding!C3",
+    })
+    assert r["validation_status"] == "rejected"
+    assert r["invalid_source"] is True
+    assert r["rejection_reason"] == "invalid_source_shape"
+
+
+def test_non_object_source_reference_rejected_without_exception():
+    r = V("no_assumptions_sheet").run({
+        "candidate_id": "shape-2",
+        "submitted_role": "hardcoded_input",
+        "raw_value": 1,
+        "source_references": ["Funding!C3"],
+    })
+    assert r["validation_status"] == "rejected"
+    assert r["invalid_source"] is True
+    assert r["rejection_reason"] == "invalid_source_shape"
+
+
+def test_blank_source_fields_rejected_without_exception():
+    r = V("no_assumptions_sheet").run({
+        "candidate_id": "shape-3",
+        "submitted_role": "hardcoded_input",
+        "raw_value": 1,
+        "source_references": [{"sheet_name": "", "cell": ""}],
+    })
+    assert r["validation_status"] == "rejected"
+    assert r["invalid_source"] is True
+    assert r["rejection_reason"] == "invalid_source_shape"
+
+
 def test_bad_sheet_reference_rejected():
     r = V("no_assumptions_sheet").run(cand("i", "Nope", "C3", 1, "hardcoded_input"))
     assert r["validation_status"] == "rejected"

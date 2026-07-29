@@ -53,14 +53,56 @@ def validate_candidate(tools: WorkbookToolset, graph: dict, cand: dict[str, Any]
     warnings: list[str] = []
     rejected: list[str] = []
 
-    refs = cand.get("source_references") or []
-    if not refs:
+    refs = cand.get("source_references")
+    if refs is None or refs == []:
         return _result(cid, submitted_role, source="rejected", overall="rejected",
                        rejected=["no source_references"], review=True,
                        invalid_source=True, rejection_reason="no_source", cand=cand)
+    if not isinstance(refs, list):
+        return _result(
+            cid,
+            submitted_role,
+            source="rejected",
+            overall="rejected",
+            rejected=["invalid source reference shape"],
+            review=True,
+            invalid_source=True,
+            rejection_reason="invalid_source_shape",
+            cand=cand,
+        )
 
     ref = refs[0]
+    if not isinstance(ref, dict):
+        return _result(
+            cid,
+            submitted_role,
+            source="rejected",
+            overall="rejected",
+            rejected=["invalid source reference shape"],
+            review=True,
+            invalid_source=True,
+            rejection_reason="invalid_source_shape",
+            cand=cand,
+        )
+
     sheet, cell = ref.get("sheet_name"), ref.get("cell")
+    if (
+        not isinstance(sheet, str)
+        or not sheet.strip()
+        or not isinstance(cell, str)
+        or not cell.strip()
+    ):
+        return _result(
+            cid,
+            submitted_role,
+            source="rejected",
+            overall="rejected",
+            rejected=["invalid source reference shape"],
+            review=True,
+            invalid_source=True,
+            rejection_reason="invalid_source_shape",
+            cand=cand,
+        )
     try:
         fact = tools.get_cell(sheet, cell)
     except ToolError as e:

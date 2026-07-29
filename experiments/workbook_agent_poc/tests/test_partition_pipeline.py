@@ -123,6 +123,25 @@ class FailAfterOnePartitionDriver(RecordingPartitionDriver):
         return _candidate_result(partition)
 
 
+class MixedSourcePartitionDriver(RecordingPartitionDriver):
+    def __init__(self):
+        super().__init__()
+        self.emitted = False
+
+    def extract(self, partition, envelope):
+        result = super().extract(partition, envelope)
+        if not self.emitted:
+            self.emitted = True
+            result["result"]["all_assumption_candidates"].append({
+                "candidate_id": "source-less",
+                "original_label": "Unbound candidate",
+                "submitted_role": "hardcoded_input",
+                "raw_value": 123,
+                "source_references": [],
+            })
+        return result
+
+
 def test_pipeline_processes_partitions_sequentially_and_submits_once(tmp_path):
     tools = _tools(tmp_path)
     driver = RecordingPartitionDriver()
@@ -158,6 +177,38 @@ def test_pipeline_output_is_accepted_by_existing_materializer_and_validator(tmp_
 
     assert validation
     assert all(item["validation_status"] != "rejected" for item in validation)
+
+
+def test_source_less_candidate_is_rejected_without_failing_workbook(tmp_path):
+    tools = _tools(tmp_path)
+    run = run_partitioned_extraction(
+        MixedSourcePartitionDriver(),
+        tools,
+        limits=_limits(),
+    )
+    series_outcome = materialize_financial_series(
+        tools,
+        run["final_extraction"],
+    )
+    validation = validate_extraction(
+        tools,
+        run["final_extraction"],
+        financial_series_outcome=series_outcome,
+    )
+
+    assert run["submitted"] is True
+    assert run["stop_reason"] == "submitted"
+    assert run["coverage"]["submission_allowed"] is True
+    assert any(
+        item["candidate_id"] == "source-less"
+        and item["validation_status"] == "rejected"
+        and item["invalid_source"] is True
+        for item in validation
+    )
+    assert any(
+        item["validation_status"] != "rejected"
+        for item in validation
+    )
 
 
 def test_context_overflow_splits_once_and_never_retries_same_envelope(tmp_path):

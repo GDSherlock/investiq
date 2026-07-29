@@ -37,6 +37,11 @@ CANDIDATE_BUCKETS = (
 )
 STRUCTURE_BUCKETS = ("scenario_structures", "sensitivity_structures")
 _SAFE_SHEET = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+_CANDIDATE_SOURCE_ERROR_CODES = {
+    "candidate_source_missing",
+    "candidate_source_invalid",
+    "candidate_source_not_found",
+}
 
 
 class ReconciliationError(ValueError):
@@ -184,6 +189,27 @@ def _normalize_candidate(
     )
 
 
+def _source_rejected_candidate(
+    index: WorkbookIndex,
+    partition_id: str,
+    bucket: str,
+    item_index: int,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    rejected = deepcopy(candidate)
+    candidate_id = rejected.get("candidate_id")
+    if not isinstance(candidate_id, str) or not candidate_id.strip():
+        rejected["candidate_id"] = _hash_identity(
+            index.workbook_version,
+            partition_id,
+            bucket,
+            str(item_index),
+            "source-rejected",
+        )
+    rejected["source_contract_bucket"] = bucket
+    return rejected
+
+
 def _semantic_signature(record: _CandidateRecord) -> tuple[Any, ...]:
     candidate = record.candidate
     return (
@@ -246,6 +272,7 @@ class PartitionReconciler:
         deduplicated = 0
         conflict_count = 0
         reconciliation_calls = 0
+        warnings: list[str] = []
 
         for partial in partials:
             if partial.get("workbook_version") != index.workbook_version:
@@ -266,18 +293,56 @@ class PartitionReconciler:
                         "partition_bucket_invalid",
                         f"Partial bucket {bucket} must be a list.",
                     )
-                for item in items:
+                for item_index, item in enumerate(items):
                     if not isinstance(item, dict):
                         raise ReconciliationError(
                             "partition_candidate_invalid",
                             f"Partial bucket {bucket} contains a non-object.",
                         )
-                    record = _normalize_candidate(index, bucket, item)
+                    try:
+                        record = _normalize_candidate(index, bucket, item)
+                    except ReconciliationError as exc:
+                        if exc.code not in _CANDIDATE_SOURCE_ERROR_CODES:
+                            raise
+                        final["review_candidates"].append(
+                            _source_rejected_candidate(
+                                index,
+                                str(partial.get("partition_id")),
+                                bucket,
+                                item_index,
+                                item,
+                            )
+                        )
+                        warnings.append(
+                            "candidate_source_rejected:"
+                            f"{partial.get('partition_id')}:{bucket}:"
+                            f"{item_index}:{exc.code}"
+                        )
+                        continue
                     records_by_source.setdefault(record.sources, []).append(record)
 
             for bucket in STRUCTURE_BUCKETS:
-                for structure in result.get(bucket, []) or []:
-                    record = _normalize_candidate(index, bucket, structure)
+                for item_index, structure in enumerate(result.get(bucket, []) or []):
+                    try:
+                        record = _normalize_candidate(index, bucket, structure)
+                    except ReconciliationError as exc:
+                        if exc.code not in _CANDIDATE_SOURCE_ERROR_CODES:
+                            raise
+                        final["review_candidates"].append(
+                            _source_rejected_candidate(
+                                index,
+                                str(partial.get("partition_id")),
+                                bucket,
+                                item_index,
+                                structure,
+                            )
+                        )
+                        warnings.append(
+                            "candidate_source_rejected:"
+                            f"{partial.get('partition_id')}:{bucket}:"
+                            f"{item_index}:{exc.code}"
+                        )
+                        continue
                     final[bucket].append(record.candidate)
 
             submitted_series = result.get("financial_series", [])
@@ -366,7 +431,7 @@ class PartitionReconciler:
             deduplicated_candidates=deduplicated,
             conflicts=conflict_count,
             reconciliation_calls=reconciliation_calls,
-            warnings=(),
+            warnings=tuple(warnings),
         )
 
     def _reconcile_series(

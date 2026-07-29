@@ -3,7 +3,6 @@
 import os
 import sys
 
-import pytest
 from openpyxl.utils import get_column_letter
 
 
@@ -12,7 +11,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from partition_planner import WorkbookPartition
 from partition_reconciler import (
     PartitionReconciler,
-    ReconciliationError,
     deterministic_candidate_id,
     deterministic_series_id,
 )
@@ -226,6 +224,53 @@ def test_same_semantic_source_is_deduplicated_across_partitions():
     assert outcome.deduplicated_candidates == 1
 
 
+def test_source_invalid_candidate_is_quarantined_without_losing_valid_candidate():
+    index = _index()
+    partition = _partition("partition-mixed-source")
+    valid = _candidate("Inputs", "B1")
+    invalid = _candidate("Inputs", "B1")
+    invalid["candidate_id"] = "missing-source"
+    invalid["source_references"] = []
+    submitted = _bound(partition)
+    submitted["result"]["all_assumption_candidates"] = [valid, invalid]
+
+    outcome = PartitionReconciler().reconcile(index, [submitted])
+
+    candidates = outcome.final_extraction["all_assumption_candidates"]
+    assert len(candidates) == 1
+    assert candidates[0]["reconciliation_status"] == "validated_source"
+    review = outcome.final_extraction["review_candidates"]
+    assert any(
+        candidate.get("candidate_id") == "missing-source"
+        and candidate.get("source_references") == []
+        and candidate.get("source_contract_bucket")
+        == "all_assumption_candidates"
+        for candidate in review
+    )
+
+
+def test_string_source_candidate_is_quarantined():
+    index = _index()
+    partition = _partition("partition-string-source")
+    candidate = _candidate("Inputs", "B1")
+    candidate["candidate_id"] = "string-source"
+    candidate["source_references"] = ["Inputs!B1"]
+
+    outcome = PartitionReconciler().reconcile(
+        index,
+        [_bound(
+            partition,
+            bucket="all_assumption_candidates",
+            item=candidate,
+        )],
+    )
+
+    assert outcome.final_extraction["all_assumption_candidates"] == []
+    rejected = outcome.final_extraction["review_candidates"][0]
+    assert rejected["candidate_id"] == "string-source"
+    assert rejected["source_references"] == ["Inputs!B1"]
+
+
 def test_incompatible_roles_move_to_review_when_resolver_defers():
     index = _index()
     first = _partition("partition-input")
@@ -258,7 +303,7 @@ def test_incompatible_roles_move_to_review_when_resolver_defers():
     ]
 
 
-def test_missing_source_reference_fails_reconciliation():
+def test_nonexistent_source_candidate_is_quarantined():
     index = _index()
     partition = _partition("partition-missing")
     submitted = _bound(
@@ -267,10 +312,35 @@ def test_missing_source_reference_fails_reconciliation():
         item=_candidate("Missing", "A1"),
     )
 
-    with pytest.raises(ReconciliationError) as exc:
-        PartitionReconciler().reconcile(index, [submitted])
+    outcome = PartitionReconciler().reconcile(index, [submitted])
 
-    assert exc.value.code == "candidate_source_not_found"
+    assert outcome.final_extraction["all_assumption_candidates"] == []
+    rejected = outcome.final_extraction["review_candidates"][0]
+    assert rejected["source_references"] == [
+        {"sheet_name": "Missing", "cell": "A1"}
+    ]
+    assert rejected["source_contract_bucket"] == "all_assumption_candidates"
+
+
+def test_source_less_structure_moves_to_rejected_review_candidate():
+    index = _index()
+    partition = _partition("partition-source-less-structure")
+    submitted = _bound(
+        partition,
+        bucket="scenario_structures",
+        item={
+            "structure_id": "scenario-1",
+            "source_references": [],
+        },
+    )
+
+    outcome = PartitionReconciler().reconcile(index, [submitted])
+
+    assert outcome.final_extraction["scenario_structures"] == []
+    review = outcome.final_extraction["review_candidates"]
+    assert len(review) == 1
+    assert review[0]["source_contract_bucket"] == "scenario_structures"
+    assert review[0]["source_references"] == []
 
 
 def test_horizontal_series_fragments_join_in_source_order():

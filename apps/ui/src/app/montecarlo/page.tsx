@@ -31,6 +31,7 @@ import type {
   MonteCarloOutputRole,
   MonteCarloRunResponse,
 } from '@/lib/calculation-api-types';
+import { formatUiNumber } from '@/lib/ui-number-format';
 
 const RUN_STATUSES = [
   'queued',
@@ -170,19 +171,26 @@ function formatMetricValue(
     return 'Unavailable';
   }
   if (role.endsWith('_irr')) {
-    return `${(value * 100).toFixed(2)}%`;
+    return `${formatUiNumber(value * 100, {
+      maximumFractionDigits: 2,
+    })}%`;
   }
   if (role === 'minimum_dscr') {
-    return `${value.toFixed(2)}x`;
+    return `${formatUiNumber(value, {
+      maximumFractionDigits: 2,
+    })}x`;
   }
-  return new Intl.NumberFormat('en', {
+  return formatUiNumber(value, {
+    locales: 'en',
     notation: 'compact',
     maximumFractionDigits: 2,
-  }).format(value);
+  });
 }
 
 function formatProbability(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+  return `${formatUiNumber(value * 100, {
+    maximumFractionDigits: 1,
+  })}%`;
 }
 
 function ParameterFields({
@@ -315,7 +323,7 @@ function DistributionChart({
 }) {
   const rows =
     metric.distribution?.bins.map((bin) => ({
-      bucket: `${bin.lower.toPrecision(3)}–${bin.upper.toPrecision(3)}`,
+      bucket: `${formatUiNumber(bin.lower)}–${formatUiNumber(bin.upper)}`,
       count: bin.count,
     })) ?? [];
   return (
@@ -339,13 +347,26 @@ function DistributionChart({
               interval="preserveStartEnd"
               tick={{ fontSize: 8 }}
             />
-            <YAxis tick={{ fontSize: 9 }} />
+            <YAxis
+              tick={{ fontSize: 9 }}
+              tickFormatter={(value: number) =>
+                formatUiNumber(value, {
+                  maximumFractionDigits: 0,
+                })
+              }
+            />
             <Tooltip
               contentStyle={{
                 fontSize: 11,
                 backgroundColor: '#111C44',
                 border: '1px solid #1B2B65',
               }}
+              formatter={(value: number, name: string) => [
+                formatUiNumber(value, {
+                  maximumFractionDigits: 0,
+                }),
+                name,
+              ]}
             />
             <Bar dataKey="count" fill="#60a5fa" radius={[2, 2, 0, 0]} />
           </BarChart>
@@ -727,7 +748,10 @@ export default function MonteCarloPage() {
                           </span>
                           <span className="mt-0.5 block text-[9px] text-d-muted">
                             {input.business_role ?? 'Unclassified'} ·
-                            current {input.current_value}{' '}
+                            current{' '}
+                            {formatUiNumber(input.current_value, {
+                              fallback: input.current_value,
+                            })}{' '}
                             {input.unit ?? ''}
                           </span>
                         </span>
@@ -896,10 +920,16 @@ export default function MonteCarloPage() {
                         Run {run.monte_carlo_run_id.slice(0, 8)}
                       </div>
                       <div>
-                        {run.method_version} · {run.trial_count} trials
+                        {run.method_version} ·{' '}
+                        {formatUiNumber(run.trial_count, {
+                          maximumFractionDigits: 0,
+                        })}{' '}
+                        trials
                       </div>
                       {run.runtime_ms !== null && (
-                        <div>{run.runtime_ms} ms</div>
+                        <div>
+                          {formatUiNumber(run.runtime_ms)} ms
+                        </div>
                       )}
                     </div>
                   )}
@@ -950,7 +980,11 @@ export default function MonteCarloPage() {
                             {ranking.label}
                           </span>
                           <span className="text-d-muted">
-                            corr {ranking.correlation.toFixed(3)} ·{' '}
+                            corr{' '}
+                            {formatUiNumber(ranking.correlation, {
+                              maximumFractionDigits: 3,
+                            })}{' '}
+                            ·{' '}
                             {formatProbability(
                               ranking.contribution,
                             )}

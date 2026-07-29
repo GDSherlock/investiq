@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 
 import type { AnalysisChart } from '@/lib/calculation-api-types';
+import { formatUiNumber } from '@/lib/ui-number-format';
 
 const SERIES_COLORS = [
   '#60a5fa',
@@ -106,7 +107,12 @@ export default function PersistedAnalysisChart({
             <BarChart data={rows}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1B2B65" />
               <XAxis dataKey="period" tick={{ fontSize: 9 }} />
-              <YAxis tick={{ fontSize: 9 }} />
+              <YAxis
+                tick={{ fontSize: 9 }}
+                tickFormatter={(value: number) =>
+                  formatUiNumber(value)
+                }
+              />
               <Tooltip
                 contentStyle={{
                   fontSize: 11,
@@ -114,6 +120,10 @@ export default function PersistedAnalysisChart({
                   border: '1px solid #1B2B65',
                   color: '#A3AED0',
                 }}
+                formatter={(value: number, name: string) => [
+                  formatUiNumber(value),
+                  name,
+                ]}
               />
               <Legend wrapperStyle={{ fontSize: 10 }} />
               <ReferenceLine y={0} stroke="#94a3b8" />
@@ -133,7 +143,12 @@ export default function PersistedAnalysisChart({
             <AreaChart data={rows}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1B2B65" />
               <XAxis dataKey="period" tick={{ fontSize: 9 }} />
-              <YAxis tick={{ fontSize: 9 }} />
+              <YAxis
+                tick={{ fontSize: 9 }}
+                tickFormatter={(value: number) =>
+                  formatUiNumber(value)
+                }
+              />
               <Tooltip
                 contentStyle={{
                   fontSize: 11,
@@ -141,6 +156,10 @@ export default function PersistedAnalysisChart({
                   border: '1px solid #1B2B65',
                   color: '#A3AED0',
                 }}
+                formatter={(value: number, name: string) => [
+                  formatUiNumber(value),
+                  name,
+                ]}
               />
               <ReferenceLine y={0} stroke="#94a3b8" />
               <Area
@@ -157,7 +176,12 @@ export default function PersistedAnalysisChart({
             <LineChart data={rows}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1B2B65" />
               <XAxis dataKey="period" tick={{ fontSize: 9 }} />
-              <YAxis tick={{ fontSize: 9 }} />
+              <YAxis
+                tick={{ fontSize: 9 }}
+                tickFormatter={(value: number) =>
+                  formatUiNumber(value)
+                }
+              />
               <Tooltip
                 contentStyle={{
                   fontSize: 11,
@@ -165,6 +189,10 @@ export default function PersistedAnalysisChart({
                   border: '1px solid #1B2B65',
                   color: '#A3AED0',
                 }}
+                formatter={(value: number, name: string) => [
+                  formatUiNumber(value),
+                  name,
+                ]}
               />
               <Legend wrapperStyle={{ fontSize: 10 }} />
               {chart.series.map((item, index) => (

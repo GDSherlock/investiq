@@ -93,7 +93,10 @@ def test_package_keeps_dependencies_and_lint_contract_unchanged() -> None:
 
     assert package["scripts"]["lint"] == "next lint"
     assert package["scripts"]["test"] == (
-        "npm run test:calculation && npm run test:loading"
+        "npm run check:number-format && npm run test:calculation && npm run test:loading"
+    )
+    assert package["scripts"]["check:number-format"] == (
+        "node scripts/check-ui-number-format.mjs"
     )
     assert package["scripts"]["test:loading"] == "node --test tests/*.test.cjs"
     assert "api-proxy.test.js" in package["scripts"]["test:calculation"]

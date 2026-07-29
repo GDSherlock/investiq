@@ -7,6 +7,10 @@ import type {
   ModelDiagnosticsResponse,
 } from '@/lib/calculation-api-types';
 import type { ActiveAnalysisContextValue } from '@/app/ActiveAnalysisContext';
+import {
+  formatAnalysisValue,
+  formatUiNumber,
+} from '@/lib/ui-number-format';
 
 function statusCopy(
   analysis: ActiveAnalysisContextValue,
@@ -105,7 +109,12 @@ export default function AnalysisStatusSidebar({
                     : 'text-d-muted'
                 }`}
               >
-                {kpi.display_value}
+                {formatAnalysisValue(
+                  kpi.role,
+                  kpi.value,
+                  kpi.unit,
+                  kpi.display_value,
+                )}
               </div>
               <div className="text-[8px] text-d-muted truncate">
                 {kpi.validation_status ?? kpi.quality_status}
@@ -135,7 +144,9 @@ export default function AnalysisStatusSidebar({
             <div className="flex justify-between gap-2">
               <span className="text-d-muted">Sheets</span>
               <span className="text-white">
-                {diagnostics.detected_sheets.length}
+                {formatUiNumber(diagnostics.detected_sheets.length, {
+                  maximumFractionDigits: 0,
+                })}
               </span>
             </div>
             <div className="flex justify-between gap-2">
@@ -147,7 +158,9 @@ export default function AnalysisStatusSidebar({
                     : 'text-emerald-400'
                 }
               >
-                {diagnostics.error_count}
+                {formatUiNumber(diagnostics.error_count, {
+                  maximumFractionDigits: 0,
+                })}
               </span>
             </div>
           </div>

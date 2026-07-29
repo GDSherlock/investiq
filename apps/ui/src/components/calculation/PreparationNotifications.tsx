@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import type { PreparationNotification } from '../../lib/model-preparation-view';
+import { formatUiNumber } from '../../lib/ui-number-format';
 
 interface PreparationNotificationsProps {
   notifications: PreparationNotification[];
@@ -92,7 +93,9 @@ export function PreparationNotifications({
                   >
                     {notification.code}
                     {notification.count !== null
-                      ? ` (${notification.count.toLocaleString()})`
+                      ? ` (${formatUiNumber(notification.count, {
+                          maximumFractionDigits: 0,
+                        })})`
                       : ''}
                   </div>
                   <p className="mt-1 text-sm leading-5 text-d-muted">

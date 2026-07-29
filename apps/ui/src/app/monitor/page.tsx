@@ -9,12 +9,19 @@ import {
   AreaChart, Area, ReferenceLine,
 } from 'recharts';
 import FloatingAssistant from '../FloatingAssistant';
+import { formatUiNumber } from '@/lib/ui-number-format';
 
 function fmtPct(v: any): string {
   if (v == null) return '—';
   const n = typeof v === 'number' ? v : parseFloat(v);
   if (isNaN(n)) return String(v);
-  return n < 1 ? `${(n * 100).toFixed(1)}%` : `${n.toFixed(2)}%`;
+  return n < 1
+    ? `${formatUiNumber(n * 100, {
+        maximumFractionDigits: 1,
+      })}%`
+    : `${formatUiNumber(n, {
+        maximumFractionDigits: 2,
+      })}%`;
 }
 
 const STATUS_STYLES: Record<string, { dot: string; text: string }> = {
@@ -105,11 +112,13 @@ export default function MonitorPage() {
       if (isNaN(n)) {
         formatted = String(v);
       } else if (a.unit === '%' || (n > 0 && n < 1)) {
-        formatted = `${(n * 100).toFixed(1)}%`;
+        formatted = `${formatUiNumber(n * 100, {
+          maximumFractionDigits: 1,
+        })}%`;
       } else if (a.unit === '$/MMBtu' || a.unit === '$') {
-        formatted = `$${n}`;
+        formatted = `$${formatUiNumber(n)}`;
       } else {
-        formatted = String(n);
+        formatted = formatUiNumber(n);
       }
       return { label: a.name, value: formatted };
     }).slice(0, 12);
@@ -251,15 +260,15 @@ export default function MonitorPage() {
             <div className="grid grid-cols-4 gap-4">
               <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
                 <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium">Capex Spent</div>
-                <div className="text-2xl font-bold text-white mt-1">${k.capex_spent}M</div>
-                <div className="text-xs text-d-muted mt-0.5">{k.pct_spent}% of ${k.capex_total}M</div>
-                <div className="text-xs text-orange-400 mt-1">▲ {k.overrun_pct}% above plan</div>
+                <div className="text-2xl font-bold text-white mt-1">${formatUiNumber(k.capex_spent)}M</div>
+                <div className="text-xs text-d-muted mt-0.5">{formatUiNumber(k.pct_spent)}% of ${formatUiNumber(k.capex_total)}M</div>
+                <div className="text-xs text-orange-400 mt-1">▲ {formatUiNumber(k.overrun_pct)}% above plan</div>
                 <div className="text-[10px] text-d-muted mt-0.5">{k.overrun_driver}</div>
               </div>
               <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
                 <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium">Cost Overrun</div>
                 <div className={`text-2xl font-bold mt-1 ${k.cost_overrun > 0 ? 'text-orange-400' : 'text-green-400'}`}>
-                  {k.cost_overrun > 0 ? '+' : ''}${k.cost_overrun}M
+                  {k.cost_overrun > 0 ? '+' : ''}${formatUiNumber(k.cost_overrun)}M
                 </div>
               </div>
               <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
@@ -268,15 +277,15 @@ export default function MonitorPage() {
                   {k.schedule_status}
                 </div>
                 <div className="text-xs text-d-muted mt-0.5">
-                  {k.milestones_done} / {k.milestones_total} milestones
+                  {formatUiNumber(k.milestones_done, { maximumFractionDigits: 0 })} / {formatUiNumber(k.milestones_total, { maximumFractionDigits: 0 })} milestones
                 </div>
                 <div className="text-[10px] text-d-muted mt-0.5">Target: {k.target_completion}</div>
               </div>
               <div className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
                 <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium">IRR Reforecast</div>
-                <div className="text-2xl font-bold text-gold-400 mt-1">{k.irr_reforecast}%</div>
+                <div className="text-2xl font-bold text-gold-400 mt-1">{formatUiNumber(k.irr_reforecast)}%</div>
                 <div className={`text-xs mt-0.5 ${k.irr_delta_pp < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                  {k.irr_delta_pp > 0 ? '+' : ''}{k.irr_delta_pp}pp vs base
+                  {k.irr_delta_pp > 0 ? '+' : ''}{formatUiNumber(k.irr_delta_pp)}pp vs base
                 </div>
                 <div className="text-[10px] text-d-muted mt-0.5">{k.irr_driver}</div>
               </div>
@@ -294,8 +303,13 @@ export default function MonitorPage() {
                   <AreaChart data={capexChartData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1B2B65" />
                     <XAxis dataKey="quarter" tick={{ fontSize: 9 }} />
-                    <YAxis tick={{ fontSize: 9 }} />
-                    <Tooltip contentStyle={{ fontSize: 11, backgroundColor: "#111C44", border: "1px solid #1B2B65", color: "#A3AED0" }} formatter={(v: number) => v != null ? [`$${v}M`] : ['—']} />
+                    <YAxis
+                      tick={{ fontSize: 9 }}
+                      tickFormatter={(value: number) =>
+                        `$${formatUiNumber(value)}M`
+                      }
+                    />
+                    <Tooltip contentStyle={{ fontSize: 11, backgroundColor: "#111C44", border: "1px solid #1B2B65", color: "#A3AED0" }} formatter={(v: number, name: string) => [`$${formatUiNumber(v)}M`, name]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
                     <defs>
                       <linearGradient id="planGrad" x1="0" y1="0" x2="0" y2="1">
@@ -327,8 +341,14 @@ export default function MonitorPage() {
                   <LineChart data={irrChartData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1B2B65" />
                     <XAxis dataKey="quarter" tick={{ fontSize: 9 }} />
-                    <YAxis tick={{ fontSize: 9 }} domain={['auto', 'auto']} />
-                    <Tooltip contentStyle={{ fontSize: 11, backgroundColor: "#111C44", border: "1px solid #1B2B65", color: "#A3AED0" }} formatter={(v: number, name: string) => [`${v.toFixed(2)}%`, name]} />
+                    <YAxis
+                      tick={{ fontSize: 9 }}
+                      domain={['auto', 'auto']}
+                      tickFormatter={(value: number) =>
+                        `${formatUiNumber(value)}%`
+                      }
+                    />
+                    <Tooltip contentStyle={{ fontSize: 11, backgroundColor: "#111C44", border: "1px solid #1B2B65", color: "#A3AED0" }} formatter={(v: number, name: string) => [`${formatUiNumber(v, { maximumFractionDigits: 2 })}%`, name]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
                     <Line type="monotone" dataKey="IRR forecast" stroke="#3b82f6" strokeWidth={2.5}
                       dot={{ r: 4, fill: '#3b82f6', stroke: '#fff', strokeWidth: 2 }} />

@@ -9,6 +9,7 @@ from alembic.script import ScriptDirectory
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine, inspect
+import yaml
 
 from apps.api.app.schemas import MonteCarloRunCreateRequest
 
@@ -89,3 +90,28 @@ def test_monte_carlo_migration_creates_queue_configuration_and_artifact(
         } <= set(inspect(engine).get_table_names())
     finally:
         engine.dispose()
+
+
+def test_compose_waits_for_the_migrating_api_before_worker_and_ui_start() -> None:
+    compose_path = Path(__file__).parents[1] / "docker-compose.yml"
+    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    assert services["api"]["healthcheck"]["test"] == [
+        "CMD",
+        "python",
+        "-c",
+        (
+            "import urllib.request; "
+            "urllib.request.urlopen('http://localhost:8000/health', timeout=2)"
+        ),
+    ]
+    assert services["analysis-worker"]["command"] == [
+        "python",
+        "-m",
+        "apps.api.app.analysis_worker",
+    ]
+    assert services["analysis-worker"]["depends_on"]["api"]["condition"] == (
+        "service_healthy"
+    )
+    assert services["ui"]["depends_on"]["api"]["condition"] == "service_healthy"

@@ -30,17 +30,24 @@ function loadDisplayComponents() {
   const apiTypes = loadTypeScriptModule(
     path.join(__dirname, '..', 'src', 'lib', 'calculation-api-types.ts'),
   );
+  const numberFormat = loadTypeScriptModule(
+    path.join(__dirname, '..', 'src', 'lib', 'ui-number-format.ts'),
+  );
   const view = loadTypeScriptModule(
     path.join(__dirname, '..', 'src', 'lib', 'model-preparation-view.ts'),
     {
       './calculation-api-types': apiTypes,
+      './ui-number-format': numberFormat,
     },
   );
   const summary = loadTypeScriptModule(summaryPath, {
     './TechnicalDetails': details,
     '../../lib/model-preparation-view': view,
+    '../../lib/ui-number-format': numberFormat,
   });
-  const notifications = loadTypeScriptModule(notificationsPath);
+  const notifications = loadTypeScriptModule(notificationsPath, {
+    '../../lib/ui-number-format': numberFormat,
+  });
   return { ...summary, ...notifications, ...details };
 }
 

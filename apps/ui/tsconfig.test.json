@@ -26,6 +26,8 @@
     "src/lib/model-preparation-view.test.ts",
     "src/lib/sensitivity-auto-analysis.ts",
     "src/lib/sensitivity-auto-analysis-scheduler.test.ts",
-    "src/lib/sensitivity-tornado-geometry.test.ts"
+    "src/lib/sensitivity-tornado-geometry.test.ts",
+    "src/lib/ui-number-format.test.ts",
+    "src/lib/ui-number-format.ts"
   ]
 }

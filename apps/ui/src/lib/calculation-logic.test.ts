@@ -455,7 +455,11 @@ test('baseline and canonical parameter requests preserve string numbers', () => 
     idempotency_key: null,
   });
   assert.deepEqual(
-    buildParameterOverrideRequest('graph-version', 'parameter-uuid', ' 63 '),
+    buildParameterOverrideRequest(
+      'graph-version',
+      'parameter-uuid',
+      ' 0.123456789 ',
+    ),
     {
       graph_version_id: 'graph-version',
       overrides: [
@@ -466,7 +470,7 @@ test('baseline and canonical parameter requests preserve string numbers', () => 
           },
           value: {
             value_type: 'number',
-            value: '63',
+            value: '0.123456789',
           },
         },
       ],

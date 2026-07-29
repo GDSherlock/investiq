@@ -3,6 +3,7 @@ import {
   formatSupportedPercentage,
   type TechnicalDetail,
 } from '../../lib/model-preparation-view';
+import { formatUiNumber } from '../../lib/ui-number-format';
 
 import { TechnicalDetails } from './TechnicalDetails';
 
@@ -120,25 +121,33 @@ export function CalculationRunSummary({
         <Metric
           icon="formula"
           label="Formulas"
-          value={summary.formula_cells_total.toLocaleString()}
+          value={formatUiNumber(summary.formula_cells_total, {
+            maximumFractionDigits: 0,
+          })}
           note="Total"
         />
         <Metric
           icon="supported"
           label="Supported"
-          value={summary.formula_cells_supported.toLocaleString()}
+          value={formatUiNumber(summary.formula_cells_supported, {
+            maximumFractionDigits: 0,
+          })}
           note={supportedPercentage}
         />
         <Metric
           icon="nodes"
           label="Graph nodes"
-          value={summary.graph_nodes.toLocaleString()}
+          value={formatUiNumber(summary.graph_nodes, {
+            maximumFractionDigits: 0,
+          })}
           note="Total"
         />
         <Metric
           icon="edges"
           label="Graph edges"
-          value={summary.graph_edges.toLocaleString()}
+          value={formatUiNumber(summary.graph_edges, {
+            maximumFractionDigits: 0,
+          })}
           note="Total"
         />
       </div>

@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "npm run test:calculation && npm run test:loading",
-    "test:calculation": "test_dir=$(mktemp -d /tmp/investiq-ui-calculation-tests.XXXXXX) && trap 'test_status=$?; case \"$test_dir\" in /tmp/investiq-ui-calculation-tests.*) rm -r -- \"$test_dir\";; esac; exit \"$test_status\"' EXIT && npm exec -- tsc -p tsconfig.test.json --outDir \"$test_dir\" && NODE_PATH=./node_modules node --test \"$test_dir/src/lib/api-proxy.test.js\" \"$test_dir/src/lib/active-analysis.test.js\" \"$test_dir/src/lib/calculation-logic.test.js\" \"$test_dir/src/lib/calculation-storage-transaction.test.js\" \"$test_dir/src/lib/model-preparation-view.test.js\" \"$test_dir/src/lib/sensitivity-auto-analysis-scheduler.test.js\" \"$test_dir/src/lib/sensitivity-tornado-geometry.test.js\"",
+    "check:number-format": "node scripts/check-ui-number-format.mjs",
+    "test": "npm run check:number-format && npm run test:calculation && npm run test:loading",
+    "test:calculation": "test_dir=$(mktemp -d /tmp/investiq-ui-calculation-tests.XXXXXX) && trap 'test_status=$?; case \"$test_dir\" in /tmp/investiq-ui-calculation-tests.*) rm -r -- \"$test_dir\";; esac; exit \"$test_status\"' EXIT && npm exec -- tsc -p tsconfig.test.json --outDir \"$test_dir\" && NODE_PATH=./node_modules node --test \"$test_dir/src/lib/api-proxy.test.js\" \"$test_dir/src/lib/active-analysis.test.js\" \"$test_dir/src/lib/calculation-logic.test.js\" \"$test_dir/src/lib/calculation-storage-transaction.test.js\" \"$test_dir/src/lib/model-preparation-view.test.js\" \"$test_dir/src/lib/sensitivity-auto-analysis-scheduler.test.js\" \"$test_dir/src/lib/sensitivity-tornado-geometry.test.js\" \"$test_dir/src/lib/ui-number-format.test.js\"",
     "test:loading": "node --test tests/*.test.cjs"
   },
   "dependencies": {

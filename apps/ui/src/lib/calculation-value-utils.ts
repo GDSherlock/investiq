@@ -2,6 +2,7 @@ import type {
   CalculationRunValue,
   CalculationTypedValue,
 } from './calculation-api-types';
+import { formatUiNumber } from './ui-number-format';
 
 export function typedValuesEqual(
   left: CalculationTypedValue | null,
@@ -70,6 +71,10 @@ export function formatTypedValue(
     return 'No persisted value';
   }
   switch (value.value_type) {
+    case 'number':
+      return formatUiNumber(value.value, {
+        fallback: value.value,
+      });
     case 'blank':
       return '(blank)';
     case 'boolean':

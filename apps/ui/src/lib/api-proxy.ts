@@ -4,17 +4,33 @@ const UPSTREAM_TIMEOUT_CODES = new Set([
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT',
 ]);
+const UPSTREAM_UNAVAILABLE_CODES = new Set([
+  'ENOTFOUND',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-export function isUpstreamTimeout(error: unknown): boolean {
+function upstreamErrorCode(error: unknown): string | null {
   if (!isRecord(error) || !isRecord(error.cause)) {
-    return false;
+    return null;
   }
   const code = error.cause.code;
-  return typeof code === 'string' && UPSTREAM_TIMEOUT_CODES.has(code);
+  return typeof code === 'string' ? code : null;
+}
+
+export function isUpstreamTimeout(error: unknown): boolean {
+  const code = upstreamErrorCode(error);
+  return code !== null && UPSTREAM_TIMEOUT_CODES.has(code);
+}
+
+export function isUpstreamUnavailable(error: unknown): boolean {
+  const code = upstreamErrorCode(error);
+  return code !== null && UPSTREAM_UNAVAILABLE_CODES.has(code);
 }
 
 export function buildUploadProxyTimeoutResponse(): Response {
@@ -34,4 +50,35 @@ export function buildUploadProxyTimeoutResponse(): Response {
       headers: { 'Cache-Control': 'no-store' },
     },
   );
+}
+
+function buildApiUnavailableResponse(): Response {
+  return Response.json(
+    {
+      detail: {
+        code: 'API_UNAVAILABLE',
+        message:
+          'Backend API is unavailable. Wait for the service to become healthy, then retry.',
+        retryable: true,
+        resource_id: null,
+      },
+    },
+    {
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: { 'Cache-Control': 'no-store' },
+    },
+  );
+}
+
+export function buildUploadProxyErrorResponse(
+  error: unknown,
+): Response | null {
+  if (isUpstreamTimeout(error)) {
+    return buildUploadProxyTimeoutResponse();
+  }
+  if (isUpstreamUnavailable(error)) {
+    return buildApiUnavailableResponse();
+  }
+  return null;
 }

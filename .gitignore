@@ -23,3 +23,6 @@ uploads/
 
 # Workbook-agent generated reports
 experiments/workbook_agent_poc/results/
+*.xlsx
+*.log
+docs

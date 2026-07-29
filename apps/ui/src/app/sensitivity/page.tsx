@@ -59,6 +59,7 @@ import {
 } from '@/lib/sensitivity-dashboard-view-model';
 import { buildSensitivityOutputView } from '@/lib/sensitivity-output-adapter';
 import { estimateSensitivityKpis } from '@/lib/sensitivity-output-adapter';
+import { formatUiNumber as formatNumber } from '@/lib/ui-number-format';
 import {
   AutomaticSensitivityAnalysisScheduler,
   buildInitialSensitivityActionKey,
@@ -123,13 +124,6 @@ function isPercentage(
   numberFormat: string | null,
 ): boolean {
   return unit?.trim() === '%' || numberFormat?.includes('%') === true;
-}
-
-function formatNumber(value: number, maximumFractionDigits = 4): string {
-  return value.toLocaleString(undefined, {
-    maximumFractionDigits,
-    minimumFractionDigits: 0,
-  });
 }
 
 function formatNumericOutput(

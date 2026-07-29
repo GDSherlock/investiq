@@ -19,6 +19,7 @@ import {
   type StorageLike,
 } from './calculation-storage';
 import type { SensitivityKpi } from './sensitivity-output-adapter';
+import { formatUiNumber } from './ui-number-format';
 
 /** Standard UI cap; the calculation API remains compatible with up to 12. */
 export const DEFAULT_TORNADO_DRIVER_LIMIT = 8;
@@ -743,9 +744,8 @@ export function formatSensitivityDelta(
     unit?.trim() === '%' || numberFormat?.includes('%') === true;
   const displayedValue = percentage ? value * 100 : value;
   const sign = displayedValue > 0 ? '+' : '';
-  const formatted = displayedValue.toLocaleString('en-US', {
-    maximumFractionDigits: 4,
-    minimumFractionDigits: 0,
+  const formatted = formatUiNumber(displayedValue, {
+    locales: 'en-US',
   });
   if (percentage) {
     return `${sign}${formatted} pp`;

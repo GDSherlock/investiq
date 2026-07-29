@@ -8,8 +8,7 @@ import { Agent } from 'undici';
 
 import {
   MODEL_UPLOAD_PROXY_TIMEOUT_MS,
-  buildUploadProxyTimeoutResponse,
-  isUpstreamTimeout,
+  buildUploadProxyErrorResponse,
 } from '@/lib/api-proxy';
 
 const API_BACKEND = process.env.API_PROXY_TARGET || 'http://api:8000';
@@ -51,8 +50,11 @@ async function proxyRequest(request: Request, { params }: { params: { path: stri
   try {
     response = await fetch(targetUrl, fetchOptions);
   } catch (error) {
-    if (isModelUpload && isUpstreamTimeout(error)) {
-      return buildUploadProxyTimeoutResponse();
+    if (isModelUpload) {
+      const proxyErrorResponse = buildUploadProxyErrorResponse(error);
+      if (proxyErrorResponse !== null) {
+        return proxyErrorResponse;
+      }
     }
     throw error;
   }

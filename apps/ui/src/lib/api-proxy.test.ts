@@ -3,7 +3,9 @@ import test from 'node:test';
 
 import {
   MODEL_UPLOAD_PROXY_TIMEOUT_MS,
+  buildUploadProxyErrorResponse,
   buildUploadProxyTimeoutResponse,
+  isUpstreamUnavailable,
   isUpstreamTimeout,
 } from './api-proxy';
 
@@ -37,4 +39,48 @@ test('upload proxy timeout response is structured and does not invite duplicate 
       resource_id: null,
     },
   });
+});
+
+test('upload proxy classifies backend connection failures as unavailable', () => {
+  for (const code of [
+    'ENOTFOUND',
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EHOSTUNREACH',
+  ]) {
+    assert.equal(isUpstreamUnavailable({ cause: { code } }), true);
+  }
+  assert.equal(
+    isUpstreamUnavailable({ cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } }),
+    false,
+  );
+  assert.equal(isUpstreamUnavailable(new Error('unrelated')), false);
+});
+
+test('upload proxy returns a retryable structured 503 when the API is unavailable', async () => {
+  const response = buildUploadProxyErrorResponse({
+    cause: { code: 'ENOTFOUND' },
+  });
+
+  assert.ok(response);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    detail: {
+      code: 'API_UNAVAILABLE',
+      message:
+        'Backend API is unavailable. Wait for the service to become healthy, then retry.',
+      retryable: true,
+      resource_id: null,
+    },
+  });
+});
+
+test('upload proxy preserves timeout handling and ignores unrelated failures', () => {
+  assert.equal(
+    buildUploadProxyErrorResponse({
+      cause: { code: 'UND_ERR_BODY_TIMEOUT' },
+    })?.status,
+    504,
+  );
+  assert.equal(buildUploadProxyErrorResponse(new Error('unrelated')), null);
 });

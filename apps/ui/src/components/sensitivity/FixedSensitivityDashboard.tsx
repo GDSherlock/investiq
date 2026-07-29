@@ -10,6 +10,7 @@ import type {
   SensitivityMatrixView,
   SensitivityTornadoRow,
 } from '../../lib/sensitivity-analysis';
+import { formatUiNumber as formatNumber } from '../../lib/ui-number-format';
 
 import { SensitivityAssumptionPanel } from './SensitivityAssumptionPanel';
 import { SensitivityTornadoChart } from './SensitivityTornadoChart';
@@ -58,13 +59,6 @@ function isPercentage(
   return unit?.trim() === '%' || numberFormat?.includes('%') === true;
 }
 
-function formatNumber(value: number, maximumFractionDigits = 4): string {
-  return value.toLocaleString(undefined, {
-    maximumFractionDigits,
-    minimumFractionDigits: 0,
-  });
-}
-
 function formatKpiValue(
   numericValue: number | null,
   unit: string | null,
@@ -103,7 +97,7 @@ function formatAssumptionValue(
     return 'Unavailable';
   }
   const displayed = assumption.unit?.trim() === '%' ? numeric * 100 : numeric;
-  const formatted = formatNumber(displayed, 6);
+  const formatted = formatNumber(displayed);
   return assumption.unit ? `${formatted} ${assumption.unit}` : formatted;
 }
 

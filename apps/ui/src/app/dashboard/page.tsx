@@ -23,6 +23,10 @@ import type {
   ModelDiagnosticsResponse,
   OverviewAnalysisResponse,
 } from '@/lib/calculation-api-types';
+import {
+  formatAnalysisValue,
+  formatUiNumber,
+} from '@/lib/ui-number-format';
 
 const CAPITAL_COLORS = ['#3b82f6', '#ef4444', '#34d399'];
 
@@ -101,6 +105,10 @@ function CapitalStructure({ chart }: { chart: AnalysisChart }) {
                   border: '1px solid #1B2B65',
                   color: '#A3AED0',
                 }}
+                formatter={(value: number, name: string) => [
+                  formatUiNumber(value),
+                  name,
+                ]}
               />
             </PieChart>
           </ResponsiveContainer>
@@ -145,7 +153,12 @@ function KpiCard({ kpi }: { kpi: AnalysisKpi }) {
           available ? 'text-white' : 'text-d-muted'
         }`}
       >
-        {kpi.display_value}
+        {formatAnalysisValue(
+          kpi.role,
+          kpi.value,
+          kpi.unit,
+          kpi.display_value,
+        )}
       </div>
       <div
         className={`text-[10px] mt-1 truncate ${
@@ -156,7 +169,12 @@ function KpiCard({ kpi }: { kpi: AnalysisKpi }) {
       </div>
       <div className="text-[10px] text-d-muted truncate">
         {kpi.benchmark
-          ? `${kpi.benchmark.role.replaceAll('_', ' ')}: ${kpi.benchmark.display_value}`
+          ? `${kpi.benchmark.role.replaceAll('_', ' ')}: ${formatAnalysisValue(
+              kpi.benchmark.role,
+              kpi.benchmark.value,
+              null,
+              kpi.benchmark.display_value,
+            )}`
           : kpi.validation_status ?? kpi.quality_status}
       </div>
     </section>
@@ -327,12 +345,18 @@ export default function DashboardPage() {
                 {[
                   ['Model status', diagnostics.status],
                   ['Validation', diagnostics.validation_status],
-                  ['Errors', String(diagnostics.error_count)],
+                  [
+                    'Errors',
+                    formatUiNumber(diagnostics.error_count, {
+                      maximumFractionDigits: 0,
+                    }),
+                  ],
                   [
                     'Time-series fields',
-                    String(
+                    formatUiNumber(
                       Object.keys(diagnostics.time_series_summary)
                         .length,
+                      { maximumFractionDigits: 0 },
                     ),
                   ],
                 ].map(([label, value]) => (

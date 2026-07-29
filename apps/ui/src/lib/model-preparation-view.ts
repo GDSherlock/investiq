@@ -4,6 +4,7 @@ import {
   type CalculationRunResponse,
   type WorkbookValidationResponse,
 } from './calculation-api-types';
+import { formatUiNumber } from './ui-number-format';
 
 export const DEFAULT_MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 
@@ -104,7 +105,9 @@ export function formatSupportedPercentage(
   if (total <= 0) {
     return '—';
   }
-  return `${((supported / total) * 100).toFixed(1)}%`;
+  return `${formatUiNumber((supported / total) * 100, {
+    maximumFractionDigits: 1,
+  })}%`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -309,7 +312,11 @@ function appendDetail(
   if (value === null || value === undefined || value === '') {
     return;
   }
-  details.push({ label, value: `${value}${suffix}` });
+  const displayedValue =
+    typeof value === 'number'
+      ? formatUiNumber(value)
+      : value;
+  details.push({ label, value: `${displayedValue}${suffix}` });
 }
 
 export function buildTechnicalDetails({

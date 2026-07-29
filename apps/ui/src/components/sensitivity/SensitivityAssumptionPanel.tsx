@@ -5,6 +5,7 @@ import {
   deriveSliderSpec,
   type SensitivityAssumption,
 } from '../../lib/sensitivity-analysis';
+import { formatUiNumber } from '../../lib/ui-number-format';
 
 interface SensitivityAssumptionPanelProps {
   assumptions: SensitivityAssumption[];
@@ -42,9 +43,7 @@ function displayValue(value: string, unit: string | null): string {
     return 'Unavailable';
   }
   const displayedValue = unit?.trim() === '%' ? numericValue * 100 : numericValue;
-  const formatted = displayedValue.toLocaleString(undefined, {
-    maximumFractionDigits: 6,
-  });
+  const formatted = formatUiNumber(displayedValue);
   return unit ? `${formatted} ${unit}` : formatted;
 }
 

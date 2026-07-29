@@ -29,8 +29,6 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class _ToolCallInspection:
     arguments: dict[str, Any] | None
-    call_id: str | None
-    has_function_calls: bool
 
 
 class PartitionDriverError(RuntimeError):
@@ -57,6 +55,14 @@ class PartitionStructuredOutputError(PartitionDriverError):
     code = "partition_structured_output_invalid"
 
 
+class PartitionIncompleteResponseError(PartitionDriverError):
+    code = "partition_output_incomplete"
+
+    def __init__(self, message, *, reason=None, request_id=None):
+        self.reason = reason
+        super().__init__(message, request_id=request_id)
+
+
 class PartitionDriver(Protocol):
     call_count: int
     max_calls_per_operation: int
@@ -75,12 +81,24 @@ class PartitionDriver(Protocol):
 
 def _flatten_tool(tool: dict[str, Any]) -> dict[str, Any]:
     function = tool["function"]
-    return {
+    flattened = {
         "type": tool["type"],
         "name": function["name"],
         "description": function["description"],
         "parameters": function["parameters"],
     }
+    if "strict" in function:
+        flattened["strict"] = function["strict"]
+    return flattened
+
+
+def _incomplete_reason(response):
+    details = getattr(response, "incomplete_details", None)
+    if isinstance(details, dict):
+        reason = details.get("reason")
+    else:
+        reason = getattr(details, "reason", None)
+    return reason if isinstance(reason, str) else None
 
 
 def _error_code(exc: OpenAIError) -> str | None:
@@ -122,7 +140,7 @@ class AzurePartitionDriver:
         )
         self._max_retries_per_call = max_retries_per_call
         self._sleeper = sleeper
-        self.max_calls_per_operation = 2 * (max_retries_per_call + 1)
+        self.max_calls_per_operation = max_retries_per_call + 1
         self.call_count = 0
         self.usage_prompt = 0
         self.usage_completion = 0
@@ -196,87 +214,68 @@ class AzurePartitionDriver:
             Callable[[dict[str, Any]], PartitionResultIssue | None] | None
         ) = None,
     ) -> dict[str, Any]:
-        previous_response_id: str | None = None
-        next_input = initial_input
-        for structured_attempt in range(2):
-            kwargs: dict[str, Any] = {
-                "model": self._deployment,
-                "input": next_input,
-                "instructions": instructions,
-                "tools": [_flatten_tool(tool)],
-                "tool_choice": {
-                    "type": "function",
-                    "name": expected_tool_name,
-                },
-                "parallel_tool_calls": False,
-                "max_output_tokens": self._max_output_tokens,
-                "reasoning": {"effort": self._reasoning_effort},
-            }
-            if previous_response_id is not None:
-                kwargs["previous_response_id"] = previous_response_id
-            response = self._call_with_retry(kwargs, operation_id=operation_id)
-            inspection = self._inspect_tool_result(
-                response,
-                expected_tool_name=expected_tool_name,
-                required_fields=required_fields,
-            )
-            parsed = inspection.arguments
-            issue = (
-                payload_validator(parsed)
-                if parsed is not None and payload_validator is not None
-                else None
-            )
-            if parsed is not None and issue is None:
-                return parsed
-            validation_code = (
-                issue.code
-                if issue is not None
-                else "partition_tool_call_invalid"
-            )
+        kwargs = {
+            "model": self._deployment,
+            "input": initial_input,
+            "instructions": instructions,
+            "tools": [_flatten_tool(tool)],
+            "tool_choice": {
+                "type": "function",
+                "name": expected_tool_name,
+            },
+            "parallel_tool_calls": False,
+            "max_output_tokens": self._max_output_tokens,
+            "reasoning": {"effort": self._reasoning_effort},
+        }
+        response = self._call_with_retry(kwargs, operation_id=operation_id)
+        request_id = getattr(response, "_request_id", None)
+        response_status = getattr(response, "status", None)
+        incomplete_reason = _incomplete_reason(response)
+        if response_status == "incomplete":
             logger.warning(
-                "partition_structured_output_rejected operation_id=%s "
-                "validation_code=%s structured_attempt=%s",
+                "partition_response_incomplete operation_id=%s status=%s "
+                "reason=%s request_id=%s call_count=%s",
                 operation_id,
-                validation_code,
-                structured_attempt,
+                response_status,
+                incomplete_reason,
+                request_id,
+                self.call_count,
             )
-            if structured_attempt == 0:
-                if (
-                    inspection.has_function_calls
-                    and inspection.call_id is None
-                ):
-                    raise PartitionStructuredOutputError(
-                        "Azure response contained an unacknowledgeable "
-                        "function call."
-                    )
-                previous_response_id = response.id
-                repair_instruction = (
-                    issue.repair_instruction
-                    if issue is not None
-                    else (
-                        f"Return exactly one {expected_tool_name} function call "
-                        "with every required field."
-                    )
-                )
-                if inspection.call_id is not None:
-                    next_input = [{
-                        "type": "function_call_output",
-                        "call_id": inspection.call_id,
-                        "output": json.dumps(
-                            {
-                                "accepted": False,
-                                "validation_code": validation_code,
-                                "repair_instruction": repair_instruction,
-                            },
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                    }]
-                else:
-                    next_input = [{
-                        "role": "user",
-                        "content": repair_instruction,
-                    }]
+            raise PartitionIncompleteResponseError(
+                "Azure returned an incomplete structured response.",
+                reason=incomplete_reason,
+                request_id=request_id,
+            )
+
+        inspection = self._inspect_tool_result(
+            response,
+            expected_tool_name=expected_tool_name,
+            required_fields=required_fields,
+        )
+        parsed = inspection.arguments
+        issue = (
+            payload_validator(parsed)
+            if parsed is not None and payload_validator is not None
+            else None
+        )
+        if parsed is not None and issue is None:
+            return parsed
+
+        validation_code = (
+            issue.code if issue is not None else "partition_tool_call_invalid"
+        )
+        field_path = issue.field_path if issue is not None else "<function_call>"
+        logger.warning(
+            "partition_structured_output_rejected operation_id=%s "
+            "response_status=%s validation_code=%s field_path=%s "
+            "request_id=%s call_count=%s",
+            operation_id,
+            response_status,
+            validation_code,
+            field_path,
+            request_id,
+            self.call_count,
+        )
         raise PartitionStructuredOutputError(
             "Azure response did not contain a valid structured partition result."
         )
@@ -367,17 +366,9 @@ class AzurePartitionDriver:
         if len(function_calls) != 1 or len(expected_calls) != 1:
             return _ToolCallInspection(
                 arguments=None,
-                call_id=None,
-                has_function_calls=bool(function_calls),
             )
 
         call = expected_calls[0]
-        raw_call_id = getattr(call, "call_id", None)
-        call_id = (
-            raw_call_id.strip()
-            if isinstance(raw_call_id, str) and raw_call_id.strip()
-            else None
-        )
         try:
             parsed = json.loads(call.arguments or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -386,8 +377,6 @@ class AzurePartitionDriver:
             parsed = None
         return _ToolCallInspection(
             arguments=parsed,
-            call_id=call_id,
-            has_function_calls=True,
         )
 
 
@@ -397,6 +386,7 @@ __all__ = [
     "PartitionContextLimitError",
     "PartitionDriver",
     "PartitionDriverError",
+    "PartitionIncompleteResponseError",
     "PartitionStructuredOutputError",
     "PartitionTransientError",
 ]

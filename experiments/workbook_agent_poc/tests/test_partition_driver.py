@@ -16,8 +16,10 @@ from partition_driver import (
     AzurePartitionDriver,
     PartitionAuthenticationError,
     PartitionContextLimitError,
+    PartitionIncompleteResponseError,
     PartitionStructuredOutputError,
 )
+from partition_contract import PARTITION_RESULT_BUCKETS
 from partition_planner import WorkbookPartition
 
 
@@ -69,8 +71,7 @@ def _partition_args(partition):
         "sheet_name": partition.sheet_name,
         "primary_range": partition.primary_range,
         "result": {
-            "all_assumption_candidates": [],
-            "output_candidates": [],
+            bucket: [] for bucket in PARTITION_RESULT_BUCKETS
         },
     }
 
@@ -164,6 +165,8 @@ def test_each_partition_request_starts_without_previous_response_id(monkeypatch)
         for body in bodies
     )
     assert all(body["parallel_tool_calls"] is False for body in bodies)
+    assert all(body["tools"][0]["strict"] is True for body in bodies)
+    assert driver.max_calls_per_operation == 3
 
 
 def test_driver_consumes_deployment_output_and_reasoning_environment(monkeypatch):
@@ -190,46 +193,32 @@ def test_driver_consumes_deployment_output_and_reasoning_environment(monkeypatch
     assert driver.request_ids == ["request-resp-config"]
 
 
-def test_invalid_output_gets_one_same_partition_correction_only(monkeypatch):
-    first = _partition("partition-first", "A1:B2")
-    second = _partition("partition-second", "A3:B4")
+def test_missing_function_call_fails_after_one_completed_response(monkeypatch):
+    partition = _partition("partition-invalid", "A1:B2")
     bodies = []
 
     def handler(request):
-        body = json.loads(request.content)
-        bodies.append(body)
-        if len(bodies) == 1:
-            return httpx.Response(
-                200,
-                request=request,
-                json={
-                    "id": "resp-invalid",
-                    "object": "response",
-                    "created_at": 0,
-                    "model": "custom-full-deployment",
-                    "output": [],
-                },
-            )
-        partition = first if len(bodies) == 2 else second
-        return _response(
-            request,
-            response_id=f"resp-{len(bodies)}",
-            tool_name="submit_partition_result",
-            arguments=_partition_args(partition),
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "resp-invalid",
+                "object": "response",
+                "created_at": 0,
+                "model": "custom-full-deployment",
+                "status": "completed",
+                "output": [],
+            },
         )
 
     driver = _driver(monkeypatch, handler)
-    driver.extract(first, _envelope(first))
-    driver.extract(second, _envelope(second))
 
-    assert bodies[1]["previous_response_id"] == "resp-invalid"
-    assert bodies[1]["input"][0]["role"] == "user"
-    assert (
-        bodies[1]["input"][0]["content"]
-        == "Return exactly one submit_partition_result function call "
-        "with every required field."
-    )
-    assert "previous_response_id" not in bodies[2]
+    with pytest.raises(PartitionStructuredOutputError):
+        driver.extract(partition, _envelope(partition))
+
+    assert len(bodies) == 1
+    assert "previous_response_id" not in bodies[0]
 
 
 def test_missing_candidate_source_returns_without_correction(monkeypatch):
@@ -358,50 +347,68 @@ def test_multiple_function_calls_fail_without_correction(monkeypatch):
     assert driver.call_count == 1
 
 
-def test_malformed_arguments_get_function_output_correction(monkeypatch):
+def test_malformed_arguments_fail_after_one_completed_response(monkeypatch):
     partition = _partition("partition-malformed-arguments", "A1:B2")
     bodies = []
 
     def handler(request):
-        body = json.loads(request.content)
-        bodies.append(body)
-        if len(bodies) == 1:
-            return httpx.Response(
-                200,
-                request=request,
-                json={
-                    "id": "resp-malformed",
-                    "object": "response",
-                    "created_at": 0,
-                    "model": "custom-full-deployment",
-                    "output": [{
-                        "id": "fc-malformed",
-                        "type": "function_call",
-                        "call_id": "call-malformed",
-                        "name": "submit_partition_result",
-                        "arguments": "{",
-                    }],
-                },
-            )
-        return _response(
-            request,
-            response_id="resp-malformed-corrected",
-            tool_name="submit_partition_result",
-            arguments=_partition_args(partition),
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "resp-malformed",
+                "object": "response",
+                "created_at": 0,
+                "model": "custom-full-deployment",
+                "status": "completed",
+                "output": [{
+                    "id": "fc-malformed",
+                    "type": "function_call",
+                    "call_id": "call-malformed",
+                    "name": "submit_partition_result",
+                    "arguments": "{",
+                }],
+            },
         )
 
-    result = _driver(monkeypatch, handler).extract(
-        partition,
-        _envelope(partition),
-    )
+    driver = _driver(monkeypatch, handler)
 
-    assert result["partition_id"] == partition.partition_id
-    assert bodies[1]["previous_response_id"] == "resp-malformed"
-    correction = bodies[1]["input"][0]
-    assert correction["type"] == "function_call_output"
-    assert correction["call_id"] == "call-malformed"
-    rejection = json.loads(correction["output"])
-    assert rejection["validation_code"] == "partition_tool_call_invalid"
+    with pytest.raises(PartitionStructuredOutputError):
+        driver.extract(partition, _envelope(partition))
+
+    assert len(bodies) == 1
+
+
+def test_missing_required_bucket_fails_once_with_safe_field_path(
+    monkeypatch,
+    caplog,
+):
+    partition = _partition("partition-missing-bucket", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        arguments = _partition_args(partition)
+        arguments["result"].pop("output_candidates")
+        return _response(
+            request,
+            response_id="resp-missing-bucket",
+            tool_name="submit_partition_result",
+            arguments=arguments,
+        )
+
+    caplog.set_level(logging.WARNING)
+    driver = _driver(monkeypatch, handler)
+
+    with pytest.raises(PartitionStructuredOutputError):
+        driver.extract(partition, _envelope(partition))
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert len(bodies) == 1
+    assert "partition_bucket_missing" in rendered
+    assert "result.output_candidates" in rendered
+    assert "request-resp-missing-bucket" in rendered
 
 
 def test_invalid_candidate_source_shape_is_not_retried(monkeypatch):
@@ -506,6 +513,36 @@ def test_context_length_error_is_typed_and_not_retried(monkeypatch):
     assert driver.call_count == 1
 
 
+def test_incomplete_output_is_typed_and_not_model_retried(monkeypatch):
+    partition = _partition("partition-incomplete", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": "resp-incomplete",
+                "object": "response",
+                "created_at": 0,
+                "model": "custom-full-deployment",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [],
+            },
+            headers={"x-request-id": "request-incomplete"},
+        )
+
+    driver = _driver(monkeypatch, handler)
+
+    with pytest.raises(PartitionIncompleteResponseError) as exc:
+        driver.extract(partition, _envelope(partition))
+
+    assert exc.value.reason == "max_output_tokens"
+    assert len(bodies) == 1
+
+
 @pytest.mark.parametrize("status_code", [429, 500, 502, 503])
 def test_transient_errors_use_bounded_retry(monkeypatch, status_code):
     partition = _partition(f"partition-{status_code}", "A1:B2")
@@ -533,6 +570,7 @@ def test_transient_errors_use_bounded_retry(monkeypatch, status_code):
         partition.partition_id
     )
     assert driver.call_count == 2
+    assert driver.max_calls_per_operation == 3
 
 
 def test_conflict_resolution_uses_independent_bounded_tool(monkeypatch):

@@ -14,6 +14,7 @@ from partition_driver import (
     PartitionContextLimitError,
     PartitionDriver,
     PartitionDriverError,
+    PartitionRefusalError,
     PartitionStructuredOutputError,
     PartitionTransientError,
 )
@@ -226,6 +227,8 @@ def run_partitioned_extraction(
         except PartitionAuthenticationError as exc:
             fail(exc.code, azure_failure=True, cause=exc)
         except PartitionTransientError as exc:
+            fail(exc.code, azure_failure=True, cause=exc)
+        except PartitionRefusalError as exc:
             fail(exc.code, azure_failure=True, cause=exc)
         except PartitionDriverError as exc:
             fail(exc.code, cause=exc)

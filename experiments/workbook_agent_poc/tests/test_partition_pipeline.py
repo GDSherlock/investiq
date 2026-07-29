@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from partition_driver import (
     PartitionAuthenticationError,
     PartitionContextLimitError,
+    PartitionRefusalError,
 )
 from partition_pipeline import PartitionPipelineError, run_partitioned_extraction
 from partition_planner import PartitionLimits
@@ -143,6 +144,35 @@ class MixedSourcePartitionDriver(RecordingPartitionDriver):
         return result
 
 
+class ConflictRefusalDriver(RecordingPartitionDriver):
+    def __init__(self, *, reason, response_status):
+        super().__init__()
+        self.reason = reason
+        self.response_status = response_status
+        self.resolve_calls = 0
+
+    def extract(self, partition, envelope):
+        result = super().extract(partition, envelope)
+        if result["result"]["all_assumption_candidates"]:
+            output = dict(result["result"]["all_assumption_candidates"][0])
+            output.update({
+                "submitted_role": "hardcoded_display_output",
+                "business_role": "unclassified",
+            })
+            result["result"]["output_candidates"] = [output]
+        return result
+
+    def resolve_conflict(self, _conflict):
+        self.call_count += 1
+        self.resolve_calls += 1
+        raise PartitionRefusalError(
+            "secret-refusal-text-sentinel",
+            reason=self.reason,
+            response_status=self.response_status,
+            request_id=f"request-conflict-{self.reason}",
+        )
+
+
 def test_pipeline_processes_partitions_sequentially_and_submits_once(tmp_path):
     tools = _tools(tmp_path)
     driver = RecordingPartitionDriver()
@@ -248,6 +278,38 @@ def test_terminal_partition_failure_discards_all_partial_results(tmp_path):
     assert exc.value.completed_partition_count == 1
     assert exc.value.final_extraction is None
     assert exc.value.azure_failure is True
+
+
+@pytest.mark.parametrize(
+    ("reason", "response_status"),
+    [("refusal", "completed"), ("content_filter", "incomplete")],
+)
+def test_conflict_refusal_is_an_azure_failure_after_one_resolution_call(
+    tmp_path,
+    caplog,
+    reason,
+    response_status,
+):
+    tools = _tools(tmp_path)
+    driver = ConflictRefusalDriver(
+        reason=reason,
+        response_status=response_status,
+    )
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(PartitionPipelineError) as exc:
+        run_partitioned_extraction(driver, tools, limits=_limits())
+
+    refusal = exc.value.__cause__
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert exc.value.code == "partition_output_refused"
+    assert exc.value.azure_failure is True
+    assert driver.resolve_calls == 1
+    assert isinstance(refusal, PartitionRefusalError)
+    assert refusal.reason == reason
+    assert refusal.response_status == response_status
+    assert refusal.request_id == f"request-conflict-{reason}"
+    assert "secret-refusal-text-sentinel" not in rendered
 
 
 def test_global_call_budget_is_enforced_before_next_partition(tmp_path):

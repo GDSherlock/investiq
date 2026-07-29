@@ -4,6 +4,7 @@ import os
 import sys
 
 from openpyxl.utils import get_column_letter
+import pytest
 
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from partition_planner import WorkbookPartition
 from partition_reconciler import (
     PartitionReconciler,
+    ReconciliationError,
     deterministic_candidate_id,
     deterministic_series_id,
 )
@@ -341,6 +343,66 @@ def test_source_less_structure_moves_to_rejected_review_candidate():
     assert len(review) == 1
     assert review[0]["source_contract_bucket"] == "scenario_structures"
     assert review[0]["source_references"] == []
+
+
+@pytest.mark.parametrize(
+    ("period_range", "value_range", "sheet_name"),
+    [
+        ("", "Forecast!C8:J8", "Forecast"),
+        ("Forecast!C3:J3", "", "Forecast"),
+        ("C3:J3", "C8:J8", None),
+        ("Forecast!not-a-range", "Forecast!C8:J8", "Forecast"),
+    ],
+)
+def test_invalid_series_range_is_quarantined_without_losing_valid_series(
+    period_range,
+    value_range,
+    sheet_name,
+):
+    index = _index()
+    partition = _partition("partition-mixed-series", "Forecast", "A1:J8")
+    invalid = _series("Invalid", period_range, value_range)
+    invalid["sheet_name"] = sheet_name
+    valid = _series(
+        "Revenue",
+        "Forecast!C3:J3",
+        "Forecast!C8:J8",
+    )
+    submitted = _bound(partition)
+    submitted["result"]["financial_series"] = [invalid, valid]
+
+    outcome = PartitionReconciler().reconcile(index, [submitted])
+
+    assert len(outcome.final_extraction["financial_series"]) == 1
+    assert outcome.final_extraction["financial_series"][0]["label"] == "Revenue"
+    rejected = outcome.final_extraction["review_candidates"]
+    assert len(rejected) == 1
+    assert rejected[0]["original_label"] == "Invalid"
+    assert rejected[0]["submitted_role"] == "financial_series"
+    assert rejected[0]["source_contract_bucket"] == "financial_series"
+    assert (
+        rejected[0]["reconciliation_rejection_reason"]
+        == "series_range_invalid"
+    )
+    assert rejected[0]["source_references"] == []
+
+
+def test_series_source_not_found_remains_terminal():
+    index = _index()
+    partition = _partition("partition-missing-series", "Forecast", "A1:J8")
+    missing = _series(
+        "Missing",
+        "Forecast!K3:N3",
+        "Forecast!K8:N8",
+    )
+
+    with pytest.raises(ReconciliationError) as exc:
+        PartitionReconciler().reconcile(
+            index,
+            [_bound(partition, series=missing)],
+        )
+
+    assert exc.value.code == "series_source_not_found"
 
 
 def test_horizontal_series_fragments_join_in_source_order():

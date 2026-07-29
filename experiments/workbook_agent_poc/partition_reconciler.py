@@ -210,6 +210,38 @@ def _source_rejected_candidate(
     return rejected
 
 
+def _series_range_rejected_candidate(
+    index: WorkbookIndex,
+    partition_id: str,
+    item_index: int,
+    descriptor: dict[str, Any],
+) -> dict[str, Any]:
+    rejected = deepcopy(descriptor)
+    rejected["candidate_id"] = _hash_identity(
+        index.workbook_version,
+        partition_id,
+        "financial_series",
+        str(item_index),
+        "range-rejected",
+    )
+    rejected["original_label"] = str(
+        descriptor.get("label")
+        or descriptor.get("series_id")
+        or "Unlabelled financial series"
+    )
+    rejected["submitted_role"] = "financial_series"
+    rejected["source_references"] = []
+    rejected["source_contract_bucket"] = "financial_series"
+    rejected["reconciliation_rejection_reason"] = "series_range_invalid"
+    rejected.setdefault("raw_value", None)
+    rejected.setdefault("displayed_value", None)
+    rejected.setdefault("period", None)
+    rejected.setdefault("formula_status", None)
+    rejected.setdefault("canonical_name", descriptor.get("series_id"))
+    rejected.setdefault("evidence", [])
+    return rejected
+
+
 def _semantic_signature(record: _CandidateRecord) -> tuple[Any, ...]:
     candidate = record.candidate
     return (
@@ -351,7 +383,38 @@ class PartitionReconciler:
                     "partition_series_invalid",
                     "financial_series must be a list.",
                 )
-            series.extend(deepcopy(submitted_series))
+            for item_index, descriptor in enumerate(submitted_series):
+                if not isinstance(descriptor, dict):
+                    raise ReconciliationError(
+                        "partition_series_invalid",
+                        "Financial-series descriptor must be an object.",
+                    )
+                try:
+                    _parse_range(
+                        descriptor.get("period_range"),
+                        default_sheet=descriptor.get("sheet_name"),
+                    )
+                    _parse_range(
+                        descriptor.get("value_range"),
+                        default_sheet=descriptor.get("sheet_name"),
+                    )
+                except ReconciliationError as exc:
+                    if exc.code != "series_range_invalid":
+                        raise
+                    final["review_candidates"].append(
+                        _series_range_rejected_candidate(
+                            index,
+                            str(partial.get("partition_id")),
+                            item_index,
+                            descriptor,
+                        )
+                    )
+                    warnings.append(
+                        "financial_series_rejected:"
+                        f"{partial.get('partition_id')}:{item_index}:{exc.code}"
+                    )
+                    continue
+                series.append(deepcopy(descriptor))
 
         for sources, records in records_by_source.items():
             unique_by_signature: dict[tuple[Any, ...], _CandidateRecord] = {}

@@ -53,6 +53,22 @@ def validate_candidate(tools: WorkbookToolset, graph: dict, cand: dict[str, Any]
     warnings: list[str] = []
     rejected: list[str] = []
 
+    if (
+        cand.get("reconciliation_rejection_reason")
+        == "series_range_invalid"
+    ):
+        return _result(
+            cid,
+            submitted_role,
+            source="rejected",
+            overall="rejected",
+            rejected=["financial series range is invalid"],
+            review=True,
+            invalid_source=False,
+            rejection_reason="series_range_invalid",
+            cand=cand,
+        )
+
     refs = cand.get("source_references")
     if refs is None or refs == []:
         return _result(cid, submitted_role, source="rejected", overall="rejected",

@@ -144,6 +144,36 @@ class MixedSourcePartitionDriver(RecordingPartitionDriver):
         return result
 
 
+class InvalidSeriesRangeDriver(RecordingPartitionDriver):
+    def __init__(self):
+        super().__init__()
+        self.emitted = False
+
+    def extract(self, partition, envelope):
+        result = super().extract(partition, envelope)
+        if not self.emitted:
+            self.emitted = True
+            result["result"]["financial_series"] = [{
+                "series_id": "invalid-series",
+                "label": "Invalid series",
+                "semantic_role": "financial_series",
+                "business_role": "revenue",
+                "category": "revenue",
+                "unit": "USD",
+                "frequency": "annual",
+                "scenario": None,
+                "entity": None,
+                "currency": "USD",
+                "sheet_name": "Model",
+                "period_range": "",
+                "value_range": "Model!B1:B4",
+                "label_reference": None,
+                "reasoning_summary": "No period range was available.",
+                "llm_confidence": 0.2,
+            }]
+        return result
+
+
 class ConflictRefusalDriver(RecordingPartitionDriver):
     def __init__(self, *, reason, response_status):
         super().__init__()
@@ -241,6 +271,43 @@ def test_source_less_candidate_is_rejected_without_failing_workbook(
     assert rejected["validation_status"] == "rejected"
     assert rejected["invalid_source"] is True
     assert rejected["rejection_reason"] == "no_source"
+    assert any(
+        item["validation_status"] != "rejected"
+        for item in validation
+    )
+
+
+def test_invalid_series_range_rejects_only_series_and_submits_workbook(
+    tmp_path,
+):
+    tools = _tools(tmp_path)
+    run = run_partitioned_extraction(
+        InvalidSeriesRangeDriver(),
+        tools,
+        limits=_limits(),
+    )
+    series_outcome = materialize_financial_series(
+        tools,
+        run["final_extraction"],
+    )
+    validation = validate_extraction(
+        tools,
+        run["final_extraction"],
+        financial_series_outcome=series_outcome,
+    )
+
+    assert run["submitted"] is True
+    assert run["stop_reason"] == "submitted"
+    assert run["final_extraction"]["financial_series"] == []
+    rejected_id = run["final_extraction"]["review_candidates"][0][
+        "candidate_id"
+    ]
+    rejected = next(
+        item for item in validation
+        if item["candidate_id"] == rejected_id
+    )
+    assert rejected["validation_status"] == "rejected"
+    assert rejected["rejection_reason"] == "series_range_invalid"
     assert any(
         item["validation_status"] != "rejected"
         for item in validation

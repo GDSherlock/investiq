@@ -180,6 +180,36 @@ class PartitionedSourceLessDriver(PartitionedEmptyDriver):
         return result
 
 
+class PartitionedInvalidSeriesRangeDriver(PartitionedEmptyDriver):
+    def __init__(self):
+        self.call_count = 0
+        self.emitted = False
+
+    def extract(self, partition, envelope):
+        result = super().extract(partition, envelope)
+        if not self.emitted:
+            self.emitted = True
+            result["result"]["financial_series"] = [{
+                "series_id": "invalid-series",
+                "label": "Invalid series",
+                "semantic_role": "financial_series",
+                "business_role": "revenue",
+                "category": "revenue",
+                "unit": "USD",
+                "frequency": "annual",
+                "scenario": None,
+                "entity": None,
+                "currency": "USD",
+                "sheet_name": None,
+                "period_range": "",
+                "value_range": "",
+                "label_reference": None,
+                "reasoning_summary": "No valid ranges were available.",
+                "llm_confidence": 0.2,
+            }]
+        return result
+
+
 class FinancialModelCoverageDriver:
     _deployment = "deterministic-financial-model-coverage-driver"
     usage_prompt = 0
@@ -547,6 +577,26 @@ def test_partition_source_rejection_does_not_fail_workbook(source_references):
     assert any(
         item["candidate_id"] == "source-less"
         and item["validation_status"] == "rejected"
+        for item in result["validation_results"]
+    )
+
+
+def test_partition_invalid_series_range_does_not_fail_workbook():
+    result = run_workbook_validation(
+        FIXTURE.read_bytes(),
+        FIXTURE.name,
+        partition_driver_factory=PartitionedInvalidSeriesRangeDriver,
+    )
+
+    assert result["submitted"] is True
+    assert result["stop_reason"] == "submitted"
+    assert result["errors"] == []
+    assert result["validation_summary"]["rejected"] == 1
+    assert result["final_extraction"]["financial_series"] == []
+    assert any(
+        item["validation_status"] == "rejected"
+        and item["rejection_reason"] == "series_range_invalid"
+        and item["_bucket"] == "review_candidates"
         for item in result["validation_results"]
     )
 

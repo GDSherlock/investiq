@@ -84,6 +84,27 @@ def test_missing_source_rejected():
     assert r["validation_status"] == "rejected"
 
 
+def test_prevalidated_invalid_series_range_is_rejected_with_exact_reason():
+    candidate = {
+        "candidate_id": "range-rejected",
+        "original_label": "Revenue",
+        "submitted_role": "financial_series",
+        "raw_value": None,
+        "source_references": [],
+        "reconciliation_rejection_reason": "series_range_invalid",
+    }
+
+    result = V("no_assumptions_sheet").run(candidate)
+
+    assert result["validation_status"] == "rejected"
+    assert result["rejection_reason"] == "series_range_invalid"
+    assert result["invalid_source"] is False
+    assert result["review_required"] is True
+    assert result["rejected_claims"] == [
+        "financial series range is invalid"
+    ]
+
+
 def test_non_list_source_references_rejected_without_exception():
     r = V("no_assumptions_sheet").run({
         "candidate_id": "shape-1",

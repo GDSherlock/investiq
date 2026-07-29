@@ -16,7 +16,9 @@ from partition_driver import (
     AzurePartitionDriver,
     PartitionAuthenticationError,
     PartitionContextLimitError,
+    PartitionDriverError,
     PartitionIncompleteResponseError,
+    PartitionRefusalError,
     PartitionStructuredOutputError,
 )
 from partition_contract import PARTITION_RESULT_BUCKETS
@@ -401,11 +403,12 @@ def test_missing_required_bucket_fails_once_with_safe_field_path(
     caplog.set_level(logging.WARNING)
     driver = _driver(monkeypatch, handler)
 
-    with pytest.raises(PartitionStructuredOutputError):
+    with pytest.raises(PartitionStructuredOutputError) as exc:
         driver.extract(partition, _envelope(partition))
 
     rendered = "\n".join(record.getMessage() for record in caplog.records)
     assert len(bodies) == 1
+    assert exc.value.request_id == "request-resp-missing-bucket"
     assert "partition_bucket_missing" in rendered
     assert "result.output_candidates" in rendered
     assert "request-resp-missing-bucket" in rendered
@@ -543,6 +546,76 @@ def test_incomplete_output_is_typed_and_not_model_retried(monkeypatch):
     assert len(bodies) == 1
 
 
+@pytest.mark.parametrize(
+    ("status", "incomplete_details", "output", "safe_reason"),
+    [
+        (
+            "completed",
+            None,
+            [{
+                "id": "msg-refusal",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "refusal",
+                    "refusal": "secret-refusal-text-sentinel",
+                }],
+            }],
+            "refusal",
+        ),
+        ("incomplete", {"reason": "content_filter"}, [], "content_filter"),
+    ],
+)
+def test_refusal_and_content_filter_are_typed_azure_failures_without_retry(
+    monkeypatch,
+    caplog,
+    status,
+    incomplete_details,
+    output,
+    safe_reason,
+):
+    partition = _partition(f"partition-{safe_reason}", "A1:B2")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "id": f"resp-{safe_reason}",
+                "object": "response",
+                "created_at": 0,
+                "model": "custom-full-deployment",
+                "status": status,
+                "incomplete_details": incomplete_details,
+                "output": output,
+            },
+            headers={"x-request-id": f"request-{safe_reason}"},
+        )
+
+    caplog.set_level(logging.WARNING)
+    driver = _driver(monkeypatch, handler)
+
+    with pytest.raises(PartitionDriverError) as exc:
+        driver.extract(partition, _envelope(partition))
+
+    rendered = "\n".join(record.getMessage() for record in caplog.records)
+    assert type(exc.value) is PartitionRefusalError
+    assert not isinstance(exc.value, PartitionStructuredOutputError)
+    assert exc.value.code == "partition_output_refused"
+    assert exc.value.request_id == f"request-{safe_reason}"
+    assert exc.value.response_status == status
+    assert exc.value.reason == safe_reason
+    assert len(bodies) == 1
+    assert driver.call_count == 1
+    assert "partition_response_refused" in rendered
+    assert "secret-refusal-text-sentinel" not in rendered
+    assert "secret-refusal-text-sentinel" not in str(exc.value)
+    assert "secret-refusal-text-sentinel" not in repr(exc.value)
+
+
 @pytest.mark.parametrize("status_code", [429, 500, 502, 503])
 def test_transient_errors_use_bounded_retry(monkeypatch, status_code):
     partition = _partition(f"partition-{status_code}", "A1:B2")
@@ -602,6 +675,7 @@ def test_conflict_resolution_uses_independent_bounded_tool(monkeypatch):
     assert [tool["name"] for tool in bodies[0]["tools"]] == [
         "submit_partition_reconciliation"
     ]
+    assert "strict" not in bodies[0]["tools"][0]
 
 
 def test_logs_never_include_raw_cells_or_api_keys(monkeypatch, caplog):

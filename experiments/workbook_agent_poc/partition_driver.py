@@ -63,6 +63,22 @@ class PartitionIncompleteResponseError(PartitionDriverError):
         super().__init__(message, request_id=request_id)
 
 
+class PartitionRefusalError(PartitionDriverError):
+    code = "partition_output_refused"
+
+    def __init__(
+        self,
+        message,
+        *,
+        reason=None,
+        response_status=None,
+        request_id=None,
+    ):
+        self.reason = reason
+        self.response_status = response_status
+        super().__init__(message, request_id=request_id)
+
+
 class PartitionDriver(Protocol):
     call_count: int
     max_calls_per_operation: int
@@ -99,6 +115,24 @@ def _incomplete_reason(response):
     else:
         reason = getattr(details, "reason", None)
     return reason if isinstance(reason, str) else None
+
+
+def _response_field(value, field):
+    if isinstance(value, dict):
+        return value.get(field)
+    return getattr(value, field, None)
+
+
+def _refusal_reason(response, *, incomplete_reason=None):
+    if incomplete_reason == "content_filter":
+        return "content_filter"
+    for item in getattr(response, "output", []) or []:
+        if _response_field(item, "type") == "refusal":
+            return "refusal"
+        for content in _response_field(item, "content") or []:
+            if _response_field(content, "type") == "refusal":
+                return "refusal"
+    return None
 
 
 def _error_code(exc: OpenAIError) -> str | None:
@@ -231,6 +265,26 @@ class AzurePartitionDriver:
         request_id = getattr(response, "_request_id", None)
         response_status = getattr(response, "status", None)
         incomplete_reason = _incomplete_reason(response)
+        refusal_reason = _refusal_reason(
+            response,
+            incomplete_reason=incomplete_reason,
+        )
+        if refusal_reason is not None:
+            logger.warning(
+                "partition_response_refused operation_id=%s status=%s "
+                "reason=%s request_id=%s call_count=%s",
+                operation_id,
+                response_status,
+                refusal_reason,
+                request_id,
+                self.call_count,
+            )
+            raise PartitionRefusalError(
+                "Azure refused the structured partition response.",
+                reason=refusal_reason,
+                response_status=response_status,
+                request_id=request_id,
+            )
         if response_status == "incomplete":
             logger.warning(
                 "partition_response_incomplete operation_id=%s status=%s "
@@ -277,7 +331,8 @@ class AzurePartitionDriver:
             self.call_count,
         )
         raise PartitionStructuredOutputError(
-            "Azure response did not contain a valid structured partition result."
+            "Azure response did not contain a valid structured partition result.",
+            request_id=request_id,
         )
 
     def _call_with_retry(
@@ -387,6 +442,7 @@ __all__ = [
     "PartitionDriver",
     "PartitionDriverError",
     "PartitionIncompleteResponseError",
+    "PartitionRefusalError",
     "PartitionStructuredOutputError",
     "PartitionTransientError",
 ]

@@ -48,6 +48,9 @@ PARTITION_SYSTEM_PROMPT = (
     "supplied in this partition. If exact evidence is unavailable, use "
     "[] and place the item in review_candidates. Never fabricate a "
     "reference merely to satisfy the schema.\n"
+    "For financial_series, period_range and value_range must each be a "
+    "fully qualified Excel A1 address of aligned cells, such as 'Cash Flow'!B3:AB3; "
+    "period_range is not a label span such as 2027-2053 or 0-26.\n"
     "Before calling submit_partition_result, verify that all eleven "
     "result buckets exist, every bucket is a list, every required object "
     "field exists, every cited source exists in supplied evidence, and "
@@ -213,8 +216,20 @@ def _strict_defs() -> dict[str, Any]:
             "entity": {"type": ["string", "null"]},
             "currency": {"type": ["string", "null"]},
             "sheet_name": {"type": ["string", "null"]},
-            "period_range": {"type": "string"},
-            "value_range": {"type": "string"},
+            "period_range": {
+                "type": "string",
+                "description": (
+                    "fully qualified Excel A1 address of period-header cells, "
+                    "not a label span such as 2027-2053 or 0-26."
+                ),
+            },
+            "value_range": {
+                "type": "string",
+                "description": (
+                    "fully qualified Excel A1 address of value cells aligned "
+                    "with period_range."
+                ),
+            },
             "label_reference": {"type": ["string", "null"]},
             "reasoning_summary": {"type": ["string", "null"]},
             "llm_confidence": {"type": ["number", "null"]},

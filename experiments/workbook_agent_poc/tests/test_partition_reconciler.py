@@ -166,6 +166,51 @@ def _series(label, period_range, value_range):
     }
 
 
+def _add_horizontal_axis(
+    index,
+    *,
+    sheet,
+    header_row,
+    value_row,
+    first_column,
+    start,
+    count,
+    add_values=True,
+):
+    facts = list(index.facts.get(sheet, ()))
+    for offset in range(count):
+        column = get_column_letter(first_column + offset)
+        facts.append(_fact(sheet, f"{column}{header_row}", start + offset))
+        if add_values:
+            facts.append(_fact(sheet, f"{column}{value_row}", 100 + offset))
+    index.facts[sheet] = tuple(facts)
+
+
+def _add_vertical_axis(
+    index,
+    *,
+    sheet,
+    header_column,
+    value_column,
+    first_row,
+    start,
+    count,
+):
+    facts = list(index.facts.get(sheet, ()))
+    for offset in range(count):
+        row = first_row + offset
+        facts.append(_fact(sheet, f"{header_column}{row}", start + offset))
+        facts.append(_fact(sheet, f"{value_column}{row}", 100 + offset))
+    index.facts[sheet] = tuple(facts)
+
+
+def _rejected_series(outcome):
+    assert outcome.final_extraction["financial_series"] == []
+    rejected = outcome.final_extraction["review_candidates"]
+    assert len(rejected) == 1
+    assert rejected[0]["reconciliation_rejection_reason"] == "series_range_invalid"
+
+
 def test_reconciler_replaces_model_value_with_backend_fact():
     index = _index()
     partition = _partition("partition-source")
@@ -386,6 +431,223 @@ def test_invalid_series_range_is_quarantined_without_losing_valid_series(
         == "series_range_invalid"
     )
     assert rejected[0]["source_references"] == []
+
+
+def test_valid_a1_series_passes_through_without_a_range_resolution():
+    index = _index()
+    partition = _partition("partition-valid-a1", "Forecast", "A1:J8")
+
+    outcome = PartitionReconciler().reconcile(
+        index,
+        [_bound(
+            partition,
+            series=_series("Revenue", "Forecast!C3:J3", "Forecast!C8:J8"),
+        )],
+    )
+
+    assert (
+        outcome.final_extraction["financial_series"][0]["period_range"]
+        == "Forecast!C3:J3"
+    )
+    assert outcome.final_extraction["range_resolutions"] == []
+
+
+def test_integer_period_span_recovers_unique_horizontal_axis_from_raw_facts():
+    index = _index()
+    _add_horizontal_axis(
+        index,
+        sheet="Forecast",
+        header_row=10,
+        value_row=12,
+        first_column=3,
+        start=2027,
+        count=27,
+    )
+    partition = _partition("partition-2027-2053", "Forecast", "A1:AC12")
+
+    outcome = PartitionReconciler().reconcile(
+        index,
+        [_bound(
+            partition,
+            series=_series("Revenue", "2027-2053", "Forecast!C12:AC12"),
+        )],
+    )
+
+    descriptor = outcome.final_extraction["financial_series"][0]
+    assert descriptor["period_range"] == "Forecast!C10:AC10"
+    assert outcome.final_extraction["range_resolutions"] == [{
+        "field": "period_range",
+        "submitted": "2027-2053",
+        "resolved": "Forecast!C10:AC10",
+        "strategy": "unique_integer_span_match",
+        "partition_id": "partition-2027-2053",
+    }]
+
+
+def test_integer_period_span_recovers_unique_vertical_axis_from_raw_facts():
+    index = _index()
+    _add_vertical_axis(
+        index,
+        sheet="Inputs",
+        header_column="D",
+        value_column="E",
+        first_row=2,
+        start=0,
+        count=27,
+    )
+    partition = _partition("partition-0-26", "Inputs", "D1:E28")
+
+    outcome = PartitionReconciler().reconcile(
+        index,
+        [_bound(
+            partition,
+            series=_series("Volume", "0-26", "Inputs!E2:E28"),
+        )],
+    )
+
+    descriptor = outcome.final_extraction["financial_series"][0]
+    assert descriptor["period_range"] == "Inputs!D2:D28"
+    assert (
+        outcome.final_extraction["range_resolutions"][0]["resolved"]
+        == "Inputs!D2:D28"
+    )
+
+
+def test_integer_period_span_recovers_quoted_sheet_axis():
+    index = _index()
+    _add_horizontal_axis(
+        index,
+        sheet="Cash Flow",
+        header_row=3,
+        value_row=8,
+        first_column=2,
+        start=2027,
+        count=27,
+    )
+    partition = _partition("partition-quoted", "Cash Flow", "A1:AB8")
+    series = _series("Cash flow", "2027-2053", "'Cash Flow'!B8:AB8")
+    series["sheet_name"] = "Cash Flow"
+
+    outcome = PartitionReconciler().reconcile(index, [_bound(partition, series=series)])
+
+    assert (
+        outcome.final_extraction["financial_series"][0]["period_range"]
+        == "'Cash Flow'!B3:AB3"
+    )
+
+
+@pytest.mark.parametrize(
+    ("period_range", "value_range", "primary_range", "axis_count", "extra_axis"),
+    [
+        ("2027-2053", "Forecast!C12:Z12", "A1:AC12", 27, False),
+        ("2053-2027", "Forecast!C12:AC12", "A1:AC12", 27, False),
+        ("2027-2053", "Forecast!C12:AC12", "A1:AC12", 0, False),
+        ("2027-2053", "Forecast!C12:AC12", "A1:AC12", 27, True),
+        ("2027-2053", "not-a-range", "A1:AC12", 27, False),
+        ("2027-2053", "Inputs!C12:AC12", "A1:AC12", 27, False),
+        ("2027-2053", "Forecast!C12:AC12", "A1:AC11", 27, False),
+    ],
+    ids=(
+        "length-mismatch",
+        "reversed-span",
+        "zero-matches",
+        "multiple-matches",
+        "invalid-value-range",
+        "cross-sheet-value-evidence",
+        "evidence-outside-primary-range",
+    ),
+)
+def test_integer_period_span_quarantines_when_recovery_is_not_unique_or_aligned(
+    period_range,
+    value_range,
+    primary_range,
+    axis_count,
+    extra_axis,
+):
+    index = _index()
+    if axis_count:
+        _add_horizontal_axis(
+            index,
+            sheet="Forecast",
+            header_row=10,
+            value_row=12,
+            first_column=3,
+            start=2027,
+            count=axis_count,
+        )
+    if extra_axis:
+        _add_horizontal_axis(
+            index,
+            sheet="Forecast",
+            header_row=9,
+            value_row=11,
+            first_column=3,
+            start=2027,
+            count=27,
+        )
+    partition = _partition("partition-boundary", "Forecast", primary_range)
+
+    outcome = PartitionReconciler().reconcile(
+        index,
+        [_bound(partition, series=_series("Revenue", period_range, value_range))],
+    )
+
+    _rejected_series(outcome)
+
+
+def test_fragment_merging_preserves_and_deduplicates_range_resolutions():
+    index = _index()
+    _add_horizontal_axis(
+        index,
+        sheet="Forecast",
+        header_row=4,
+        value_row=8,
+        first_column=3,
+        start=2027,
+        count=4,
+        add_values=False,
+    )
+    _add_horizontal_axis(
+        index,
+        sheet="Forecast",
+        header_row=4,
+        value_row=8,
+        first_column=7,
+        start=2031,
+        count=4,
+        add_values=False,
+    )
+    first = _partition("partition-left", "Forecast", "A1:F8")
+    second = _partition("partition-right", "Forecast", "G1:J8")
+    left = _series("Revenue", "2027-2030", "Forecast!C8:F8")
+    right = _series("Revenue", "2031-2034", "Forecast!G8:J8")
+
+    outcome = PartitionReconciler().reconcile(
+        index,
+        [
+            _bound(first, series=left),
+            _bound(second, series=right),
+            _bound(second, series=right),
+        ],
+    )
+
+    assert (
+        outcome.final_extraction["financial_series"][0]["period_range"]
+        == "Forecast!C4:J4"
+    )
+    assert outcome.final_extraction["range_resolutions"] == [{
+        "field": "period_range",
+        "submitted": "2027-2030",
+        "resolved": "Forecast!C4:F4",
+        "strategy": "unique_integer_span_match",
+        "partition_id": "partition-left",
+    }, {
+        "field": "period_range",
+        "submitted": "2031-2034",
+        "resolved": "Forecast!G4:J4",
+        "strategy": "unique_integer_span_match",
+        "partition_id": "partition-right",
+    }]
 
 
 def test_series_source_not_found_remains_terminal():

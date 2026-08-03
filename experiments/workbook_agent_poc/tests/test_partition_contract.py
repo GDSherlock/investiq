@@ -158,6 +158,22 @@ def test_prompt_contains_exact_mandatory_bucket_and_source_contract():
     assert "coverage_declaration" in PARTITION_SYSTEM_PROMPT
 
 
+def test_financial_series_ranges_are_described_as_qualified_a1_addresses():
+    financial_series = SUBMIT_PARTITION_TOOL["function"]["parameters"]["$defs"][
+        "financial_series"
+    ]["properties"]
+
+    assert "fully qualified Excel A1 address" in PARTITION_SYSTEM_PROMPT
+    assert "not a label span such as 2027-2053 or 0-26" in PARTITION_SYSTEM_PROMPT
+    assert "fully qualified Excel A1 address" in financial_series["period_range"][
+        "description"
+    ]
+    assert "not a label span" in financial_series["period_range"]["description"]
+    assert "fully qualified Excel A1 address" in financial_series["value_range"][
+        "description"
+    ]
+
+
 @pytest.mark.parametrize("bucket", PARTITION_RESULT_BUCKETS)
 def test_source_defect_does_not_reject_complete_partition_arguments(bucket):
     arguments = _arguments()

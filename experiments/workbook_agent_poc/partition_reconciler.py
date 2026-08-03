@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
+from math import isfinite
 import re
 from typing import Any, Callable, Iterable
 
@@ -37,6 +38,14 @@ CANDIDATE_BUCKETS = (
 )
 STRUCTURE_BUCKETS = ("scenario_structures", "sensitivity_structures")
 _SAFE_SHEET = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+_INTEGER_SPAN = re.compile(r"^(\d+)-(\d+)$")
+_RANGE_RESOLUTION_FIELDS = (
+    "field",
+    "submitted",
+    "resolved",
+    "strategy",
+    "partition_id",
+)
 _CANDIDATE_SOURCE_ERROR_CODES = {
     "candidate_source_missing",
     "candidate_source_invalid",
@@ -301,6 +310,7 @@ class PartitionReconciler:
         final: dict[str, Any] = {bucket: [] for bucket in FINAL_LIST_BUCKETS}
         records_by_source: dict[tuple[str, ...], list[_CandidateRecord]] = {}
         series: list[dict[str, Any]] = []
+        range_resolutions: list[dict[str, str]] = []
         deduplicated = 0
         conflict_count = 0
         reconciliation_calls = 0
@@ -401,6 +411,16 @@ class PartitionReconciler:
                 except ReconciliationError as exc:
                     if exc.code != "series_range_invalid":
                         raise
+                    resolved = _resolve_integer_period_span(
+                        index,
+                        partial,
+                        descriptor,
+                    )
+                    if resolved is not None:
+                        descriptor, resolution = resolved
+                        series.append(descriptor)
+                        range_resolutions.append(resolution)
+                        continue
                     final["review_candidates"].append(
                         _series_range_rejected_candidate(
                             index,
@@ -482,6 +502,9 @@ class PartitionReconciler:
                 final["review_candidates"].append(_review_candidate(index, unique))
 
         final["financial_series"] = self._reconcile_series(index, series)
+        final["range_resolutions"] = _deduplicated_range_resolutions(
+            range_resolutions
+        )
         final["coverage_declaration"] = {
             "partitioned": True,
             "completed_partitions": len(partials),
@@ -610,6 +633,160 @@ def _parse_range(value: Any, *, default_sheet: Any = None) -> _RangeRef:
         orientation=orientation,
         length=rows * cols,
     )
+
+
+def _resolve_integer_period_span(
+    index: WorkbookIndex,
+    partial: dict[str, Any],
+    descriptor: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str]] | None:
+    submitted = descriptor.get("period_range")
+    if not isinstance(submitted, str):
+        return None
+    match = _INTEGER_SPAN.fullmatch(submitted.strip())
+    if match is None:
+        return None
+    first, last = (int(token) for token in match.groups())
+    if last < first:
+        return None
+
+    partial_sheet = partial.get("sheet_name")
+    primary_range = partial.get("primary_range")
+    if not isinstance(partial_sheet, str) or not partial_sheet.strip():
+        return None
+    try:
+        value = _parse_range(
+            descriptor.get("value_range"),
+            default_sheet=descriptor.get("sheet_name"),
+        )
+        primary = _parse_range(primary_range, default_sheet=partial_sheet)
+    except ReconciliationError:
+        return None
+    if (
+        value.sheet_name != partial_sheet
+        or primary.sheet_name != partial_sheet
+        or value.orientation is None
+        or not _range_is_inside(value, primary)
+    ):
+        return None
+
+    span_length = last - first + 1
+    if span_length != value.length:
+        return None
+    expected_values = tuple(range(first, last + 1))
+
+    candidates: list[_RangeRef] = []
+    if value.orientation == "horizontal":
+        for row in range(primary.bounds[1], primary.bounds[3] + 1):
+            candidate = _range_from_bounds(
+                partial_sheet,
+                (value.bounds[0], row, value.bounds[2], row),
+            )
+            if _candidate_matches_integer_span(index, candidate, expected_values):
+                candidates.append(candidate)
+    else:
+        for column in range(primary.bounds[0], primary.bounds[2] + 1):
+            candidate = _range_from_bounds(
+                partial_sheet,
+                (column, value.bounds[1], column, value.bounds[3]),
+            )
+            if _candidate_matches_integer_span(index, candidate, expected_values):
+                candidates.append(candidate)
+
+    if len(candidates) != 1:
+        return None
+    resolved = candidates[0].qualified
+    normalized = deepcopy(descriptor)
+    normalized["period_range"] = resolved
+    return normalized, {
+        "field": "period_range",
+        "submitted": submitted,
+        "resolved": resolved,
+        "strategy": "unique_integer_span_match",
+        "partition_id": str(partial.get("partition_id")),
+    }
+
+
+def _range_is_inside(inner: _RangeRef, outer: _RangeRef) -> bool:
+    return (
+        inner.bounds[0] >= outer.bounds[0]
+        and inner.bounds[1] >= outer.bounds[1]
+        and inner.bounds[2] <= outer.bounds[2]
+        and inner.bounds[3] <= outer.bounds[3]
+    )
+
+
+def _range_from_bounds(
+    sheet_name: str,
+    bounds: tuple[int, int, int, int],
+) -> _RangeRef:
+    min_col, min_row, max_col, max_row = bounds
+    first = f"{get_column_letter(min_col)}{min_row}"
+    last = f"{get_column_letter(max_col)}{max_row}"
+    cell_range = first if first == last else f"{first}:{last}"
+    rows = max_row - min_row + 1
+    cols = max_col - min_col + 1
+    return _RangeRef(
+        sheet_name=sheet_name,
+        cell_range=cell_range,
+        bounds=bounds,
+        orientation="horizontal" if rows == 1 else "vertical" if cols == 1 else None,
+        length=rows * cols,
+    )
+
+
+def _candidate_matches_integer_span(
+    index: WorkbookIndex,
+    candidate: _RangeRef,
+    expected_values: tuple[int, ...],
+) -> bool:
+    facts = index.facts_for_range(candidate.sheet_name, candidate.cell_range)
+    if len(facts) != candidate.length:
+        return False
+    by_cell = {fact.get("cell"): fact for fact in facts}
+    if len(by_cell) != candidate.length:
+        return False
+    for offset, expected in enumerate(expected_values):
+        column = (
+            candidate.bounds[0] + offset
+            if candidate.orientation == "horizontal"
+            else candidate.bounds[0]
+        )
+        row = (
+            candidate.bounds[1]
+            if candidate.orientation == "horizontal"
+            else candidate.bounds[1] + offset
+        )
+        fact = by_cell.get(f"{get_column_letter(column)}{row}")
+        if fact is None or not _is_exact_integer(fact.get("raw_value"), expected):
+            return False
+    return True
+
+
+def _is_exact_integer(value: Any, expected: int) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value == expected
+    return (
+        isinstance(value, float)
+        and isfinite(value)
+        and value.is_integer()
+        and int(value) == expected
+    )
+
+
+def _deduplicated_range_resolutions(
+    resolutions: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    unique = {
+        tuple(resolution[field] for field in _RANGE_RESOLUTION_FIELDS): {
+            field: resolution[field]
+            for field in _RANGE_RESOLUTION_FIELDS
+        }
+        for resolution in resolutions
+    }
+    return [unique[key] for key in sorted(unique)]
 
 
 def _series_sort_key(descriptor: dict[str, Any]) -> tuple[Any, ...]:

@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { CalculationSensitivityResponse } from './calculation-api-types';
+import type {
+  CalculationSensitivityResponse,
+  HistoricalModelItem,
+} from './calculation-api-types';
 import {
   CALCULATION_STORAGE_KEYS,
   SENSITIVITY_WORKBENCH_VERSION,
   persistCalculationRunId,
   persistGraphVersionId,
+  persistHistoricalModelIdentity,
   persistSensitivityWorkbenchState,
   readPersistedCalculationState,
   readSensitivityWorkbenchDocument,
@@ -72,6 +76,22 @@ class IrrecoverableDocumentFailureStorage extends MemoryStorage {
   }
 }
 
+class OneShotHistoricalModelFailureStorage extends MemoryStorage {
+  private shouldFail = true;
+
+  override setItem(key: string, value: string): void {
+    if (
+      this.shouldFail &&
+      key === CALCULATION_STORAGE_KEYS.modelVersionId &&
+      value === 'model-b'
+    ) {
+      this.shouldFail = false;
+      throw new Error('quota exceeded');
+    }
+    super.setItem(key, value);
+  }
+}
+
 class SerialLockManager implements SensitivityWorkbenchLockManager {
   private tail = Promise.resolve();
   private active = 0;
@@ -103,12 +123,68 @@ class SerialLockManager implements SensitivityWorkbenchLockManager {
 const DRIVER_KEY =
   'parameter:11111111-1111-4111-8111-111111111111';
 
+const HISTORICAL_MODEL: HistoricalModelItem = {
+  model_version_id: 'model-b',
+  workbook_version_id: 'workbook-b',
+  filename: 'North Harbor Infrastructure.xlsx',
+  updated_at: '2026-08-02T10:00:00Z',
+  calculation_status: 'baseline_ready',
+  graph_version_id: 'graph-b',
+  baseline_run_id: 'baseline-b',
+};
+
 function seedCalculationIdentity(storage: StorageLike): void {
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.workbookVersionId,
+    'workbook-version',
+  );
   storage.setItem(CALCULATION_STORAGE_KEYS.modelVersionId, 'model-version');
   storage.setItem(CALCULATION_STORAGE_KEYS.graphVersionId, 'graph-version');
   storage.setItem(CALCULATION_STORAGE_KEYS.baselineRunId, 'baseline-run');
   storage.setItem(CALCULATION_STORAGE_KEYS.overrideRunId, 'old-run');
 }
+
+test('historical selection replaces the full calculation identity atomically', async () => {
+  const storage = new MemoryStorage();
+  const locks = new SerialLockManager();
+  seedCalculationIdentity(storage);
+  storage.setItem(
+    CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+    JSON.stringify({ stale: true }),
+  );
+
+  await persistHistoricalModelIdentity(
+    storage,
+    HISTORICAL_MODEL,
+    locks,
+  );
+
+  assert.deepEqual(readPersistedCalculationState(storage), {
+    workbookVersionId: 'workbook-b',
+    modelVersionId: 'model-b',
+    graphVersionId: 'graph-b',
+    baselineRunId: 'baseline-b',
+    overrideRunId: null,
+  });
+  assert.equal(
+    storage.getItem(CALCULATION_STORAGE_KEYS.sensitivityWorkbench),
+    null,
+  );
+});
+
+test('failed historical selection restores the previous calculation identity', async () => {
+  const storage = new OneShotHistoricalModelFailureStorage();
+  const locks = new SerialLockManager();
+  seedCalculationIdentity(storage);
+  const before = readPersistedCalculationState(storage);
+
+  await assert.rejects(
+    persistHistoricalModelIdentity(storage, HISTORICAL_MODEL, locks),
+    /historical model/i,
+  );
+
+  assert.deepEqual(readPersistedCalculationState(storage), before);
+});
 
 function analysis(
   currentRunId = 'current-run',

@@ -9,15 +9,22 @@ import {
 import { CalculationRunSummary } from '@/components/calculation/CalculationRunSummary';
 import { PreparationNotifications } from '@/components/calculation/PreparationNotifications';
 import { ExtractionLoadingExperience } from '@/components/extraction/ExtractionLoadingExperience';
+import { HistoricalModelSelector } from '@/components/model-history/HistoricalModelSelector';
+import {
+  ModelSourceSwitcher,
+  type ModelSourceMode,
+} from '@/components/model-history/ModelSourceSwitcher';
 import { WorkbookUploadZone } from '@/components/extraction/WorkbookUploadZone';
-import { uploadWorkbookForCalculation } from '@/lib/api';
+import { getModelHistory, uploadWorkbookForCalculation } from '@/lib/api';
 import {
   CalculationApiError,
+  type HistoricalModelItem,
   type WorkbookValidationResponse,
 } from '@/lib/calculation-api-types';
 import { canStartCalculationFlow } from '@/lib/calculation-flow';
 import {
   clearCalculationArtifacts,
+  persistHistoricalModelIdentity,
   persistUploadIdentity,
   readRestorableCalculationIdentity,
 } from '@/lib/calculation-storage';
@@ -31,6 +38,8 @@ import {
   buildTechnicalDetails,
   validateWorkbookFile,
 } from '@/lib/model-preparation-view';
+
+import { useActiveAnalysis } from './ActiveAnalysisContext';
 
 interface ActiveCalculationIdentity {
   modelVersionId: string;
@@ -59,6 +68,9 @@ function createUploadError(
 }
 
 export default function HomePage() {
+  const { refresh: refreshActiveAnalysis } = useActiveAnalysis();
+  const [modelSourceMode, setModelSourceMode] =
+    useState<ModelSourceMode>('upload');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [pageState, setPageState] =
     useState<PreparationPageState>('idle');
@@ -68,6 +80,15 @@ export default function HomePage() {
   const [uploadError, setUploadError] = useState<Error | null>(null);
   const [activeIdentity, setActiveIdentity] =
     useState<ActiveCalculationIdentity | null>(null);
+  const [historicalModels, setHistoricalModels] = useState<
+    HistoricalModelItem[]
+  >([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<Error | null>(null);
+  const [selectedHistoricalModelId, setSelectedHistoricalModelId] =
+    useState<string | null>(null);
+  const [historySelectionCommitted, setHistorySelectionCommitted] =
+    useState(false);
   const [progressSnapshot, setProgressSnapshot] = useState<ProgressSnapshot>({
     progress: 0,
     stage: 'upload',
@@ -77,6 +98,7 @@ export default function HomePage() {
   const activeDriverRef = useRef<ProgressDriver | null>(null);
   const uploadInFlightRef = useRef(false);
   const uploadRevisionRef = useRef(0);
+  const historyRevisionRef = useRef(0);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -116,10 +138,58 @@ export default function HomePage() {
     return () => {
       mountedRef.current = false;
       uploadRevisionRef.current += 1;
+      historyRevisionRef.current += 1;
       activeDriverRef.current?.stop();
       activeDriverRef.current = null;
     };
   }, []);
+
+  const loadHistoricalModels = useCallback(async () => {
+    const requestRevision = ++historyRevisionRef.current;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const response = await getModelHistory();
+      if (
+        mountedRef.current &&
+        requestRevision === historyRevisionRef.current
+      ) {
+        setHistoricalModels(response.models);
+        setSelectedHistoricalModelId((current) =>
+          response.models.some(
+            (model) => model.model_version_id === current,
+          )
+            ? current
+            : response.models[0]?.model_version_id ?? null,
+        );
+      }
+    } catch (caught) {
+      if (
+        mountedRef.current &&
+        requestRevision === historyRevisionRef.current
+      ) {
+        setHistoricalModels([]);
+        setHistoryError(
+          caught instanceof Error
+            ? caught
+            : new Error('Prepared models could not be loaded.'),
+        );
+      }
+    } finally {
+      if (
+        mountedRef.current &&
+        requestRevision === historyRevisionRef.current
+      ) {
+        setHistoryLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (modelSourceMode === 'history' && !historySelectionCommitted) {
+      void loadHistoricalModels();
+    }
+  }, [historySelectionCommitted, loadHistoricalModels, modelSourceMode]);
 
   const handlePreparationLifecycle = useCallback(
     (lifecycle: CalculationPreparationLifecycle) => {
@@ -284,6 +354,43 @@ export default function HomePage() {
     }
   }, []);
 
+  const continueWithHistoricalModel = useCallback(
+    async (model: HistoricalModelItem) => {
+      setHistoryError(null);
+      try {
+        await persistHistoricalModelIdentity(localStorage, model);
+        if (!mountedRef.current) {
+          return;
+        }
+        setSelectedFile(null);
+        setUploadResult(null);
+        setUploadError(null);
+        setActiveIdentity({
+          modelVersionId: model.model_version_id,
+          workbookVersionId: model.workbook_version_id,
+          source: 'storage',
+        });
+        setProgressSnapshot({
+          progress: 92,
+          stage: 'prepare',
+          phase: 'processing',
+        });
+        setPageState('processing');
+        setHistorySelectionCommitted(true);
+        void refreshActiveAnalysis();
+      } catch (caught) {
+        if (mountedRef.current) {
+          setHistoryError(
+            caught instanceof Error
+              ? caught
+              : new Error('The selected model could not be restored.'),
+          );
+        }
+      }
+    },
+    [refreshActiveAnalysis],
+  );
+
   const notifications = activeIdentity
     ? []
     : buildPreparationNotifications({
@@ -303,6 +410,19 @@ export default function HomePage() {
   const canRetryUpload =
     uploadError instanceof CalculationApiError &&
     uploadError.retryable;
+  const showCalculationFlow =
+    modelSourceMode === 'upload' || historySelectionCommitted;
+
+  const changeModelSource = useCallback((mode: ModelSourceMode) => {
+    if (uploadInFlightRef.current) {
+      return;
+    }
+    setModelSourceMode(mode);
+    setHistorySelectionCommitted(false);
+    if (mode === 'history') {
+      setHistoryError(null);
+    }
+  }, []);
 
   return (
     <main className="mx-auto max-w-6xl space-y-5 pb-10 sm:space-y-6">
@@ -316,54 +436,78 @@ export default function HomePage() {
         </p>
       </header>
 
-      <WorkbookUploadZone
-        selectedFile={selectedFile}
-        busy={uploadInFlight}
-        hasError={hasFailure}
-        canRetry={canRetryUpload}
-        onFileSelected={(file) => void startUpload(file)}
-        onRetry={() => {
-          if (selectedFile && canRetryUpload) {
-            void startUpload(selectedFile);
-          }
-        }}
+      <ModelSourceSwitcher
+        mode={modelSourceMode}
+        onModeChange={changeModelSource}
       />
 
-      <ExtractionLoadingExperience
-        progress={progressSnapshot.progress}
-        stage={progressSnapshot.stage}
-        state={pageState}
-      />
-
-      {activeIdentity ? (
-        <CalculationPreparationPanel
-          key={`${activeIdentity.modelVersionId}:${activeIdentity.workbookVersionId}`}
-          modelVersionId={activeIdentity.modelVersionId}
-          workbookVersionId={activeIdentity.workbookVersionId}
-          restoreFromStorage={activeIdentity.source === 'storage'}
-          uploadResult={uploadResult}
-          onLifecycleChange={handlePreparationLifecycle}
+      {modelSourceMode === 'history' && !historySelectionCommitted ? (
+        <HistoricalModelSelector
+          models={historicalModels}
+          loading={historyLoading}
+          error={historyError}
+          selectedModelId={selectedHistoricalModelId}
+          onSelectedModelIdChange={setSelectedHistoricalModelId}
+          onContinue={(model) => void continueWithHistoricalModel(model)}
+          onRetry={() => void loadHistoricalModels()}
+          onUseUpload={() => changeModelSource('upload')}
         />
-      ) : (
+      ) : null}
+
+      {showCalculationFlow ? (
         <>
-          <CalculationRunSummary
-            readiness={null}
-            phaseLabel={
-              pageState === 'failed'
-                ? 'Failed'
-                : pageState === 'processing'
-                  ? 'Processing'
-                  : 'Waiting'
-            }
-            hasWarnings={notifications.some(
-              ({ severity }) => severity === 'warning',
-            )}
-            hasError={hasFailure}
-            details={technicalDetails}
+          {modelSourceMode === 'upload' ? (
+            <WorkbookUploadZone
+              selectedFile={selectedFile}
+              busy={uploadInFlight}
+              hasError={hasFailure}
+              canRetry={canRetryUpload}
+              onFileSelected={(file) => void startUpload(file)}
+              onRetry={() => {
+                if (selectedFile && canRetryUpload) {
+                  void startUpload(selectedFile);
+                }
+              }}
+            />
+          ) : null}
+
+          <ExtractionLoadingExperience
+            progress={progressSnapshot.progress}
+            stage={progressSnapshot.stage}
+            state={pageState}
           />
-          <PreparationNotifications notifications={notifications} />
+
+          {activeIdentity ? (
+            <CalculationPreparationPanel
+              key={`${activeIdentity.modelVersionId}:${activeIdentity.workbookVersionId}`}
+              modelVersionId={activeIdentity.modelVersionId}
+              workbookVersionId={activeIdentity.workbookVersionId}
+              restoreFromStorage={activeIdentity.source === 'storage'}
+              uploadResult={uploadResult}
+              onLifecycleChange={handlePreparationLifecycle}
+            />
+          ) : (
+            <>
+              <CalculationRunSummary
+                readiness={null}
+                phaseLabel={
+                  pageState === 'failed'
+                    ? 'Failed'
+                    : pageState === 'processing'
+                      ? 'Processing'
+                      : 'Waiting'
+                }
+                hasWarnings={notifications.some(
+                  ({ severity }) => severity === 'warning',
+                )}
+                hasError={hasFailure}
+                details={technicalDetails}
+              />
+              <PreparationNotifications notifications={notifications} />
+            </>
+          )}
         </>
-      )}
+      ) : null}
 
       <p className="flex items-center justify-center gap-2 pt-2 text-center text-xs text-d-muted sm:text-sm">
         <span aria-hidden="true">▣</span>

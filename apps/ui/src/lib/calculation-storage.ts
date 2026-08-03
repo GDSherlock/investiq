@@ -1,6 +1,7 @@
 import type {
   CalculationSensitivityResponse,
   CalculationRunResponse,
+  HistoricalModelItem,
   WorkbookValidationResponse,
 } from './calculation-api-types';
 import { canStartCalculationFlow } from './calculation-flow';
@@ -325,6 +326,129 @@ export async function persistUploadIdentity(
         response.model_version_id,
       );
       return true;
+    },
+    lockManager,
+  );
+}
+
+type CalculationStorageSnapshot = Record<string, string | null>;
+
+const HISTORICAL_MODEL_STORAGE_KEYS = [
+  CALCULATION_STORAGE_KEYS.workbookVersionId,
+  CALCULATION_STORAGE_KEYS.modelVersionId,
+  CALCULATION_STORAGE_KEYS.graphVersionId,
+  CALCULATION_STORAGE_KEYS.baselineRunId,
+  CALCULATION_STORAGE_KEYS.overrideRunId,
+  CALCULATION_STORAGE_KEYS.sensitivityWorkbench,
+  LEGACY_SENSITIVITY_WORKBENCH_KEY,
+] as const;
+
+function readCalculationStorageSnapshot(
+  storage: StorageLike,
+): CalculationStorageSnapshot {
+  return Object.fromEntries(
+    HISTORICAL_MODEL_STORAGE_KEYS.map((key) => [
+      key,
+      storage.getItem(key),
+    ]),
+  );
+}
+
+function restoreCalculationStorageSnapshot(
+  storage: StorageLike,
+  snapshot: CalculationStorageSnapshot,
+): boolean {
+  try {
+    for (const key of HISTORICAL_MODEL_STORAGE_KEYS) {
+      const value = snapshot[key];
+      if (value === null) {
+        storage.removeItem(key);
+      } else {
+        storage.setItem(key, value);
+      }
+    }
+    return HISTORICAL_MODEL_STORAGE_KEYS.every(
+      (key) => storage.getItem(key) === snapshot[key],
+    );
+  } catch {
+    return false;
+  }
+}
+
+function validateHistoricalModelIdentity(model: HistoricalModelItem): void {
+  const hasBaselineIdentity =
+    model.graph_version_id !== null && model.baseline_run_id !== null;
+  if (
+    (model.calculation_status === 'baseline_ready' &&
+      !hasBaselineIdentity) ||
+    (model.calculation_status === 'calculation_required' &&
+      (model.graph_version_id !== null || model.baseline_run_id !== null))
+  ) {
+    throw new Error('Historical model identity is internally inconsistent.');
+  }
+}
+
+export async function persistHistoricalModelIdentity(
+  storage: StorageLike,
+  model: HistoricalModelItem,
+  lockManager?: SensitivityWorkbenchLockManager | null,
+): Promise<void> {
+  validateHistoricalModelIdentity(model);
+  await withCalculationStorageLock(
+    () => {
+      const snapshot = readCalculationStorageSnapshot(storage);
+      try {
+        setStorageItem(
+          storage,
+          CALCULATION_STORAGE_KEYS.workbookVersionId,
+          model.workbook_version_id,
+        );
+        setStorageItem(
+          storage,
+          CALCULATION_STORAGE_KEYS.modelVersionId,
+          model.model_version_id,
+        );
+        if (model.graph_version_id === null) {
+          removeStorageItem(
+            storage,
+            CALCULATION_STORAGE_KEYS.graphVersionId,
+          );
+        } else {
+          setStorageItem(
+            storage,
+            CALCULATION_STORAGE_KEYS.graphVersionId,
+            model.graph_version_id,
+          );
+        }
+        if (model.baseline_run_id === null) {
+          removeStorageItem(
+            storage,
+            CALCULATION_STORAGE_KEYS.baselineRunId,
+          );
+        } else {
+          setStorageItem(
+            storage,
+            CALCULATION_STORAGE_KEYS.baselineRunId,
+            model.baseline_run_id,
+          );
+        }
+        removeStorageItem(
+          storage,
+          CALCULATION_STORAGE_KEYS.overrideRunId,
+        );
+        clearSensitivityWorkbenchDocuments(storage);
+      } catch (error) {
+        const restored = restoreCalculationStorageSnapshot(
+          storage,
+          snapshot,
+        );
+        throw new Error(
+          restored
+            ? 'Unable to select the historical model; the previous analysis was restored.'
+            : 'Unable to select the historical model; browser storage could not be restored.',
+          { cause: error },
+        );
+      }
     },
     lockManager,
   );

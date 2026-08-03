@@ -58,6 +58,20 @@ export interface WorkbookValidationResponse {
   trace_truncated: boolean;
 }
 
+export interface HistoricalModelItem {
+  model_version_id: string;
+  workbook_version_id: string;
+  filename: string;
+  updated_at: string;
+  calculation_status: 'baseline_ready' | 'calculation_required';
+  graph_version_id: string | null;
+  baseline_run_id: string | null;
+}
+
+export interface ModelHistoryResponse {
+  models: HistoricalModelItem[];
+}
+
 export interface CalculationErrorDetail {
   code: string;
   message: string;

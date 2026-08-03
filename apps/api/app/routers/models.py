@@ -7,14 +7,20 @@ import uuid
 import shutil
 from typing import Any
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Optional
 
 from ..database import get_db
 from ..models import FinancialModel, Investment, ModelAssumption, AuditLog, User
-from ..schemas import ModelUploadResponse, ModelParseResponse, WorkbookValidationResponse
+from ..schemas import (
+    ModelHistoryResponse,
+    ModelUploadResponse,
+    ModelParseResponse,
+    WorkbookValidationResponse,
+)
+from ..model_history_service import ModelHistoryService
 from ..auth import get_current_user
 from ..model_extraction_types import ModelExtractionPersistenceError, WorkbookTooLargeError
 from ..model_upload_orchestration_service import ModelUploadOrchestrationService
@@ -113,6 +119,17 @@ def upload_model(
             "MODEL_EXTRACTION_PERSISTENCE_ERROR",
             "Model Extraction persistence failed.",
         )
+
+
+@router.get("/models", response_model=ModelHistoryResponse)
+def list_models(
+    response: Response,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> ModelHistoryResponse:
+    """List canonical materialized models available for GET-only restoration."""
+    response.headers["Cache-Control"] = "no-store"
+    return ModelHistoryService(db).list_recent(limit)
 
 
 async def _legacy_upload_model_for_rollback(

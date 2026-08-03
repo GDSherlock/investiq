@@ -10,6 +10,7 @@ import type {
   CalculationRunOutputsResponse,
   CalculationRunResponse,
   CashFlowAnalysisResponse,
+  ModelHistoryResponse,
   ModelDiagnosticsResponse,
   MonteCarloInputCatalogResponse,
   MonteCarloRunCreateRequest,
@@ -97,6 +98,19 @@ export async function uploadWorkbookForCalculation(
   return parseJsonResponse<WorkbookValidationResponse>(
     await postModelUpload(file),
   );
+}
+
+export async function getModelHistory(
+  limit = 20,
+): Promise<ModelHistoryResponse> {
+  const response = await fetch(
+    `${API_BASE}/api/v1/models?limit=${encodeURIComponent(String(limit))}`,
+    {
+      cache: 'no-store',
+      headers: { ...getAuthHeaders() },
+    },
+  );
+  return parseJsonResponse<ModelHistoryResponse>(response);
 }
 
 export async function getCalculationReadiness(

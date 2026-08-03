@@ -913,6 +913,23 @@ class ModelUploadResponse(BaseModel):
     assumptions_count: int
 
 
+class ModelHistoryItem(_CalculationDTO):
+    model_version_id: UUIDString
+    workbook_version_id: UUIDString
+    filename: str
+    updated_at: datetime
+    calculation_status: Literal[
+        "baseline_ready",
+        "calculation_required",
+    ]
+    graph_version_id: UUIDString | None = None
+    baseline_run_id: UUIDString | None = None
+
+
+class ModelHistoryResponse(_CalculationDTO):
+    models: list[ModelHistoryItem] = Field(default_factory=list)
+
+
 class WorkbookValidationResponse(BaseModel):
     """Raw response for the experimental workbook-agent validation endpoint."""
 

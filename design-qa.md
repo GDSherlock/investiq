@@ -69,3 +69,39 @@ was clean.
   reference image; this is intentional for calculation auditability.
 
 final result: passed
+
+---
+
+# Upload Historical Model Selector Design QA (Design 2)
+
+## Reference and implementation
+
+- Approved source: `/Users/kingjason/.codex/generated_images/019fc6dc-0cee-7f93-9e57-9a93882f7a9a/exec-1c9c3f4d-c66e-4c63-a7c8-78e8c609f4ed.png`
+- Verified implementation: `/Users/kingjason/.codex/visualizations/2026/08/03/019fc6dc-0cee-7f93-9e57-9a93882f7a9a/design-2-final-verified.jpg`
+- Side-by-side comparison: `/Users/kingjason/.codex/visualizations/2026/08/03/019fc6dc-0cee-7f93-9e57-9a93882f7a9a/design-2-comparison.jpg`
+- Browser and viewport: Codex in-app browser, 1487 × 1058 CSS pixels
+- Compared state: `Use existing model` selected, history dropdown open, latest model selected
+
+## Visual review
+
+- The approved two-option source switcher, gold selected state, centered heading, bordered history card, model field, expanded option list, primary action, and upload-return link all match the selected direction.
+- The expanded list participates in card layout and does not cover the primary action.
+- Card and form widths were adjusted against the combined source/implementation image; no cropped controls, horizontal overflow, or broken spacing remained.
+- Deliberate data differences: the implementation renders the one real persisted model currently available, its canonical model identifier, timestamp, and baseline status instead of the three illustrative mock rows and invented version labels.
+- Deliberate product-context difference: the existing security notice remains beneath the new card.
+
+## Interaction and runtime review
+
+- Source tabs switch between the existing upload flow and the historical-model flow.
+- The newest real model is selected by default; opening the picker exposes an accessible listbox and selected option.
+- `Continue to analysis` atomically restores workbook/model/graph/baseline identity, clears stale override and sensitivity state, and restores the existing preparation summary.
+- A timestamp-bounded API log check after `Continue to analysis` showed only readiness/run GET requests; no upload, prepare, calculation, or sensitivity POST was issued.
+- Browser console warnings/errors: none.
+
+## Comparison history
+
+1. Initial browser comparison found that the absolutely positioned list covered the primary action.
+2. The list was moved into normal card flow, the approved content width was matched, and latest-model default selection was added.
+3. The final combined comparison confirmed the approved hierarchy and interaction state with real persisted data.
+
+final result: passed

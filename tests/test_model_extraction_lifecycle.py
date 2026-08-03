@@ -478,7 +478,9 @@ def test_descriptor_materialization_persists_recovery_audit_and_business_role(
             "range_resolutions": [recovery_resolution],
         }
         materialized = materialize_financial_series(
-            WorkbookToolset(file_bytes=file_bytes), extraction
+            WorkbookToolset(file_bytes=file_bytes),
+            extraction,
+            trust_backend_range_resolutions=True,
         )
         result = deterministic_extraction_result()
         result["final_extraction"]["financial_series"] = extraction["financial_series"]

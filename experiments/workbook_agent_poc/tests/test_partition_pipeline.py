@@ -229,6 +229,7 @@ def test_pipeline_output_is_accepted_by_existing_materializer_and_validator(tmp_
     series_outcome = materialize_financial_series(
         tools,
         run["final_extraction"],
+        trust_backend_range_resolutions=True,
     )
     validation = validate_extraction(
         tools,
@@ -254,6 +255,7 @@ def test_source_less_candidate_is_rejected_without_failing_workbook(
     series_outcome = materialize_financial_series(
         tools,
         run["final_extraction"],
+        trust_backend_range_resolutions=True,
     )
     validation = validate_extraction(
         tools,
@@ -289,6 +291,7 @@ def test_invalid_series_range_rejects_only_series_and_submits_workbook(
     series_outcome = materialize_financial_series(
         tools,
         run["final_extraction"],
+        trust_backend_range_resolutions=True,
     )
     validation = validate_extraction(
         tools,

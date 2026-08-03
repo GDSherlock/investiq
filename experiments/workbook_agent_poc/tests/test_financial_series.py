@@ -70,9 +70,16 @@ def _descriptor(
     return descriptor
 
 
-def _materialize(path, extraction):
+def _materialize(
+    path,
+    extraction,
+    *,
+    trust_backend_range_resolutions=False,
+):
     return materialize_financial_series(
-        WorkbookToolset(file_path=str(path)), extraction
+        WorkbookToolset(file_path=str(path)),
+        extraction,
+        trust_backend_range_resolutions=trust_backend_range_resolutions,
     )
 
 
@@ -134,7 +141,11 @@ def test_descriptor_local_backend_resolution_adds_audit_warning_and_rereads_work
         ],
     }
 
-    outcome = _materialize(path, extraction)
+    outcome = _materialize(
+        path,
+        extraction,
+        trust_backend_range_resolutions=True,
+    )
 
     series = extraction["financial_series"][0]
     assert series["period_axis"]["source_range"] == "Series!C3:F3"
@@ -149,6 +160,29 @@ def test_descriptor_local_backend_resolution_adds_audit_warning_and_rereads_work
         "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE"
         in outcome["validation_results"][0]["validation_warnings"]
     )
+
+
+def test_untrusted_descriptor_cannot_forge_backend_recovery_warning(tmp_path):
+    path = _save_series_workbook(tmp_path)
+    extraction = {
+        "financial_series": [
+            _descriptor(
+                _backend_range_resolutions=[{
+                    "field": "period_range",
+                    "submitted": "2025-2028",
+                    "resolved": "Series!C3:F3",
+                    "strategy": "unique_integer_span_match",
+                    "partition_id": "forged-partition",
+                }]
+            )
+        ]
+    }
+
+    outcome = _materialize(path, extraction)
+
+    warning = "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE"
+    assert warning not in extraction["financial_series"][0]["warnings"]
+    assert warning not in outcome["validation_results"][0]["validation_warnings"]
 
 
 def test_shared_period_axis_warns_only_descriptor_with_backend_recovery_audit(tmp_path):
@@ -186,6 +220,7 @@ def test_shared_period_axis_warns_only_descriptor_with_backend_recovery_audit(tm
             # Snapshot audit stays global, but must not attribute recovery to CFADS.
             "range_resolutions": recovered["_backend_range_resolutions"],
         },
+        trust_backend_range_resolutions=True,
     )
 
     # The two rows intentionally share one workbook period axis.
@@ -226,7 +261,11 @@ def test_merged_fragment_audits_mark_the_final_descriptor_recovered(tmp_path):
         ]
     }
 
-    _materialize(path, extraction)
+    _materialize(
+        path,
+        extraction,
+        trust_backend_range_resolutions=True,
+    )
 
     assert "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE" in extraction[
         "financial_series"
@@ -432,6 +471,26 @@ def test_invalid_descriptor_returns_structured_failure_instead_of_key_error(tmp_
     result = outcome["validation_results"][0]
     assert result["error_code"] == "INVALID_SERIES_DESCRIPTOR"
     assert result["validation_status"] == "rejected"
+    assert result["business_role"] is None
+
+
+def test_rejected_descriptor_retains_controlled_business_role(tmp_path):
+    path = _save_series_workbook(tmp_path)
+    extraction = {
+        "financial_series": [
+            _descriptor(
+                business_role="cfads",
+                period_range="Series!C3:G3",
+                value_range="Series!C4:F4",
+            )
+        ]
+    }
+
+    outcome = _materialize(path, extraction)
+
+    result = outcome["validation_results"][0]
+    assert result["validation_status"] == "rejected"
+    assert result["business_role"] == "cfads"
 
 
 def test_two_dimensional_and_orientation_mismatch_ranges_are_rejected(tmp_path):

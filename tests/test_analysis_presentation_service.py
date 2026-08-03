@@ -267,3 +267,73 @@ def test_overview_operating_trajectory_uses_explicit_revenue_cfads_fallback() ->
     finally:
         session.close()
         engine.dispose()
+
+
+def test_overview_resolves_cfads_from_direct_role_without_label_alias() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        run_id = new_uuid()
+        model_id = new_uuid()
+        graph_id = new_uuid()
+        projection_rows = []
+        for role, business_role, label in (
+            ("revenue", "unclassified", "REVENUE"),
+            ("cfads", "cfads", "Cash available for lenders"),
+        ):
+            projection_rows.append(
+                {
+                    "output_id": new_uuid(),
+                    "entity_kind": "series",
+                    "business_role": business_role,
+                    "label": label,
+                    "unit": "USDm",
+                    "mapping_status": "mapped",
+                    "support_status": "supported",
+                    "availability_status": "available",
+                    "points": [
+                        {
+                            "financial_series_value_id": new_uuid(),
+                            "period_index": index,
+                            "period": str(2026 + index),
+                            "mapping_status": "mapped",
+                            "support_status": "supported",
+                            "availability_status": "available",
+                            "baseline": _projected_number(value),
+                            "current": _projected_number(value),
+                        }
+                        for index, value in enumerate(("10", "12"))
+                    ],
+                }
+            )
+        projection = CalculationRunOutputsResponse.model_validate(
+            {
+                "calculation_run_id": run_id,
+                "model_version_id": model_id,
+                "graph_version_id": graph_id,
+                "comparison_baseline_run_id": run_id,
+                "outputs": projection_rows,
+            }
+        )
+        service = AnalysisPresentationService(
+            session,
+            _ProjectionService(projection),  # type: ignore[arg-type]
+        )
+
+        response = service.overview(run_id)
+
+        trajectory = next(
+            chart
+            for chart in response.charts
+            if chart.slot == "operating_trajectory"
+        )
+        assert trajectory.fallback_used == "revenue+cfads"
+        assert [series.role for series in trajectory.series] == [
+            "revenue",
+            "cfads",
+        ]
+        assert trajectory.series[1].label == "Cash available for lenders"
+    finally:
+        session.close()
+        engine.dispose()

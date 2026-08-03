@@ -560,6 +560,45 @@ def test_adapter_uses_partitioned_pipeline_by_default(monkeypatch):
     assert result["coverage"]["submission_allowed"] is True
 
 
+def test_adapter_trusts_recovery_audits_only_after_partitioned_pipeline(monkeypatch):
+    real_materialize = workbook_validation.materialize_financial_series
+    trusted_arguments: list[bool] = []
+
+    def recording_materialize(
+        tools,
+        extraction,
+        *,
+        trust_backend_range_resolutions=False,
+    ):
+        trusted_arguments.append(trust_backend_range_resolutions)
+        return real_materialize(
+            tools,
+            extraction,
+            trust_backend_range_resolutions=trust_backend_range_resolutions,
+        )
+
+    monkeypatch.setattr(
+        workbook_validation,
+        "materialize_financial_series",
+        recording_materialize,
+    )
+
+    run_workbook_validation(
+        FIXTURE.read_bytes(),
+        FIXTURE.name,
+        partition_driver_factory=PartitionedEmptyDriver,
+        partitioned=True,
+    )
+    run_workbook_validation(
+        FIXTURE.read_bytes(),
+        FIXTURE.name,
+        driver_factory=IncompleteDriver,
+        partitioned=False,
+    )
+
+    assert trusted_arguments == [True, False]
+
+
 @pytest.mark.parametrize("source_references", [None, []])
 def test_partition_source_rejection_does_not_fail_workbook(source_references):
     result = run_workbook_validation(

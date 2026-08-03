@@ -488,6 +488,7 @@ class FinancialSeriesMaterializer:
             "series_id": descriptor.get("series_id"),
             "label": descriptor.get("label"),
             "semantic_role": descriptor.get("semantic_role", "financial_series"),
+            "business_role": descriptor.get("business_role"),
             "materialization_status": "failed",
             "validation_status": "rejected",
             "calculation_type": "unknown",
@@ -777,6 +778,7 @@ class FinancialSeriesMaterializer:
         descriptors: Iterable[dict[str, Any]],
         *,
         input_counts: dict[str, int],
+        trust_backend_range_resolutions: bool = False,
     ) -> dict[str, Any]:
         canonical_by_index: dict[int, dict[str, Any]] = {}
         results: list[dict[str, Any]] = []
@@ -784,8 +786,9 @@ class FinancialSeriesMaterializer:
             try:
                 canonical = self.materialize(
                     descriptor,
-                    period_range_recovered=_has_backend_period_range_resolution(
-                        descriptor
+                    period_range_recovered=(
+                        trust_backend_range_resolutions
+                        and _has_backend_period_range_resolution(descriptor)
                     ),
                 )
             except SeriesMaterializationError as exc:
@@ -881,6 +884,8 @@ class FinancialSeriesMaterializer:
 def materialize_financial_series(
     tools: WorkbookToolset,
     extraction: dict[str, Any],
+    *,
+    trust_backend_range_resolutions: bool = False,
 ) -> dict[str, Any]:
     """Materialize canonical output in-place while preserving raw descriptor/legacy buckets."""
     descriptors, input_counts, raw_descriptors = normalize_financial_series_descriptors(extraction)
@@ -888,6 +893,7 @@ def materialize_financial_series(
     outcome = FinancialSeriesMaterializer(tools).materialize_collection(
         descriptors,
         input_counts=input_counts,
+        trust_backend_range_resolutions=trust_backend_range_resolutions,
     )
     extraction["financial_series"] = deepcopy(outcome["canonical_series"])
     return outcome

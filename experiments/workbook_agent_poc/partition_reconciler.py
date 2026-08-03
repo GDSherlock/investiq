@@ -619,14 +619,16 @@ def _parse_range(value: Any, *, default_sheet: Any = None) -> _RangeRef:
     normalized_range = cell_range.replace("$", "").upper()
     try:
         bounds = range_boundaries(normalized_range)
-    except ValueError as exc:
+        if not all(type(bound) is int and bound > 0 for bound in bounds):
+            raise TypeError("A1 range bounds must identify worksheet cells.")
+        min_col, min_row, max_col, max_row = bounds
+        rows = max_row - min_row + 1
+        cols = max_col - min_col + 1
+    except (TypeError, ValueError) as exc:
         raise ReconciliationError(
             "series_range_invalid",
             "Financial-series range is not valid A1 notation.",
         ) from exc
-    min_col, min_row, max_col, max_row = bounds
-    rows = max_row - min_row + 1
-    cols = max_col - min_col + 1
     orientation = "horizontal" if rows == 1 else "vertical" if cols == 1 else None
     return _RangeRef(
         sheet_name=sheet_name,

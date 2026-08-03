@@ -145,9 +145,15 @@ def run_workbook_validation(
         try:
             if use_partitioned:
                 run = run_partitioned_extraction(driver, tools)
+                trust_backend_range_resolutions = True
             else:
                 run = run_loop(driver, tools, caps=HardCaps())
-            series_outcome = materialize_financial_series(tools, run["final_extraction"])
+                trust_backend_range_resolutions = False
+            series_outcome = materialize_financial_series(
+                tools,
+                run["final_extraction"],
+                trust_backend_range_resolutions=trust_backend_range_resolutions,
+            )
             validation_results = validate_extraction(
                 tools,
                 run["final_extraction"],

@@ -253,6 +253,17 @@ def test_overview_operating_trajectory_uses_explicit_revenue_cfads_fallback() ->
             "revenue",
             "cfads",
         ]
+        project_cash_generation = next(
+            chart
+            for chart in response.charts
+            if chart.slot == "project_cash_generation"
+        )
+        assert project_cash_generation.availability_status == "available"
+        assert [series.role for series in project_cash_generation.series] == ["cfads"]
+        assert [point.value for point in project_cash_generation.series[0].points] == [
+            "10",
+            "12",
+        ]
     finally:
         session.close()
         engine.dispose()

@@ -28,7 +28,11 @@ from apps.api.app.model_extraction_types import (
     WorkbookTooLargeError,
 )
 from apps.api.app.workbook_storage import DatabaseWorkbookStorage
-from apps.api.app.workbook_validation import InvalidWorkbookError
+from apps.api.app.workbook_validation import (
+    InvalidWorkbookError,
+    WorkbookToolset,
+    materialize_financial_series,
+)
 from tests.model_extraction_test_support import (
     create_sqlite_session_factory,
     deterministic_extraction_result,
@@ -436,6 +440,78 @@ def test_financial_series_reloads_explicit_business_role(lifecycle_context) -> N
 
     assert len(series) == 1
     assert series[0].business_role == "revenue"
+
+
+def test_descriptor_materialization_persists_recovery_audit_and_business_role(
+    lifecycle_context,
+) -> None:
+    _engine, _session_factory, session = lifecycle_context
+
+    def descriptor_runner(file_bytes: bytes, _filename: str) -> dict:
+        extraction = {
+            "financial_series": [
+                {
+                    "series_id": "recovered-cfads",
+                    "label": "CFADS",
+                    "semantic_role": "financial_series",
+                    "business_role": "cfads",
+                    "category": "cash_flow",
+                    "unit": "USDm",
+                    "frequency": "annual",
+                    "period_range": "P&L!B2:C2",
+                    "value_range": "P&L!B3:C3",
+                    "label_reference": "P&L!A3",
+                    "reasoning_summary": "Recovered annual CFADS row",
+                    "llm_confidence": 0.93,
+                    "period_axis": {"periods": ["wrong", "wrong"]},
+                    "value_axis": {"values": [999, 999]},
+                }
+            ],
+            "range_resolutions": [
+                {
+                    "field": "period_range",
+                    "submitted": "2026-2027",
+                    "resolved": "P&L!B2:C2",
+                    "strategy": "unique_integer_span_match",
+                    "partition_id": "partition-pnl",
+                }
+            ],
+        }
+        materialized = materialize_financial_series(
+            WorkbookToolset(file_bytes=file_bytes), extraction
+        )
+        result = deterministic_extraction_result()
+        result["final_extraction"]["financial_series"] = extraction["financial_series"]
+        result["final_extraction"]["financial_series_descriptors"] = extraction[
+            "financial_series_descriptors"
+        ]
+        result["final_extraction"]["range_resolutions"] = extraction["range_resolutions"]
+        result["validation_results"] = [
+            item
+            for item in result["validation_results"]
+            if item.get("_bucket") != "financial_series"
+        ] + materialized["validation_results"]
+        result["time_series_summary"] = materialized["summary"]
+        return result
+
+    service = ModelExtractionPersistenceService(session, validation_runner=descriptor_runner)
+    response = service.process_upload(persistence_workbook_bytes(), "model.xlsx")
+    read_service = ModelExtractionReadService(session, DatabaseWorkbookStorage(session))
+
+    series = read_service.list_financial_series(response["model_version_id"])
+    values = session.scalars(
+        select(FinancialSeriesValue)
+        .where(FinancialSeriesValue.financial_series_id == series[0].id)
+        .order_by(FinancialSeriesValue.period_index)
+    ).all()
+
+    assert len(series) == 1
+    assert series[0].business_role == "cfads"
+    assert series[0].period_source_range == "'P&L'!B2:C2"
+    assert series[0].value_source_range == "'P&L'!B3:C3"
+    assert "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE" in series[0].warnings_json
+    assert [value.raw_period_label_json for value in values] == [2026, 2027]
+    assert [value.value_json for value in values] == [100.0, None]
 
 
 def test_same_source_assumption_family_candidates_use_bucket_priority(

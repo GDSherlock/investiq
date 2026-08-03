@@ -105,6 +105,53 @@ def test_descriptor_only_materializes_complete_horizontal_series(tmp_path):
     assert extraction["financial_series_descriptors"] == [_descriptor()]
 
 
+def test_materialization_preserves_business_role_in_canonical_and_validation_results(tmp_path):
+    path = _save_series_workbook(tmp_path)
+    extraction = {"financial_series": [_descriptor(business_role="cfads")]}
+
+    outcome = _materialize(path, extraction)
+
+    assert extraction["financial_series"][0]["business_role"] == "cfads"
+    assert outcome["validation_results"][0]["business_role"] == "cfads"
+
+
+def test_backend_range_resolution_adds_audit_warning_and_rereads_workbook_points(tmp_path):
+    path = _save_series_workbook(tmp_path)
+    extraction = {
+        "financial_series": [
+            _descriptor(
+                period_axis={"periods": ["wrong"] * 4},
+                value_axis={"values": [999] * 4},
+            )
+        ],
+        "range_resolutions": [
+            {
+                "field": "period_range",
+                "submitted": "2025-2028",
+                "resolved": "Series!C3:F3",
+                "strategy": "unique_integer_span_match",
+                "partition_id": "partition-series",
+            }
+        ],
+    }
+
+    outcome = _materialize(path, extraction)
+
+    series = extraction["financial_series"][0]
+    assert series["period_axis"]["source_range"] == "Series!C3:F3"
+    assert [point["raw_label"] for point in series["period_axis"]["periods"]] == [
+        "2025", "2026", "2027", "2028"
+    ]
+    assert [point["value"] for point in series["value_axis"]["values"]] == [
+        1.25, 2.25, 3.25, 4.25
+    ]
+    assert "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE" in series["warnings"]
+    assert (
+        "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE"
+        in outcome["validation_results"][0]["validation_warnings"]
+    )
+
+
 def test_unqualified_ranges_use_explicit_sheet_name_and_quoted_ranges_work(tmp_path):
     path = _save_series_workbook(tmp_path, sheet_name="Debt Schedule")
     extraction = {

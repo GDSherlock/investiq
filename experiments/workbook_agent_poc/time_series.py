@@ -504,7 +504,12 @@ class FinancialSeriesMaterializer:
             },
         }
 
-    def materialize(self, descriptor: dict[str, Any]) -> dict[str, Any]:
+    def materialize(
+        self,
+        descriptor: dict[str, Any],
+        *,
+        period_range_recovered: bool = False,
+    ) -> dict[str, Any]:
         missing = sorted(_REQUIRED_DESCRIPTOR_FIELDS - descriptor.keys())
         if missing:
             raise SeriesMaterializationError(
@@ -543,6 +548,8 @@ class FinancialSeriesMaterializer:
         period_facts = self._facts(period_spec)
         value_facts = self._facts(value_spec)
         warnings: list[str] = []
+        if period_range_recovered:
+            warnings.append("PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE")
         period_points: list[dict[str, Any]] = []
         for index, (coordinate, fact) in enumerate(zip(period_spec.coordinates, period_facts)):
             raw_label = fact.get("raw_value")
@@ -644,6 +651,7 @@ class FinancialSeriesMaterializer:
             for key in (
                 "series_id", "label", "semantic_role", "category", "unit", "frequency",
                 "scenario", "entity", "currency", "reasoning_summary", "llm_confidence",
+                "business_role",
             )
             if key in descriptor
         }
@@ -757,12 +765,28 @@ class FinancialSeriesMaterializer:
         descriptors: Iterable[dict[str, Any]],
         *,
         input_counts: dict[str, int],
+        range_resolutions: Iterable[dict[str, Any]] = (),
     ) -> dict[str, Any]:
+        recovered_period_ranges = {
+            str(resolution["resolved"])
+            for resolution in range_resolutions
+            if (
+                isinstance(resolution, dict)
+                and resolution.get("field") == "period_range"
+                and resolution.get("strategy") == "unique_integer_span_match"
+                and isinstance(resolution.get("resolved"), str)
+            )
+        }
         canonical_by_index: dict[int, dict[str, Any]] = {}
         results: list[dict[str, Any]] = []
         for index, descriptor in enumerate(descriptors):
             try:
-                canonical = self.materialize(descriptor)
+                canonical = self.materialize(
+                    descriptor,
+                    period_range_recovered=(
+                        descriptor.get("period_range") in recovered_period_ranges
+                    ),
+                )
             except SeriesMaterializationError as exc:
                 results.append(self._failure(descriptor, exc))
                 continue
@@ -863,6 +887,7 @@ def materialize_financial_series(
     outcome = FinancialSeriesMaterializer(tools).materialize_collection(
         descriptors,
         input_counts=input_counts,
+        range_resolutions=extraction.get("range_resolutions") or [],
     )
     extraction["financial_series"] = deepcopy(outcome["canonical_series"])
     return outcome

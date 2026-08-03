@@ -399,6 +399,8 @@ class PartitionReconciler:
                         "partition_series_invalid",
                         "Financial-series descriptor must be an object.",
                     )
+                descriptor = deepcopy(descriptor)
+                descriptor.pop("_backend_range_resolutions", None)
                 try:
                     _parse_range(
                         descriptor.get("period_range"),
@@ -698,13 +700,15 @@ def _resolve_integer_period_span(
     resolved = candidates[0].qualified
     normalized = deepcopy(descriptor)
     normalized["period_range"] = resolved
-    return normalized, {
+    resolution = {
         "field": "period_range",
         "submitted": submitted,
         "resolved": resolved,
         "strategy": "unique_integer_span_match",
         "partition_id": str(partial.get("partition_id")),
     }
+    normalized["_backend_range_resolutions"] = [deepcopy(resolution)]
+    return normalized, resolution
 
 
 def _range_is_inside(inner: _RangeRef, outer: _RangeRef) -> bool:
@@ -837,6 +841,14 @@ def _merge_series_pair(
     merged = deepcopy(left)
     merged["period_range"] = _joined_range(left_period, right_period)
     merged["value_range"] = _joined_range(left_value, right_value)
+    resolutions = [
+        *left.get("_backend_range_resolutions", []),
+        *right.get("_backend_range_resolutions", []),
+    ]
+    if resolutions:
+        merged["_backend_range_resolutions"] = _deduplicated_range_resolutions(
+            resolutions
+        )
     return merged
 
 

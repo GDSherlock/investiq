@@ -448,6 +448,13 @@ def test_descriptor_materialization_persists_recovery_audit_and_business_role(
     _engine, _session_factory, session = lifecycle_context
 
     def descriptor_runner(file_bytes: bytes, _filename: str) -> dict:
+        recovery_resolution = {
+            "field": "period_range",
+            "submitted": "2026-2027",
+            "resolved": "P&L!B2:C2",
+            "strategy": "unique_integer_span_match",
+            "partition_id": "partition-pnl",
+        }
         extraction = {
             "financial_series": [
                 {
@@ -465,17 +472,10 @@ def test_descriptor_materialization_persists_recovery_audit_and_business_role(
                     "llm_confidence": 0.93,
                     "period_axis": {"periods": ["wrong", "wrong"]},
                     "value_axis": {"values": [999, 999]},
+                    "_backend_range_resolutions": [recovery_resolution],
                 }
             ],
-            "range_resolutions": [
-                {
-                    "field": "period_range",
-                    "submitted": "2026-2027",
-                    "resolved": "P&L!B2:C2",
-                    "strategy": "unique_integer_span_match",
-                    "partition_id": "partition-pnl",
-                }
-            ],
+            "range_resolutions": [recovery_resolution],
         }
         materialized = materialize_financial_series(
             WorkbookToolset(file_bytes=file_bytes), extraction

@@ -115,23 +115,22 @@ def test_materialization_preserves_business_role_in_canonical_and_validation_res
     assert outcome["validation_results"][0]["business_role"] == "cfads"
 
 
-def test_backend_range_resolution_adds_audit_warning_and_rereads_workbook_points(tmp_path):
+def test_descriptor_local_backend_resolution_adds_audit_warning_and_rereads_workbook_points(tmp_path):
     path = _save_series_workbook(tmp_path)
+    resolution = {
+        "field": "period_range",
+        "submitted": "2025-2028",
+        "resolved": "Series!C3:F3",
+        "strategy": "unique_integer_span_match",
+        "partition_id": "partition-series",
+    }
     extraction = {
         "financial_series": [
             _descriptor(
                 period_axis={"periods": ["wrong"] * 4},
                 value_axis={"values": [999] * 4},
+                _backend_range_resolutions=[resolution],
             )
-        ],
-        "range_resolutions": [
-            {
-                "field": "period_range",
-                "submitted": "2025-2028",
-                "resolved": "Series!C3:F3",
-                "strategy": "unique_integer_span_match",
-                "partition_id": "partition-series",
-            }
         ],
     }
 
@@ -150,6 +149,88 @@ def test_backend_range_resolution_adds_audit_warning_and_rereads_workbook_points
         "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE"
         in outcome["validation_results"][0]["validation_warnings"]
     )
+
+
+def test_shared_period_axis_warns_only_descriptor_with_backend_recovery_audit(tmp_path):
+    path = _save_series_workbook(tmp_path)
+    workbook = openpyxl.load_workbook(path)
+    worksheet = workbook["Series"]
+    worksheet["B5"] = "CFADS"
+    for column, value in zip(range(3, 7), (10, 11, 12, 13)):
+        worksheet.cell(5, column, value)
+    workbook.save(path)
+    recovered = _descriptor(
+        series_id="recovered-revenue",
+        business_role="revenue",
+        _backend_range_resolutions=[
+            {
+                "field": "period_range",
+                "submitted": "2025-2028",
+                "resolved": "Series!C3:F3",
+                "strategy": "unique_integer_span_match",
+                "partition_id": "partition-revenue",
+            }
+        ],
+    )
+    cfads = _descriptor(
+        series_id="unrecovered-cfads",
+        label="CFADS",
+        business_role="cfads",
+        value_range="Series!C5:F5",
+    )
+
+    outcome = _materialize(
+        path,
+        {
+            "financial_series": [recovered, cfads],
+            # Snapshot audit stays global, but must not attribute recovery to CFADS.
+            "range_resolutions": recovered["_backend_range_resolutions"],
+        },
+    )
+
+    # The two rows intentionally share one workbook period axis.
+    series_by_id = {
+        series["series_id"]: series
+        for series in outcome["canonical_series"]
+    }
+    assert "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE" in series_by_id[
+        "recovered-revenue"
+    ]["warnings"]
+    assert "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE" not in series_by_id[
+        "unrecovered-cfads"
+    ]["warnings"]
+
+
+def test_merged_fragment_audits_mark_the_final_descriptor_recovered(tmp_path):
+    path = _save_series_workbook(tmp_path)
+    extraction = {
+        "financial_series": [
+            _descriptor(
+                _backend_range_resolutions=[
+                    {
+                        "field": "period_range",
+                        "submitted": "2025-2026",
+                        "resolved": "Series!C3:D3",
+                        "strategy": "unique_integer_span_match",
+                        "partition_id": "partition-left",
+                    },
+                    {
+                        "field": "period_range",
+                        "submitted": "2027-2028",
+                        "resolved": "Series!E3:F3",
+                        "strategy": "unique_integer_span_match",
+                        "partition_id": "partition-right",
+                    },
+                ]
+            )
+        ]
+    }
+
+    _materialize(path, extraction)
+
+    assert "PERIOD_RANGE_RESOLVED_FROM_WORKBOOK_EVIDENCE" in extraction[
+        "financial_series"
+    ][0]["warnings"]
 
 
 def test_unqualified_ranges_use_explicit_sheet_name_and_quoted_ranges_work(tmp_path):

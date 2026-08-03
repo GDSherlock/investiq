@@ -260,6 +260,18 @@ def normalize_financial_series_descriptors(
     )
 
 
+def _has_backend_period_range_resolution(descriptor: dict[str, Any]) -> bool:
+    resolutions = descriptor.get("_backend_range_resolutions")
+    if not isinstance(resolutions, list):
+        return False
+    return any(
+        isinstance(resolution, dict)
+        and resolution.get("field") == "period_range"
+        and resolution.get("strategy") == "unique_integer_span_match"
+        for resolution in resolutions
+    )
+
+
 class FinancialSeriesMaterializer:
     """Validate descriptors and build canonical workbook-owned series."""
 
@@ -765,26 +777,15 @@ class FinancialSeriesMaterializer:
         descriptors: Iterable[dict[str, Any]],
         *,
         input_counts: dict[str, int],
-        range_resolutions: Iterable[dict[str, Any]] = (),
     ) -> dict[str, Any]:
-        recovered_period_ranges = {
-            str(resolution["resolved"])
-            for resolution in range_resolutions
-            if (
-                isinstance(resolution, dict)
-                and resolution.get("field") == "period_range"
-                and resolution.get("strategy") == "unique_integer_span_match"
-                and isinstance(resolution.get("resolved"), str)
-            )
-        }
         canonical_by_index: dict[int, dict[str, Any]] = {}
         results: list[dict[str, Any]] = []
         for index, descriptor in enumerate(descriptors):
             try:
                 canonical = self.materialize(
                     descriptor,
-                    period_range_recovered=(
-                        descriptor.get("period_range") in recovered_period_ranges
+                    period_range_recovered=_has_backend_period_range_resolution(
+                        descriptor
                     ),
                 )
             except SeriesMaterializationError as exc:
@@ -887,7 +888,6 @@ def materialize_financial_series(
     outcome = FinancialSeriesMaterializer(tools).materialize_collection(
         descriptors,
         input_counts=input_counts,
-        range_resolutions=extraction.get("range_resolutions") or [],
     )
     extraction["financial_series"] = deepcopy(outcome["canonical_series"])
     return outcome

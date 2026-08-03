@@ -648,6 +648,9 @@ def test_fragment_merging_preserves_and_deduplicates_range_resolutions():
         "strategy": "unique_integer_span_match",
         "partition_id": "partition-right",
     }]
+    assert outcome.final_extraction["financial_series"][0][
+        "_backend_range_resolutions"
+    ] == outcome.final_extraction["range_resolutions"]
 
 
 def test_series_source_not_found_remains_terminal():

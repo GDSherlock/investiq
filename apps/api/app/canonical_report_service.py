@@ -291,6 +291,33 @@ class CanonicalReportService:
         model_version_id: str,
         request: CanonicalReportCreateRequest,
     ) -> tuple[dict[str, object], str | None, str | None]:
+        snapshot, sensitivity_id, monte_carlo_id = (
+            self.freeze_analysis_evidence(
+                model_version_id,
+                graph_version_id=request.graph_version_id,
+                calculation_run_id=request.calculation_run_id,
+                sensitivity_analysis_id=request.sensitivity_analysis_id,
+                monte_carlo_run_id=request.monte_carlo_run_id,
+            )
+        )
+        snapshot["template"] = {
+            "id": _TEMPLATE_ID,
+            "version": request.template_version,
+        }
+        snapshot["persona"] = request.persona.model_dump(mode="json")
+        return snapshot, sensitivity_id, monte_carlo_id
+
+    def freeze_analysis_evidence(
+        self,
+        model_version_id: str,
+        *,
+        graph_version_id: str,
+        calculation_run_id: str,
+        sensitivity_analysis_id: str | None = None,
+        monte_carlo_run_id: str | None = None,
+    ) -> tuple[dict[str, object], str | None, str | None]:
+        """Return only matched model, calculation, and analysis evidence."""
+
         model = self._session.get(ModelVersion, model_version_id)
         if model is None:
             raise CalculationIntegrationError(
@@ -300,11 +327,11 @@ class CanonicalReportService:
                 resource_id=model_version_id,
             )
         run = self._calculation_service.get_run(
-            request.calculation_run_id
+            calculation_run_id
         )
         if (
             run.model_version_id != model_version_id
-            or run.graph_version_id != request.graph_version_id
+            or run.graph_version_id != graph_version_id
             or run.status
             not in {"completed", "completed_with_warning"}
         ):
@@ -313,30 +340,30 @@ class CanonicalReportService:
                 "Report calculation must be a completed run from the same "
                 "model and graph.",
                 status_code=409,
-                resource_id=request.calculation_run_id,
+                resource_id=calculation_run_id,
             )
         overview = self._presentation_service.overview(
-            request.calculation_run_id
+            calculation_run_id
         )
         cash_flow = self._presentation_service.cash_flow(
-            request.calculation_run_id
+            calculation_run_id
         )
         sensitivity = self._select_sensitivity(
             model_version_id,
-            request.graph_version_id,
-            request.calculation_run_id,
-            request.sensitivity_analysis_id,
+            graph_version_id,
+            calculation_run_id,
+            sensitivity_analysis_id,
         )
         monte_carlo = self._select_monte_carlo(
             model_version_id,
-            request.graph_version_id,
-            request.calculation_run_id,
-            request.monte_carlo_run_id,
+            graph_version_id,
+            calculation_run_id,
+            monte_carlo_run_id,
         )
         assumptions = self._assumptions_snapshot(
             model_version_id,
-            request.graph_version_id,
-            request.calculation_run_id,
+            graph_version_id,
+            calculation_run_id,
         )
         sensitivity_snapshot = (
             {
@@ -363,7 +390,7 @@ class CanonicalReportService:
                 "validation_status": model.validation_status,
             },
             "calculation": {
-                "calculation_run_id": request.calculation_run_id,
+                "calculation_run_id": calculation_run_id,
                 "run": run.model_dump(mode="json"),
                 "overview": overview.model_dump(mode="json"),
                 "cash_flow": cash_flow.model_dump(mode="json"),
@@ -371,11 +398,6 @@ class CanonicalReportService:
             "assumptions": assumptions,
             "sensitivity": sensitivity_snapshot,
             "monte_carlo": monte_snapshot,
-            "template": {
-                "id": _TEMPLATE_ID,
-                "version": request.template_version,
-            },
-            "persona": request.persona.model_dump(mode="json"),
         }
         return (
             snapshot,

@@ -32,6 +32,7 @@ from apps.api.app.model_extraction_models import (
     ModelVersion,
 )
 from apps.api.app.calculation_integration_service import (
+    CalculationIntegrationError,
     CalculationIntegrationService,
 )
 from apps.api.app.model_extraction_read_service import (
@@ -821,6 +822,34 @@ def test_canonical_report_auto_freezes_matching_sensitivity_and_monte_carlo(
             AnalysisPresentationService(session, calculation_service),
             MonteCarloService(session, calculation_service),
         )
+        public_snapshot, public_sensitivity_id, public_monte_carlo_id = (
+            service.freeze_analysis_evidence(
+                model_id,
+                graph_version_id=prepared["graph_version_id"],
+                calculation_run_id=baseline["calculation_run_id"],
+            )
+        )
+        assert public_sensitivity_id == sensitivity_id
+        assert public_monte_carlo_id == monte_carlo_id
+        assert public_snapshot == {
+            key: persisted.frozen_evidence_json[key]
+            for key in (
+                "model",
+                "calculation",
+                "assumptions",
+                "sensitivity",
+                "monte_carlo",
+            )
+        }
+        with pytest.raises(
+            CalculationIntegrationError,
+            match="completed run from the same model and graph",
+        ):
+            service.freeze_analysis_evidence(
+                model_id,
+                graph_version_id=str(uuid.uuid4()),
+                calculation_run_id=baseline["calculation_run_id"],
+            )
         service.claim_next("report-worker")
         service.process_claimed(report_id)
 

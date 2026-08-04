@@ -219,6 +219,17 @@ export type CalculationRunOutput =
   | CalculationRunScalarOutput
   | CalculationRunSeriesOutput;
 
+export interface CalculationDerivedKpi {
+  role: 'equity_multiple';
+  label: string;
+  unit: 'x';
+  source_type: 'derived';
+  availability_status: CalculationOutputAvailabilityStatus;
+  source_ids: string[];
+  baseline: CalculationProjectedOutputValue;
+  current: CalculationProjectedOutputValue;
+}
+
 export interface CalculationRunOutputsResponse {
   calculation_run_id: string;
   model_version_id: string;
@@ -226,6 +237,7 @@ export interface CalculationRunOutputsResponse {
   base_run_id: string | null;
   comparison_baseline_run_id: string;
   outputs: CalculationRunOutput[];
+  derived_kpis?: CalculationDerivedKpi[];
 }
 
 export type CalculationOverrideTarget =

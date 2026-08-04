@@ -63,20 +63,30 @@ export interface SensitivityProjectedValue {
   warnings: string[];
 }
 
-export interface SensitivityKpi {
-  outputId: string;
+export interface SensitivityDisplayKpi {
+  outputId: string | null;
   businessRole: string;
   label: string;
   unit: string | null;
-  scenario: string | null;
-  mappingStatus: CalculationOutputMappingStatus;
-  supportStatus: string;
   numberFormat: string | null;
   availabilityStatus: CalculationOutputAvailabilityStatus;
   baseline: SensitivityProjectedValue;
   current: SensitivityProjectedValue;
   absoluteChange: number | null;
   percentageChange: number | null;
+}
+
+export interface SensitivityKpi extends SensitivityDisplayKpi {
+  outputId: string;
+  scenario: string | null;
+  mappingStatus: CalculationOutputMappingStatus;
+  supportStatus: string;
+}
+
+export interface SensitivityDerivedKpi extends SensitivityDisplayKpi {
+  outputId: null;
+  businessRole: 'equity_multiple';
+  sourceIds: string[];
 }
 
 export interface SensitivitySeriesPoint {
@@ -118,6 +128,7 @@ export interface SensitivityOutputView {
   comparisonBaselineRunId: string;
   hasOverride: boolean;
   kpis: SensitivityKpi[];
+  derivedKpis: SensitivityDerivedKpi[];
   series: SensitivitySeries[];
 }
 
@@ -482,6 +493,25 @@ export function buildSensitivityOutputView(
 
   kpis.sort((left, right) => semanticSort(left, right, kpiRoleRank));
   series.sort((left, right) => semanticSort(left, right, seriesRoleRank));
+  const derivedKpis: SensitivityDerivedKpi[] = (
+    response.derived_kpis ?? []
+  ).map((item) => {
+    const baseline = projectedValue(item.baseline);
+    const current = projectedValue(item.current);
+    return {
+      outputId: null,
+      businessRole: item.role,
+      label: item.label,
+      unit: item.unit,
+      numberFormat: '0.00x',
+      sourceIds: [...item.source_ids],
+      availabilityStatus: item.availability_status,
+      baseline,
+      current,
+      absoluteChange: absoluteChange(baseline, current),
+      percentageChange: percentageChange(baseline, current),
+    };
+  });
 
   return {
     calculationRunId: response.calculation_run_id,
@@ -493,6 +523,7 @@ export function buildSensitivityOutputView(
       response.calculation_run_id !==
       response.comparison_baseline_run_id,
     kpis,
+    derivedKpis,
     series,
   };
 }

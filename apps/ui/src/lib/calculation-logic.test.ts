@@ -198,6 +198,7 @@ function runOutputsResponse(
     base_run_id: 'baseline-run',
     comparison_baseline_run_id: 'baseline-run',
     outputs: [],
+    derived_kpis: [],
     ...overrides,
   };
 }
@@ -1287,6 +1288,69 @@ test('sensitivity adapter maps scalar KPIs by canonical role with real before an
     },
   );
   assert.doesNotMatch(JSON.stringify(view), /formula-project-irr|sheet_name|cell_address/);
+});
+
+test('sensitivity adapter maps backend-derived Equity × without a selectable output ID', () => {
+  const view = buildSensitivityOutputView(
+    runOutputsResponse({
+      derived_kpis: [
+        {
+          role: 'equity_multiple',
+          label: 'Equity ×',
+          unit: 'x',
+          source_type: 'derived',
+          availability_status: 'available',
+          source_ids: ['equity-cash-flow-series'],
+          baseline: projectedNumber('1.2'),
+          current: projectedNumber('1.8'),
+        },
+      ],
+    }),
+  );
+
+  assert.equal(
+    view.kpis.some((item) => item.businessRole === 'equity_multiple'),
+    false,
+  );
+  assert.equal(view.derivedKpis.length, 1);
+  const derived = view.derivedKpis[0];
+  assert.equal(derived.outputId, null);
+  assert.equal(derived.businessRole, 'equity_multiple');
+  assert.equal(derived.label, 'Equity ×');
+  assert.equal(derived.unit, 'x');
+  assert.equal(derived.numberFormat, '0.00x');
+  assert.deepEqual(derived.sourceIds, ['equity-cash-flow-series']);
+  assert.equal(derived.baseline.numericValue, 1.2);
+  assert.equal(derived.current.numericValue, 1.8);
+  assert.equal(derived.absoluteChange, 0.6000000000000001);
+  assert.equal(derived.percentageChange, 50.000000000000014);
+});
+
+test('sensitivity adapter preserves derived Equity × unavailability without coercing zero', () => {
+  const view = buildSensitivityOutputView(
+    runOutputsResponse({
+      derived_kpis: [
+        {
+          role: 'equity_multiple',
+          label: 'Equity ×',
+          unit: 'x',
+          source_type: 'derived',
+          availability_status: 'partial',
+          source_ids: ['equity-cash-flow-series'],
+          baseline: projectedNumber('1.2'),
+          current: unavailableProjection('EQUITY_CASH_FLOW_UNAVAILABLE'),
+        },
+      ],
+    }),
+  );
+
+  assert.equal(view.derivedKpis[0].availabilityStatus, 'partial');
+  assert.equal(view.derivedKpis[0].current.numericValue, null);
+  assert.equal(
+    view.derivedKpis[0].current.unavailableReason,
+    'EQUITY_CASH_FLOW_UNAVAILABLE',
+  );
+  assert.equal(view.derivedKpis[0].absoluteChange, null);
 });
 
 test('unsupported outputs stay unavailable and missing KPI roles are not fabricated', () => {

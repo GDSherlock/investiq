@@ -256,7 +256,7 @@ test('technical details keep all identities and versions in one disclosure model
   assert.deepEqual(details.slice(0, 7), [
     { label: 'Filename', value: 'model.xlsx' },
     { label: 'Endpoint mode', value: 'workbook_agent' },
-    { label: 'Runtime', value: '12.3457 seconds' },
+    { label: 'Runtime', value: '12.35 seconds' },
     { label: 'Model version', value: 'model-version' },
     { label: 'Workbook version', value: 'workbook-version' },
     { label: 'Graph version', value: 'graph-version' },

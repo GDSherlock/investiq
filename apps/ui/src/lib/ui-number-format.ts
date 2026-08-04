@@ -1,4 +1,4 @@
-export const MAX_UI_FRACTION_DIGITS = 4;
+export const MAX_UI_FRACTION_DIGITS = 2;
 
 export interface FormatUiNumberOptions
   extends Intl.NumberFormatOptions {

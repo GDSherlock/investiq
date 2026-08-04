@@ -139,6 +139,35 @@ function CapitalStructure({ chart }: { chart: AnalysisChart }) {
 
 function KpiCard({ kpi }: { kpi: AnalysisKpi }) {
   const available = kpi.availability_status === 'available';
+  const isProjectIrr = kpi.role === 'project_irr';
+  const valueText =
+    isProjectIrr
+      ? formatUiNumber(
+          (typeof kpi.value === 'string'
+            ? Number(kpi.value)
+            : kpi.value) * 100,
+          {
+            locales: 'en-US',
+            maximumFractionDigits: 2,
+            fallback: kpi.display_value,
+          },
+        ) + '%'
+      : formatAnalysisValue(
+          kpi.role,
+          kpi.value,
+          kpi.unit,
+          kpi.display_value,
+        );
+
+  const benchmarkText = kpi.benchmark
+    ? `${kpi.benchmark.role.replaceAll('_', ' ')}: ${formatAnalysisValue(
+        kpi.benchmark.role,
+        kpi.benchmark.value,
+        null,
+        kpi.benchmark.display_value,
+      )}`
+    : kpi.validation_status ?? kpi.quality_status;
+
   return (
     <section
       className={`bg-d-card rounded-lg shadow-sm border-l-4 p-4 min-w-0 ${
@@ -153,12 +182,7 @@ function KpiCard({ kpi }: { kpi: AnalysisKpi }) {
           available ? 'text-white' : 'text-d-muted'
         }`}
       >
-        {formatAnalysisValue(
-          kpi.role,
-          kpi.value,
-          kpi.unit,
-          kpi.display_value,
-        )}
+        {valueText}
       </div>
       <div
         className={`text-[10px] mt-1 truncate ${
@@ -168,14 +192,7 @@ function KpiCard({ kpi }: { kpi: AnalysisKpi }) {
         {kpi.status.replaceAll('_', ' ')}
       </div>
       <div className="text-[10px] text-d-muted truncate">
-        {kpi.benchmark
-          ? `${kpi.benchmark.role.replaceAll('_', ' ')}: ${formatAnalysisValue(
-              kpi.benchmark.role,
-              kpi.benchmark.value,
-              null,
-              kpi.benchmark.display_value,
-            )}`
-          : kpi.validation_status ?? kpi.quality_status}
+        {benchmarkText}
       </div>
     </section>
   );

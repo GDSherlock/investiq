@@ -14,12 +14,14 @@ import {
   getCalculationRun,
   getCalculationRunOutputs,
   getCalculationSensitivityAnalysis,
+  getOverviewAnalysis,
   getModel,
   prepareCalculation,
   runCalculation,
   runCalculationSensitivity,
 } from './api';
 import type {
+  AnalysisKpi,
   CalculationApiError,
   CalculationSensitivityRequest,
   CalculationSensitivityResponse,
@@ -61,6 +63,8 @@ import {
   selectSensitivityRunId,
 } from './sensitivity-output-adapter';
 import {
+  alignDashboardSlotsWithOverview,
+  overviewMatchesSensitivityOutputs,
   orderFixedDashboardAssumptions,
   promoteFixedDashboardDriver,
   resolveFixedDashboardAnalysis,
@@ -194,6 +198,30 @@ function runOutputsResponse(
     base_run_id: 'baseline-run',
     comparison_baseline_run_id: 'baseline-run',
     outputs: [],
+    ...overrides,
+  };
+}
+
+function overviewKpi(
+  slot: string,
+  sourceId: string | null,
+  overrides: Partial<AnalysisKpi> = {},
+): AnalysisKpi {
+  return {
+    slot,
+    role: slot,
+    label: slot,
+    value: sourceId === null ? null : '1',
+    unit: null,
+    display_value: sourceId === null ? 'Unavailable' : '1',
+    benchmark: null,
+    status: sourceId === null ? 'unavailable' : 'available',
+    source_type: sourceId === null ? 'unavailable' : 'calculated',
+    availability_status: sourceId === null ? 'unavailable' : 'available',
+    quality_status: sourceId === null ? 'unavailable' : 'matched',
+    validation_status: sourceId === null ? null : 'matched',
+    calculation_run_id: 'override-run',
+    source_ids: sourceId === null ? [] : [sourceId],
     ...overrides,
   };
 }
@@ -716,6 +744,7 @@ test('calculation API methods use the versioned proxy contract', async () => {
     });
     await runCalculation('model-version', buildBaselineRequest('graph-version'));
     await getCalculationRun('run-id');
+    await getOverviewAnalysis('run-id');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -735,6 +764,11 @@ test('calculation API methods use the versioned proxy contract', async () => {
     idempotency_key: null,
   });
   assert.equal(calls[4].url, '/api/v1/calculation-runs/run-id');
+  assert.equal(
+    calls[5].url,
+    '/api/v1/calculation-runs/run-id/overview',
+  );
+  assert.equal(calls[5].init?.method, undefined);
 });
 
 test('calculation API methods throw structured backend errors', async () => {
@@ -1453,6 +1487,213 @@ test('fixed dashboard keeps five controlled KPI slots and resolves only approved
     ],
   );
   assert.equal(dashboard.irrOutputId, 'equity-irr-output');
+});
+
+test('fixed dashboard display follows Overview source UUID without changing analysis IRR', () => {
+  const outputView = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'project-irr-output',
+          entity_kind: 'scalar',
+          business_role: 'project_irr',
+          label: 'Project IRR',
+          unit: '%',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0%',
+          availability_status: 'available',
+          baseline: projectedNumber('0.1'),
+          current: projectedNumber('0.12'),
+        },
+        {
+          output_id: 'equity-npv-output',
+          entity_kind: 'scalar',
+          business_role: 'npv',
+          label: 'Equity NPV',
+          unit: '$mm',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0',
+          availability_status: 'available',
+          baseline: projectedNumber('-5.75'),
+          current: projectedNumber('16.35'),
+        },
+        {
+          output_id: 'project-npv-output',
+          entity_kind: 'scalar',
+          business_role: 'npv',
+          label: 'Project NPV ($mm)',
+          unit: '$mm',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0',
+          availability_status: 'available',
+          baseline: projectedNumber('-16.81'),
+          current: projectedNumber('15.15'),
+        },
+      ],
+    }),
+  );
+  const calculationDashboard = resolveFixedDashboardViewModel(outputView.kpis);
+
+  assert.equal(
+    calculationDashboard.slots.find((slot) => slot.key === 'npv')?.kpi
+      ?.outputId,
+    'equity-npv-output',
+  );
+
+  const displayDashboard = alignDashboardSlotsWithOverview(
+    calculationDashboard,
+    outputView.kpis,
+    [
+      overviewKpi('primary_return', 'project-irr-output'),
+      overviewKpi('npv', 'project-npv-output', {
+        role: 'project_npv',
+        label: 'Project NPV',
+      }),
+    ],
+  );
+
+  assert.equal(
+    displayDashboard.slots.find((slot) => slot.key === 'npv')?.kpi?.outputId,
+    'project-npv-output',
+  );
+  assert.equal(
+    displayDashboard.irrOutputId,
+    calculationDashboard.irrOutputId,
+  );
+});
+
+test('Overview-aligned display does not guess when the authoritative source is unavailable', () => {
+  const outputView = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'equity-npv-output',
+          entity_kind: 'scalar',
+          business_role: 'npv',
+          label: 'Equity NPV',
+          unit: '$mm',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0',
+          availability_status: 'available',
+          baseline: projectedNumber('10'),
+          current: projectedNumber('20'),
+        },
+      ],
+    }),
+  );
+  const calculationDashboard = resolveFixedDashboardViewModel(outputView.kpis);
+
+  const displayDashboard = alignDashboardSlotsWithOverview(
+    calculationDashboard,
+    outputView.kpis,
+    [overviewKpi('npv', null)],
+  );
+  const npvSlot = displayDashboard.slots.find((slot) => slot.key === 'npv');
+
+  assert.equal(npvSlot?.kpi, null);
+  assert.equal(npvSlot?.unavailable, true);
+  assert.equal(
+    displayDashboard.irrOutputId,
+    calculationDashboard.irrOutputId,
+  );
+});
+
+test('Overview-aligned DSCR display uses the first available Overview source', () => {
+  const outputView = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'average-dscr-output',
+          entity_kind: 'scalar',
+          business_role: 'average_dscr',
+          label: 'Average DSCR',
+          unit: 'x',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.00x',
+          availability_status: 'available',
+          baseline: projectedNumber('1.1'),
+          current: projectedNumber('1.2'),
+        },
+        {
+          output_id: 'minimum-dscr-output',
+          entity_kind: 'scalar',
+          business_role: 'minimum_dscr',
+          label: 'Minimum DSCR',
+          unit: 'x',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.00x',
+          availability_status: 'available',
+          baseline: projectedNumber('1.0'),
+          current: projectedNumber('1.1'),
+        },
+      ],
+    }),
+  );
+  const dashboard = alignDashboardSlotsWithOverview(
+    resolveFixedDashboardViewModel(outputView.kpis),
+    outputView.kpis,
+    [
+      overviewKpi('average_dscr', null),
+      overviewKpi('minimum_dscr', 'minimum-dscr-output'),
+    ],
+  );
+
+  assert.equal(
+    dashboard.slots.find((slot) => slot.key === 'dscr')?.kpi?.outputId,
+    'minimum-dscr-output',
+  );
+});
+
+test('Overview display data must match the exact sensitivity run, model, and graph', () => {
+  const outputs = runOutputsResponse();
+  const overview = {
+    calculation_run_id: outputs.calculation_run_id,
+    model_version_id: outputs.model_version_id,
+    graph_version_id: outputs.graph_version_id,
+    kpis: [],
+    charts: [],
+  };
+
+  assert.equal(overviewMatchesSensitivityOutputs(overview, outputs), true);
+  assert.equal(
+    overviewMatchesSensitivityOutputs(
+      { ...overview, calculation_run_id: 'different-run' },
+      outputs,
+    ),
+    false,
+  );
+  assert.equal(
+    overviewMatchesSensitivityOutputs(
+      { ...overview, model_version_id: 'different-model' },
+      outputs,
+    ),
+    false,
+  );
+  assert.equal(
+    overviewMatchesSensitivityOutputs(
+      { ...overview, graph_version_id: 'different-graph' },
+      outputs,
+    ),
+    false,
+  );
 });
 
 test('fixed dashboard assumption helpers preserve canonical order, impact ranking, cap, and deterministic promotion', () => {

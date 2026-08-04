@@ -1,4 +1,9 @@
-import type { CalculationSensitivityResponse } from './calculation-api-types';
+import type {
+  AnalysisKpi,
+  CalculationRunOutputsResponse,
+  CalculationSensitivityResponse,
+  OverviewAnalysisResponse,
+} from './calculation-api-types';
 import type {
   SensitivityAssumption,
   SensitivityTornadoRow,
@@ -55,6 +60,16 @@ const FIXED_DASHBOARD_SLOT_DEFINITIONS: readonly FixedDashboardSlotDefinition[] 
     sourceLabels: ['Equity Multiple'],
   },
 ];
+
+const OVERVIEW_SLOTS_BY_FIXED_SLOT: Readonly<
+  Record<FixedDashboardSlotKey, readonly string[]>
+> = {
+  irr: ['primary_return'],
+  npv: ['npv'],
+  payback: ['payback_period'],
+  dscr: ['average_dscr', 'minimum_dscr'],
+  equity_multiple: ['leverage'],
+};
 
 export interface FixedDashboardKpiSlot {
   key: FixedDashboardSlotKey;
@@ -188,6 +203,97 @@ export function resolveFixedDashboardViewModel(
         ? irrSlot.kpi?.outputId ?? null
         : null,
   };
+}
+
+/**
+ * Aligns only the fixed dashboard's displayed KPI sources with Overview.
+ * The calculation-facing IRR output identity remains unchanged.
+ */
+export function alignDashboardSlotsWithOverview(
+  dashboard: FixedDashboardViewModel,
+  sensitivityKpis: readonly SensitivityKpi[],
+  overviewKpis: readonly AnalysisKpi[],
+): FixedDashboardViewModel {
+  const sensitivityByOutputId = new Map(
+    sensitivityKpis.map((kpi) => [kpi.outputId, kpi]),
+  );
+  const overviewBySlot = new Map(overviewKpis.map((kpi) => [kpi.slot, kpi]));
+
+  const slots = dashboard.slots.map((slot) => {
+    const overviewKpi = OVERVIEW_SLOTS_BY_FIXED_SLOT[slot.key]
+      .map((overviewSlot) => overviewBySlot.get(overviewSlot))
+      .find((candidate) => candidate?.source_ids[0] !== undefined);
+    const sourceOutputId = overviewKpi?.source_ids[0];
+
+    if (sourceOutputId === undefined) {
+      return {
+        ...slot,
+        kpi: null,
+        unavailable: true,
+        unavailableDetail: 'Unavailable canonical output',
+      };
+    }
+
+    const selectedKpi = sensitivityByOutputId.get(sourceOutputId);
+    if (selectedKpi === undefined) {
+      return {
+        ...slot,
+        kpi: null,
+        unavailable: true,
+        unavailableDetail:
+          'Overview source output is missing from this calculation run',
+      };
+    }
+
+    if (!isAvailableNumericKpi(selectedKpi)) {
+      const unavailableDetail = Array.from(
+        new Set(
+          [
+            selectedKpi.current.unavailableReason,
+            selectedKpi.current.executionStatus,
+            selectedKpi.current.engineErrorCode,
+            selectedKpi.current.validationStatus,
+            ...selectedKpi.current.warnings,
+            selectedKpi.supportStatus === 'supported'
+              ? null
+              : selectedKpi.supportStatus,
+          ].filter(
+            (detail): detail is string =>
+              detail !== null && detail.trim().length > 0,
+          ),
+        ),
+      ).join(' · ');
+      return {
+        ...slot,
+        kpi: selectedKpi,
+        unavailable: true,
+        unavailableDetail: unavailableDetail || 'Unavailable canonical output',
+      };
+    }
+
+    return {
+      ...slot,
+      kpi: selectedKpi,
+      unavailable: false,
+      unavailableDetail: null,
+    };
+  });
+
+  return {
+    slots,
+    irrOutputId: dashboard.irrOutputId,
+  };
+}
+
+export function overviewMatchesSensitivityOutputs(
+  overview: OverviewAnalysisResponse,
+  outputs: CalculationRunOutputsResponse,
+): boolean {
+  return (
+    overview.calculation_run_id === outputs.calculation_run_id &&
+    overview.model_version_id === outputs.model_version_id &&
+    overview.graph_version_id === outputs.graph_version_id
+  );
 }
 
 export function resolveFixedDashboardCalculationMode(

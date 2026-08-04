@@ -139,25 +139,16 @@ function CapitalStructure({ chart }: { chart: AnalysisChart }) {
 
 function KpiCard({ kpi }: { kpi: AnalysisKpi }) {
   const available = kpi.availability_status === 'available';
-  const isProjectIrr = kpi.role === 'project_irr';
-  const valueText =
-    isProjectIrr
-      ? formatUiNumber(
-          (typeof kpi.value === 'string'
-            ? Number(kpi.value)
-            : kpi.value) * 100,
-          {
-            locales: 'en-US',
-            maximumFractionDigits: 2,
-            fallback: kpi.display_value,
-          },
-        ) + '%'
-      : formatAnalysisValue(
-          kpi.role,
-          kpi.value,
-          kpi.unit,
-          kpi.display_value,
-        );
+  const valueText = formatAnalysisValue(
+    kpi.role,
+    kpi.value,
+    kpi.unit,
+    kpi.display_value,
+    {
+      maximumFractionDigits:
+        kpi.role === 'project_irr' ? 2 : undefined,
+    },
+  );
 
   const benchmarkText = kpi.benchmark
     ? `${kpi.benchmark.role.replaceAll('_', ' ')}: ${formatAnalysisValue(

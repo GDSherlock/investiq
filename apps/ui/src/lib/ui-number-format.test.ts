@@ -93,6 +93,29 @@ test('analysis values preserve role and unit semantics within the cap', () => {
   );
 });
 
+test('project IRR precision override preserves the unavailable fallback', () => {
+  assert.equal(
+    formatAnalysisValue(
+      'project_irr',
+      '0.094429934276484065',
+      '%',
+      'Unavailable',
+      { maximumFractionDigits: 2 },
+    ),
+    '9.44%',
+  );
+  assert.equal(
+    formatAnalysisValue(
+      'project_irr',
+      null,
+      '%',
+      'Unavailable',
+      { maximumFractionDigits: 2 },
+    ),
+    'Unavailable',
+  );
+});
+
 test('typed numeric strings are formatted only at their display boundary', () => {
   const persisted = {
     value_type: 'number' as const,

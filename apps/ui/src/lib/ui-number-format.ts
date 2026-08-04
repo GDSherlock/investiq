@@ -6,6 +6,10 @@ export interface FormatUiNumberOptions
   locales?: string | string[];
 }
 
+export interface FormatAnalysisValueOptions {
+  maximumFractionDigits?: number;
+}
+
 function fractionDigits(
   requested: number | undefined,
   fallback: number,
@@ -88,6 +92,7 @@ export function formatAnalysisValue(
   value: number | string | null | undefined,
   unit: string | null,
   fallback = 'Unavailable',
+  options: FormatAnalysisValueOptions = {},
 ): string {
   const numeric = finiteNumber(value);
   if (numeric === null) {
@@ -96,7 +101,7 @@ export function formatAnalysisValue(
   if (ANALYSIS_PERCENTAGE_ROLES.has(role)) {
     return `${formatUiNumber(numeric * 100, {
       locales: 'en-US',
-      maximumFractionDigits: 1,
+      maximumFractionDigits: options.maximumFractionDigits ?? 1,
     })}%`;
   }
   if (ANALYSIS_MULTIPLE_ROLES.has(role)) {

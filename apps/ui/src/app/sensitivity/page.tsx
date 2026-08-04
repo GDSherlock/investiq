@@ -15,12 +15,14 @@ import {
   getCalculationSensitivityAnalysis,
   getCalculationReadiness,
   getCalculationRunOutputs,
+  getOverviewAnalysis,
   runCalculation,
   runCalculationSensitivity,
 } from '@/lib/api';
 import type {
   CalculationRunOutputsResponse,
   CalculationSensitivityResponse,
+  OverviewAnalysisResponse,
 } from '@/lib/calculation-api-types';
 import {
   CALCULATION_STORAGE_KEYS,
@@ -52,7 +54,9 @@ import {
   type SensitivityAssumption,
 } from '@/lib/sensitivity-analysis';
 import {
+  alignDashboardSlotsWithOverview,
   orderFixedDashboardAssumptions,
+  overviewMatchesSensitivityOutputs,
   resolveFixedDashboardAnalysis,
   resolveFixedDashboardTwoWayUnavailableReason,
   resolveFixedDashboardViewModel,
@@ -196,6 +200,8 @@ export default function SensitivityPage() {
     );
   const [emptyReason, setEmptyReason] = useState<EmptyReason>(null);
   const [error, setError] = useState<Error | null>(null);
+  const [overview, setOverview] =
+    useState<OverviewAnalysisResponse | null>(null);
   const [pendingTornadoReplacementTargetKey, setPendingTornadoReplacementTargetKey] =
     useState<string | null>(null);
 
@@ -207,6 +213,7 @@ export default function SensitivityPage() {
   const pendingExactCalculationRef =
     useRef<PendingExactCalculation | null>(null);
   const bootstrapRevisionRef = useRef(0);
+  const overviewRequestRevisionRef = useRef(0);
   const activeIdentityRef = useRef<ActiveIdentity | null>(null);
   const workbenchSnapshotRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
   const persistedWorkbenchRef = useRef<WorkbenchState>(EMPTY_WORKBENCH);
@@ -1403,6 +1410,35 @@ export default function SensitivityPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const outputs = workbench.outputs;
+    const requestRevision = ++overviewRequestRevisionRef.current;
+    setOverview(null);
+
+    if (outputs !== null) {
+      void getOverviewAnalysis(outputs.calculation_run_id)
+        .then((candidate) => {
+          if (
+            requestRevision === overviewRequestRevisionRef.current &&
+            workbenchSnapshotRef.current.outputs?.calculation_run_id ===
+              outputs.calculation_run_id &&
+            overviewMatchesSensitivityOutputs(candidate, outputs)
+          ) {
+            setOverview(candidate);
+          }
+        })
+        .catch(() => {
+          // Overview is display-only; calculation state remains authoritative.
+        });
+    }
+
+    return () => {
+      if (overviewRequestRevisionRef.current === requestRevision) {
+        overviewRequestRevisionRef.current += 1;
+      }
+    };
+  }, [workbench.outputs]);
+
   const exactOutputView = useMemo(
     () =>
       workbench.outputs
@@ -1478,13 +1514,26 @@ export default function SensitivityPage() {
         : null,
     [assumptionsByTarget, workbench.analysis],
   );
-  const dashboard = useMemo(
+  const calculationDashboard = useMemo(
     () =>
       resolveFixedDashboardViewModel(
         outputView?.kpis ?? [],
         workbench.selectedOutputId,
       ),
     [outputView, workbench.selectedOutputId],
+  );
+  const dashboard = useMemo(
+    () =>
+      alignDashboardSlotsWithOverview(
+        calculationDashboard,
+        outputView?.kpis ?? [],
+        overview !== null &&
+          workbench.outputs !== null &&
+          overviewMatchesSensitivityOutputs(overview, workbench.outputs)
+          ? overview.kpis
+          : [],
+      ),
+    [calculationDashboard, outputView, overview, workbench.outputs],
   );
   const orderedAssumptions = useMemo(
     () =>

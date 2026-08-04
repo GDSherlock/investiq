@@ -33,7 +33,7 @@ def _request() -> dict[str, object]:
             }
         ],
         "correlation_matrix": [[1.0]],
-        "selected_output_roles": ["project_irr", "project_npv"],
+        "selected_output_roles": ["project_irr"],
         "idempotency_key": "mc-request-1",
     }
 
@@ -43,6 +43,20 @@ def test_monte_carlo_request_accepts_bounded_canonical_configuration() -> None:
 
     assert request.trial_count == 50_000
     assert request.inputs[0].distribution_type == "normal"
+
+
+@pytest.mark.parametrize(
+    "roles",
+    [[], ["equity_irr"], ["project_irr", "equity_irr"]],
+)
+def test_monte_carlo_request_requires_only_project_irr(
+    roles: list[str],
+) -> None:
+    payload = _request()
+    payload["selected_output_roles"] = roles
+
+    with pytest.raises(ValidationError, match="Project IRR"):
+        MonteCarloRunCreateRequest.model_validate(payload)
 
 
 def test_monte_carlo_request_rejects_duplicate_parameters() -> None:

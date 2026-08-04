@@ -561,9 +561,16 @@ class MonteCarloRunCreateRequest(_CalculationDTO):
     correlation_matrix: list[list[float]]
     selected_output_roles: list[MonteCarloOutputRole] = Field(
         min_length=1,
-        max_length=5,
+        max_length=1,
     )
     idempotency_key: StrictStr = Field(min_length=1, max_length=128)
+
+    @field_validator("selected_output_roles", mode="before")
+    @classmethod
+    def validate_project_irr_target(cls, value: Any) -> Any:
+        if value != ["project_irr"]:
+            raise ValueError("Monte Carlo target output must be Project IRR")
+        return value
 
     @model_validator(mode="after")
     def validate_configuration(self) -> "MonteCarloRunCreateRequest":
@@ -572,10 +579,8 @@ class MonteCarloRunCreateRequest(_CalculationDTO):
         parameter_ids = [item.parameter_id for item in self.inputs]
         if len(parameter_ids) != len(set(parameter_ids)):
             raise ValueError("Duplicate Monte Carlo parameter")
-        if len(self.selected_output_roles) != len(
-            set(self.selected_output_roles)
-        ):
-            raise ValueError("Duplicate Monte Carlo output role")
+        if self.selected_output_roles != ["project_irr"]:
+            raise ValueError("Monte Carlo target output must be Project IRR")
         validate_correlation_matrix(
             self.correlation_matrix,
             len(self.inputs),

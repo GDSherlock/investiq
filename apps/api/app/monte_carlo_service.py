@@ -57,13 +57,6 @@ _DISTRIBUTIONS = [
     "lognormal",
     "discrete",
 ]
-_OUTPUT_ROLES = {
-    "project_irr",
-    "equity_irr",
-    "project_npv",
-    "equity_npv",
-    "minimum_dscr",
-}
 _HOLDOUT_ERROR_LIMIT = Decimal("0.05")
 
 
@@ -153,16 +146,12 @@ class MonteCarloService:
         definitions = self._calculation_service.list_outputs(
             model_version_id
         )
-        supported_outputs = [
-            role
-            for role in sorted(_OUTPUT_ROLES)
-            if resolve_analysis_output(
-                definitions.outputs,
-                role,
-                entity_kind="scalar",
-            )
-            is not None
-        ]
+        project_irr = resolve_analysis_output(
+            definitions.outputs,
+            "project_irr",
+            entity_kind="scalar",
+        )
+        supported_outputs = ["project_irr"] if project_irr is not None else []
         return MonteCarloInputCatalogResponse(
             model_version_id=model_version_id,
             graph_version_id=readiness.graph_version_id,

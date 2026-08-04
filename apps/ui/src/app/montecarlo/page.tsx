@@ -49,14 +49,6 @@ const DISTRIBUTION_TYPES: MonteCarloDistributionType[] = [
   'discrete',
 ];
 
-const OUTPUT_LABELS: Record<MonteCarloOutputRole, string> = {
-  project_irr: 'Project IRR',
-  equity_irr: 'Equity IRR',
-  project_npv: 'Project NPV',
-  equity_npv: 'Equity NPV',
-  minimum_dscr: 'Minimum DSCR',
-};
-
 type DraftInput = {
   selected: boolean;
   distributionType: MonteCarloDistributionType;
@@ -385,9 +377,6 @@ export default function MonteCarloPage() {
     {},
   );
   const [correlations, setCorrelations] = useState<number[][]>([]);
-  const [selectedOutputs, setSelectedOutputs] = useState<
-    MonteCarloOutputRole[]
-  >([]);
   const [trialCount, setTrialCount] = useState(50000);
   const [randomSeed, setRandomSeed] = useState(1729);
   const [run, setRun] = useState<MonteCarloRunResponse | null>(null);
@@ -423,7 +412,6 @@ export default function MonteCarloPage() {
         setCatalog(nextCatalog);
         setDrafts(makeDrafts(nextCatalog.inputs));
         setCorrelations(identityMatrix(nextCatalog.inputs.length));
-        setSelectedOutputs(nextCatalog.supported_output_roles);
         setRun(
           history.runs.find(
             (candidate) =>
@@ -546,8 +534,8 @@ export default function MonteCarloPage() {
       if (selectedInputs.length === 0) {
         throw new Error('Select at least one stochastic input.');
       }
-      if (selectedOutputs.length === 0) {
-        throw new Error('Select at least one output metric.');
+      if (!catalog.supported_output_roles.includes('project_irr')) {
+        throw new Error('Project IRR is unavailable for this model.');
       }
       const inputIndices = selectedInputs.map((input) =>
         catalog.inputs.findIndex(
@@ -580,7 +568,7 @@ export default function MonteCarloPage() {
           correlation_matrix: inputIndices.map((row) =>
             inputIndices.map((column) => correlations[row][column]),
           ),
-          selected_output_roles: selectedOutputs,
+          selected_output_roles: ['project_irr'],
           idempotency_key: crypto.randomUUID(),
         },
       );
@@ -621,6 +609,8 @@ export default function MonteCarloPage() {
       : 'Unavailable';
   const canConfigure =
     analysis.status === 'ready' && catalog !== null && !loading;
+  const projectIrrAvailable =
+    catalog?.supported_output_roles.includes('project_irr') ?? false;
 
   return (
     <div className="flex flex-col lg:flex-row gap-4">
@@ -668,7 +658,7 @@ export default function MonteCarloPage() {
               </label>
               <button
                 type="button"
-                disabled={!canConfigure || submitting}
+                disabled={!canConfigure || !projectIrrAvailable || submitting}
                 onClick={() => void handleRun()}
                 className="rounded-lg bg-gold-500 px-5 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -796,36 +786,21 @@ export default function MonteCarloPage() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="text-sm font-semibold text-white">
-                      Simulation outputs
+                      Target output
                     </h2>
                     <p className="mt-1 text-[10px] text-d-muted">
-                      Only reviewed canonical output bindings are
-                      selectable.
+                      Fixed for comparable persisted simulations.
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-3">
-                    {catalog.supported_output_roles.map((role) => (
-                      <label
-                        key={role}
-                        className="flex items-center gap-1.5 text-[10px] text-white"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedOutputs.includes(role)}
-                          onChange={(event) =>
-                            setSelectedOutputs((current) =>
-                              event.target.checked
-                                ? [...current, role]
-                                : current.filter(
-                                    (candidate) => candidate !== role,
-                                  ),
-                            )
-                          }
-                          className="accent-gold-500"
-                        />
-                        {OUTPUT_LABELS[role]}
-                      </label>
-                    ))}
+                  <div className="text-right">
+                    <div className="text-sm font-semibold text-white">
+                      Project IRR
+                    </div>
+                    {!projectIrrAvailable && (
+                      <p className="mt-1 text-[10px] text-amber-300">
+                        Project IRR is unavailable for this model.
+                      </p>
+                    )}
                   </div>
                 </div>
               </section>

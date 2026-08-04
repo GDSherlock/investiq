@@ -359,13 +359,26 @@ def test_monte_carlo_queue_is_idempotent_and_worker_persists_bounded_artifact(
                 CanonicalOutput.model_version_id == model_id
             )
         )
-        output.business_role = "project_irr"
+        output.business_role = "equity_irr"
         session.commit()
 
     prepared = client.post(
         f"/api/v1/models/{model_id}/calculation/prepare",
         json={},
     ).json()
+    equity_only_catalog = client.get(
+        f"/api/v1/models/{model_id}/monte-carlo/inputs"
+    )
+    assert equity_only_catalog.status_code == 200
+    assert equity_only_catalog.json()["supported_output_roles"] == []
+    with api_context["session_factory"]() as session:
+        output = session.scalar(
+            select(CanonicalOutput).where(
+                CanonicalOutput.model_version_id == model_id
+            )
+        )
+        output.business_role = "project_irr"
+        session.commit()
     baseline = client.post(
         f"/api/v1/models/{model_id}/calculations",
         json={
@@ -403,6 +416,16 @@ def test_monte_carlo_queue_is_idempotent_and_worker_persists_bounded_artifact(
         "selected_output_roles": ["project_irr"],
         "idempotency_key": "api-monte-carlo-1",
     }
+    for invalid_roles in (
+        ["equity_irr"],
+        ["project_irr", "equity_irr"],
+    ):
+        invalid = client.post(
+            f"/api/v1/models/{model_id}/monte-carlo-runs",
+            json={**payload, "selected_output_roles": invalid_roles},
+        )
+        assert invalid.status_code == 422
+
     created = client.post(
         f"/api/v1/models/{model_id}/monte-carlo-runs",
         json=payload,
@@ -446,6 +469,49 @@ def test_monte_carlo_queue_is_idempotent_and_worker_persists_bounded_artifact(
         == "available"
     )
     assert after - before == 3
+
+    legacy_run_id = str(uuid.uuid4())
+    with api_context["session_factory"]() as session:
+        session.add(
+            MonteCarloRunRecord(
+                id=legacy_run_id,
+                model_version_id=model_id,
+                graph_version_id=prepared["graph_version_id"],
+                baseline_calculation_run_id=baseline["calculation_run_id"],
+                current_calculation_run_id=baseline["calculation_run_id"],
+                request_hash="d" * 64,
+                idempotency_key="legacy-multi-output-run",
+                trial_count=100,
+                random_seed=7,
+                method_version="legacy-test",
+                engine_version="legacy-test",
+                status="cancelled",
+            )
+        )
+        session.flush()
+        session.add(
+            MonteCarloInputConfigurationRecord(
+                id=str(uuid.uuid4()),
+                monte_carlo_run_id=legacy_run_id,
+                inputs_json=[],
+                correlation_matrix_json=[],
+                selected_output_roles_json=["equity_irr", "project_irr"],
+            )
+        )
+        session.commit()
+    history = client.get(
+        f"/api/v1/models/{model_id}/monte-carlo-runs"
+    )
+    assert history.status_code == 200
+    legacy = next(
+        item
+        for item in history.json()["runs"]
+        if item["monte_carlo_run_id"] == legacy_run_id
+    )
+    assert legacy["input_configuration"]["selected_output_roles"] == [
+        "equity_irr",
+        "project_irr",
+    ]
 
     conflict_payload = {**payload, "random_seed": 18}
     conflict = client.post(

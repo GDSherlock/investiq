@@ -1034,6 +1034,9 @@ test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => 
     'discrete',
     '50000',
     'Sensitivity ranking',
+    'Target output',
+    'Project IRR',
+    "selected_output_roles: ['project_irr']",
   ]) {
     assert.ok(source.includes(required), `expected ${required}`);
   }
@@ -1050,6 +1053,8 @@ test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => 
     'Capex overrun',
     'Opex inflation',
     'Decision Confidence',
+    'selectedOutputs',
+    'setSelectedOutputs',
   ]) {
     assert.equal(source.includes(forbidden), false, `forbidden ${forbidden}`);
   }

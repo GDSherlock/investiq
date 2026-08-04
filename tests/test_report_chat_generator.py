@@ -222,6 +222,71 @@ def test_generation_prompt_prioritizes_later_user_corrections_and_conflicts() ->
     assert "omit unsupported topics" in developer_prompt
 
 
+def test_generator_enforces_an_azure_compatible_structured_output_schema() -> None:
+    client = _FakeClient()
+    client.responses.output_text = json.dumps(
+        {
+            "kind": "report",
+            "report": {
+                "title": "CFO Funding Note",
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "text": "Minimum DSCR is 1.3x.",
+                        "citation_ids": ["M1"],
+                    }
+                ],
+            },
+        }
+    )
+
+    ReportChatGenerator(client, deployment="test-deployment").generate(
+        "CF", "Generate a CFO Funding Note", [], _catalog()
+    )
+
+    assert len(client.responses.calls) == 1
+    response_format = client.responses.calls[0]["text"]["format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["strict"] is True
+
+    schema = response_format["schema"]
+    block_schema = schema["properties"]["report"]["properties"]["blocks"][
+        "items"
+    ]
+    assert "anyOf" in block_schema
+    assert {
+        kind
+        for variant in block_schema["anyOf"]
+        for kind in variant["properties"]["kind"]["enum"]
+    } == {"heading", "paragraph", "bullet_list", "numbered_list", "table"}
+
+    unsupported = {
+        "oneOf",
+        "discriminator",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minimum",
+        "maximum",
+        "minItems",
+        "maxItems",
+    }
+
+    def validate_node(node) -> None:
+        if isinstance(node, dict):
+            assert unsupported.isdisjoint(node)
+            if node.get("type") == "object":
+                assert node.get("additionalProperties") is False
+                assert set(node["required"]) == set(node["properties"])
+            for value in node.values():
+                validate_node(value)
+        elif isinstance(node, list):
+            for value in node:
+                validate_node(value)
+
+    validate_node(schema)
+
+
 def test_valid_report_uses_server_owned_citation_metadata() -> None:
     client = _FakeClient()
     client.responses.output_text = json.dumps(

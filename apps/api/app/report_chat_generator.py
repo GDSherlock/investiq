@@ -18,6 +18,79 @@ from .report_chat_schemas import (
 from .report_personas import get_report_persona
 
 
+def _strict_object(properties: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": dict(properties),
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+def _array(items: Mapping[str, Any]) -> dict[str, Any]:
+    return {"type": "array", "items": dict(items)}
+
+
+_STRING_SCHEMA = {"type": "string"}
+_CITATION_IDS_SCHEMA = _array(_STRING_SCHEMA)
+_REPORT_BLOCK_SCHEMA = {
+    "anyOf": [
+        _strict_object(
+            {
+                "kind": {"type": "string", "enum": ["heading"]},
+                "level": {"type": "integer", "enum": [1, 2, 3]},
+                "text": _STRING_SCHEMA,
+                "citation_ids": _CITATION_IDS_SCHEMA,
+            }
+        ),
+        _strict_object(
+            {
+                "kind": {"type": "string", "enum": ["paragraph"]},
+                "text": _STRING_SCHEMA,
+                "citation_ids": _CITATION_IDS_SCHEMA,
+            }
+        ),
+        _strict_object(
+            {
+                "kind": {
+                    "type": "string",
+                    "enum": ["bullet_list", "numbered_list"],
+                },
+                "items": _array(_STRING_SCHEMA),
+                "citation_ids": _CITATION_IDS_SCHEMA,
+            }
+        ),
+        _strict_object(
+            {
+                "kind": {"type": "string", "enum": ["table"]},
+                "columns": _array(_STRING_SCHEMA),
+                "rows": _array(_array(_STRING_SCHEMA)),
+                "citation_ids": _CITATION_IDS_SCHEMA,
+            }
+        ),
+    ]
+}
+_REPORT_DOCUMENT_SCHEMA = _strict_object(
+    {
+        "title": _STRING_SCHEMA,
+        "blocks": _array(_REPORT_BLOCK_SCHEMA),
+    }
+)
+_REPORT_CHAT_STRUCTURED_TEXT = {
+    "format": {
+        "type": "json_schema",
+        "name": "report_chat_assistant_content",
+        "strict": True,
+        "schema": _strict_object(
+            {
+                "kind": {"type": "string", "enum": ["report"]},
+                "report": _REPORT_DOCUMENT_SCHEMA,
+            }
+        ),
+    }
+}
+
+
 class ReportChatGenerationError(RuntimeError):
     """Raised when the model returns an unsafe or unsupported report shape."""
 
@@ -53,6 +126,7 @@ class ReportChatGenerator:
                     "content": self._user_prompt(request, history),
                 },
             ],
+            text=_REPORT_CHAT_STRUCTURED_TEXT,
             max_output_tokens=8192,
         )
         return self._validate_output(response.output_text, profile.report_type, catalog)
@@ -90,11 +164,11 @@ class ReportChatGenerator:
             "never narrate them as unavailable; later user corrections supersede "
             "earlier user statements. If model evidence and user evidence conflict, "
             "state model/user conflicts explicitly and cite both.\n"
-            "Return JSON only. The root is either "
-            '{"kind":"text","text":"..."} or '
+            "Return JSON only with root "
             '{"kind":"report","report":{"title":"...","blocks":[...]}}. '
             "Allowed report blocks are heading, paragraph, bullet_list, "
-            "numbered_list, and table. Every non-heading block must contain one "
+            "numbered_list, and table. Every block object must use the field "
+            "kind, never type. Every non-heading block must contain one "
             "or more citation_ids copied exactly from the evidence catalog. Do not "
             "return HTML or Markdown.\n"
             f"Evidence catalog: {evidence_json}"

@@ -28,6 +28,7 @@ from apps.api.app.model_extraction_models import (
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
+    ModelSemanticBinding,
     ModelVersion,
 )
 from apps.api.app.calculation_integration_service import (
@@ -848,12 +849,26 @@ def test_semantic_binding_preview_and_review_require_exact_canonical_entities(
 ) -> None:
     model_id = api_context["model_version_id"]
     client = api_context["client"]
+    with api_context["session_factory"]() as session:
+        revenue_id = session.scalar(select(FinancialSeries.id))
+        session.add(
+            ModelSemanticBinding(
+                id=str(uuid.uuid4()),
+                model_version_id=model_id,
+                semantic_role="revenue",
+                financial_series_id=revenue_id,
+                binding_source="extracted",
+                evidence_json={"selection_method": "deterministic_best_match"},
+            )
+        )
+        session.commit()
 
     preview = client.get(f"/api/v1/models/{model_id}/semantic-bindings")
 
     assert preview.status_code == 200
     slots = {slot["semantic_role"]: slot for slot in preview.json()["slots"]}
-    assert slots["revenue"]["status"] == "candidate"
+    assert slots["revenue"]["status"] == "extracted"
+    assert slots["revenue"]["binding"]["entity_id"] == revenue_id
     assert slots["revenue"]["candidates"][0]["entity_kind"] == "financial_series"
     assert slots["project_irr"] == {
         "semantic_role": "project_irr",
@@ -862,7 +877,6 @@ def test_semantic_binding_preview_and_review_require_exact_canonical_entities(
         "candidates": [],
     }
 
-    revenue_id = slots["revenue"]["candidates"][0]["entity_id"]
     reviewed = client.put(
         f"/api/v1/models/{model_id}/semantic-bindings/revenue",
         json={"entity_kind": "financial_series", "entity_id": revenue_id},
@@ -871,6 +885,15 @@ def test_semantic_binding_preview_and_review_require_exact_canonical_entities(
     assert reviewed.status_code == 200
     assert reviewed.json()["status"] == "reviewed"
     assert reviewed.json()["binding"]["entity_id"] == revenue_id
+    with api_context["session_factory"]() as session:
+        persisted = session.scalar(
+            select(ModelSemanticBinding).where(
+                ModelSemanticBinding.model_version_id == model_id,
+                ModelSemanticBinding.semantic_role == "revenue",
+            )
+        )
+        assert persisted.binding_source == "reviewed"
+        assert persisted.evidence_json == {"review_method": "canonical_uuid"}
 
     wrong_role = client.put(
         f"/api/v1/models/{model_id}/semantic-bindings/project_irr",

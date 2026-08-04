@@ -16,6 +16,7 @@ from .model_extraction_repository import (
     ModelExtractionRepository,
     WorkbookVersionRepository,
 )
+from .semantic_binding_service import build_extracted_semantic_bindings
 from .model_extraction_types import (
     BUSINESS_OUTPUT_ROLES,
     CanonicalSourceConflictError,
@@ -62,6 +63,11 @@ _CANONICAL_OUTPUT_ROLES = {
     "hardcoded_display_output",
     "sensitivity_output",
 }
+_OUTPUT_CANDIDATE_BUCKETS = (
+    "output_candidates",
+    "derived_value_candidates",
+    "review_candidates",
+)
 _SOURCE_VALID_STATUSES = {"validated", "validated_null"}
 _DEFAULT_MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
 
@@ -301,12 +307,20 @@ class ModelExtractionPersistenceService:
                 snapshot,
                 tools,
             )
+            semantic_bindings = build_extracted_semantic_bindings(
+                model_version_id,
+                outputs=outputs,
+                financial_series=financial_series,
+                financial_series_values=values,
+                parameters=parameters,
+            )
             self._repository.persist_canonical_model(
                 model_version_id,
                 parameters=parameters,
                 outputs=outputs,
                 financial_series=financial_series,
                 financial_series_values=values,
+                semantic_bindings=semantic_bindings,
                 validation_status=validation_status,
             )
             self._session.commit()
@@ -572,54 +586,75 @@ def _canonicalize_outputs(
     tools: WorkbookToolset,
 ) -> list[dict[str, Any]]:
     final_extraction = _required_dict(snapshot.get("final_extraction"), "final_extraction")
-    candidates = final_extraction.get("output_candidates") or []
     validation_results = snapshot.get("validation_results") or []
-    if not isinstance(candidates, list):
-        raise ModelExtractionPersistenceError("output_candidates must be a list")
     if not isinstance(validation_results, list):
         raise ModelExtractionPersistenceError("Validation results must be a list")
-    validation_by_id = {
-        result.get("candidate_id"): result
+    validation_by_key = {
+        (result.get("_bucket"), result.get("candidate_id")): result
         for result in validation_results
         if isinstance(result, dict)
-        and result.get("_bucket") == "output_candidates"
         and result.get("candidate_id") is not None
     }
 
-    grouped: dict[tuple[str, str], list[tuple[dict[str, Any], dict[str, Any]]]] = {}
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
-        validation = validation_by_id.get(candidate.get("candidate_id"))
-        if validation is None or not _is_canonical_output_validation(validation):
-            continue
-        business_role = candidate.get("business_role")
-        if business_role is None:
-            continue
-        _validated_business_role(business_role)
-        source = _candidate_source(candidate)
-        if source is None:
-            continue
-        grouped.setdefault(source, []).append((candidate, validation))
+    grouped: dict[
+        tuple[str, str],
+        list[tuple[int, str, dict[str, Any], dict[str, Any]]],
+    ] = {}
+    for bucket_rank, bucket in enumerate(_OUTPUT_CANDIDATE_BUCKETS):
+        candidates = final_extraction.get(bucket) or []
+        if not isinstance(candidates, list):
+            raise ModelExtractionPersistenceError(f"{bucket} must be a list")
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            validation = validation_by_key.get(
+                (bucket, candidate.get("candidate_id"))
+            )
+            if validation is None or not _is_semantic_output_validation(
+                validation,
+                promoted=bucket != "output_candidates",
+            ):
+                continue
+            business_role = candidate.get("business_role")
+            if business_role is None:
+                continue
+            _validated_business_role(business_role)
+            source = _candidate_source(candidate)
+            if source is None or ":" in source[1]:
+                continue
+            grouped.setdefault(source, []).append(
+                (bucket_rank, bucket, candidate, validation)
+            )
 
     id_factory = FinancialEntityIdFactory(model_version_id)
     rows: list[dict[str, Any]] = []
     for (sheet_name, submitted_cell), source_candidates in sorted(grouped.items()):
         business_roles = {
             str(candidate.get("business_role"))
-            for candidate, _validation in source_candidates
+            for _rank, _bucket, candidate, _validation in source_candidates
         }
         if len(business_roles) != 1:
             raise CanonicalSourceConflictError(
                 f"Canonical output candidates disagree at {sheet_name}!{submitted_cell}"
             )
-        candidate, validation = min(
+        _rank, source_bucket, candidate, validation = min(
             source_candidates,
-            key=lambda item: str(item[0].get("candidate_id") or ""),
+            key=lambda item: (
+                item[0],
+                str(item[2].get("candidate_id") or ""),
+            ),
         )
         fact = tools.get_cell(sheet_name, submitted_cell)
         source_cell = str(fact["cell"]).upper()
         candidate_id = candidate.get("candidate_id")
+        validation_warnings = list(
+            validation.get("validation_warnings") or []
+        )
+        if source_bucket != "output_candidates":
+            validation_warnings.append("BEST_MATCH_SCALAR_PROMOTED")
+            validation_warnings.append(
+                f"BEST_MATCH_SOURCE_BUCKET:{source_bucket}"
+            )
         rows.append(
             {
                 "id": id_factory.output_id(sheet_name, source_cell),
@@ -664,9 +699,7 @@ def _canonicalize_outputs(
                 "llm_confidence": candidate.get("llm_confidence"),
                 "validation_confidence": validation.get("validation_confidence"),
                 "reasoning_summary": candidate.get("reasoning_summary"),
-                "validation_warnings_json": json_safe(
-                    validation.get("validation_warnings") or []
-                ),
+                "validation_warnings_json": json_safe(validation_warnings),
             }
         )
     return rows
@@ -699,6 +732,21 @@ def _is_canonical_output_validation(validation: dict[str, Any]) -> bool:
         validation.get("source_validation_status") in _SOURCE_VALID_STATUSES
         and validation.get("validation_status") != "rejected"
         and validation.get("validated_role") in _CANONICAL_OUTPUT_ROLES
+    )
+
+
+def _is_semantic_output_validation(
+    validation: dict[str, Any],
+    *,
+    promoted: bool,
+) -> bool:
+    if not promoted:
+        return _is_canonical_output_validation(validation)
+    return (
+        validation.get("source_validation_status") in _SOURCE_VALID_STATUSES
+        and validation.get("validation_status") != "rejected"
+        and validation.get("validated_role")
+        in (_CANONICAL_OUTPUT_ROLES | _CANONICAL_PARAMETER_ROLES)
     )
 
 

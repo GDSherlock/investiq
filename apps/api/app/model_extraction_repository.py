@@ -16,6 +16,7 @@ from .model_extraction_models import (
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
+    ModelSemanticBinding,
     ModelVersion,
     WorkbookVersion,
 )
@@ -198,6 +199,7 @@ class ModelExtractionRepository:
         financial_series_values: list[dict[str, Any]],
         validation_status: str,
         outputs: list[dict[str, Any]] | None = None,
+        semantic_bindings: list[dict[str, Any]] | None = None,
     ) -> ModelVersion:
         model_version = self._get_model_version(model_version_id)
         if model_version.status not in {"extracted", "persistence_failed"}:
@@ -213,6 +215,9 @@ class ModelExtractionRepository:
         output_rows = [CanonicalOutput(**row) for row in (outputs or [])]
         series_rows = [FinancialSeries(**row) for row in financial_series]
         value_rows = [FinancialSeriesValue(**row) for row in financial_series_values]
+        binding_rows = [
+            ModelSemanticBinding(**row) for row in (semantic_bindings or [])
+        ]
 
         self._session.add_all(parameter_rows)
         self._session.flush()
@@ -221,6 +226,8 @@ class ModelExtractionRepository:
         self._session.add_all(series_rows)
         self._session.flush()
         self._session.add_all(value_rows)
+        self._session.flush()
+        self._session.add_all(binding_rows)
         self._session.flush()
 
         actual_parameter_count = self._session.scalar(
@@ -244,11 +251,17 @@ class ModelExtractionRepository:
             .join(FinancialSeries)
             .where(FinancialSeries.model_version_id == model_version_id)
         )
+        actual_binding_count = self._session.scalar(
+            select(func.count()).select_from(ModelSemanticBinding).where(
+                ModelSemanticBinding.model_version_id == model_version_id
+            )
+        )
         if (
             actual_parameter_count != len(parameter_rows)
             or actual_output_count != len(output_rows)
             or actual_series_count != len(series_rows)
             or actual_value_count != len(value_rows)
+            or actual_binding_count != len(binding_rows)
         ):
             raise CanonicalPersistenceStateError(
                 "Canonical row counts do not match the persistence request"
@@ -316,10 +329,16 @@ class ModelExtractionRepository:
                 CanonicalOutput.model_version_id == model_version_id
             )
         )
+        binding_count = self._session.scalar(
+            select(func.count()).select_from(ModelSemanticBinding).where(
+                ModelSemanticBinding.model_version_id == model_version_id
+            )
+        )
         return (
             int(parameter_count or 0)
             + int(output_count or 0)
             + int(series_count or 0)
+            + int(binding_count or 0)
         )
 
 

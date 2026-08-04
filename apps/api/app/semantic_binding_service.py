@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Literal
+import re
+from typing import Any, Literal
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -69,6 +71,207 @@ _PARAMETER_ROLES = {
     "debt_ratio",
     "equity_ratio",
 }
+
+_SEMANTIC_LABEL_ALIASES = {
+    "project_irr": {"project irr"},
+    "equity_irr": {"equity irr"},
+    "project_npv": {"project npv"},
+    "equity_npv": {"equity npv"},
+    "minimum_dscr": {"minimum dscr"},
+    "average_dscr": {"average dscr"},
+    "revenue": {"revenue", "total revenue"},
+    "ebitda": {"ebitda"},
+    "cfads": {"cfads"},
+    "dscr": {"dscr"},
+}
+_TRAILING_UNIT = re.compile(
+    r"\s*\((?:\$?\s*(?:m|mm|million)|(?:usd|sgd|eur|gbp)\s*(?:m|mm|million)|%|x)\)\s*$",
+    re.IGNORECASE,
+)
+_DIRECT_REFERENCE = re.compile(
+    r"^=\s*(?:'(?:[^']|'')+'|[A-Za-z0-9_. -]+)?!?\$?[A-Z]{1,3}\$?\d+\s*$"
+)
+
+
+def build_extracted_semantic_bindings(
+    model_version_id: str,
+    *,
+    outputs: list[dict[str, Any]],
+    financial_series: list[dict[str, Any]],
+    financial_series_values: list[dict[str, Any]],
+    parameters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Select one deterministic persisted entity for each semantic role."""
+
+    values_by_series: dict[str, list[dict[str, Any]]] = {}
+    for value in financial_series_values:
+        values_by_series.setdefault(str(value["financial_series_id"]), []).append(value)
+
+    candidates_by_role: dict[str, list[dict[str, Any]]] = {}
+    for semantic_role in SEMANTIC_BINDING_ROLES:
+        output_role = _OUTPUT_ROLE_BY_SEMANTIC.get(semantic_role)
+        if output_role is not None:
+            for output in outputs:
+                if output.get("business_role") == output_role:
+                    _append_scored_candidate(
+                        candidates_by_role,
+                        semantic_role,
+                        "canonical_output",
+                        output,
+                        exact_role=True,
+                        pure_alias=False,
+                    )
+        if semantic_role in _SERIES_ROLES:
+            for series in financial_series:
+                exact_role = series.get("business_role") == semantic_role
+                compatible_dscr = (
+                    semantic_role == "dscr"
+                    and series.get("business_role") == "minimum_dscr"
+                    and _normalized_label(str(series.get("label") or "")) == "dscr"
+                    and len(values_by_series.get(str(series["id"]), [])) > 1
+                )
+                if not exact_role and not compatible_dscr:
+                    continue
+                points = values_by_series.get(str(series["id"]), [])
+                pure_alias = bool(points) and all(
+                    isinstance(point.get("exact_formula"), str)
+                    and _DIRECT_REFERENCE.fullmatch(str(point["exact_formula"]))
+                    for point in points
+                )
+                _append_scored_candidate(
+                    candidates_by_role,
+                    semantic_role,
+                    "financial_series",
+                    series,
+                    exact_role=exact_role,
+                    pure_alias=pure_alias,
+                )
+        if semantic_role in _PARAMETER_ROLES:
+            for parameter in parameters:
+                if parameter.get("business_role") == semantic_role:
+                    _append_scored_candidate(
+                        candidates_by_role,
+                        semantic_role,
+                        "model_parameter",
+                        parameter,
+                        exact_role=True,
+                        pure_alias=False,
+                    )
+
+    namespace = uuid.UUID(model_version_id)
+    rows: list[dict[str, Any]] = []
+    for semantic_role, candidates in sorted(candidates_by_role.items()):
+        ranked = sorted(
+            candidates,
+            key=lambda item: (
+                -int(item["score"]),
+                str(item["source"]),
+                str(item["entity_id"]),
+            ),
+        )
+        selected = ranked[0]
+        alternatives = [
+            {
+                "entity_kind": item["entity_kind"],
+                "entity_id": item["entity_id"],
+                "source": item["source"],
+                "score": item["score"],
+                "reasons": item["reasons"],
+            }
+            for item in ranked[1:]
+        ]
+        margin = (
+            int(selected["score"]) - int(ranked[1]["score"])
+            if len(ranked) > 1
+            else None
+        )
+        quality = (
+            "high"
+            if margin is None or margin >= 30
+            else "medium"
+            if margin >= 10
+            else "low"
+        )
+        row = {
+            "id": str(
+                uuid.uuid5(namespace, f"semantic_binding:{semantic_role}")
+            ),
+            "model_version_id": model_version_id,
+            "semantic_role": semantic_role,
+            "canonical_output_id": None,
+            "financial_series_id": None,
+            "model_parameter_id": None,
+            "binding_source": "extracted",
+            "evidence_json": {
+                "selection_method": "deterministic_best_match",
+                "selected_score": selected["score"],
+                "selected_source": selected["source"],
+                "reasons": selected["reasons"],
+                "alternatives": alternatives,
+                "score_margin": margin,
+                "selection_quality": quality,
+                "tie_breaker_used": margin == 0,
+            },
+        }
+        row[f"{selected['entity_kind']}_id"] = selected["entity_id"]
+        rows.append(row)
+    return rows
+
+
+def _append_scored_candidate(
+    candidates_by_role: dict[str, list[dict[str, Any]]],
+    semantic_role: str,
+    entity_kind: EntityKind,
+    entity: dict[str, Any],
+    *,
+    exact_role: bool,
+    pure_alias: bool,
+) -> None:
+    score = 100 if exact_role else 70
+    reasons = ["exact_business_role" if exact_role else "compatible_business_role"]
+    score += 35
+    reasons.append("entity_kind_match")
+    label = _normalized_label(str(entity.get("label") or ""))
+    if label in _SEMANTIC_LABEL_ALIASES.get(semantic_role, set()):
+        score += 30
+        reasons.append("exact_label")
+    formula_status = str(entity.get("formula_status") or "")
+    if formula_status == "formula_with_cached_value" or entity.get("raw_value_json") is not None:
+        score += 25
+        reasons.append("workbook_value_available")
+    validation_status = str(entity.get("validation_status") or "")
+    if validation_status and validation_status != "rejected":
+        score += 20
+        reasons.append("validation_accepted")
+    if entity.get("unit") is not None:
+        score += 15
+        reasons.append("unit_available")
+    warnings = entity.get("validation_warnings_json") or []
+    if any(str(item).startswith("BEST_MATCH_SOURCE_BUCKET:review_candidates") for item in warnings):
+        score -= 5
+        reasons.append("review_origin_penalty")
+    if pure_alias:
+        score -= 15
+        reasons.append("direct_reference_alias_penalty")
+    if entity_kind == "canonical_output":
+        source = f"{entity.get('source_sheet')}!{entity.get('source_cell')}"
+    elif entity_kind == "financial_series":
+        source = str(entity.get("value_source_range") or entity.get("id"))
+    else:
+        source = f"{entity.get('source_sheet')}!{entity.get('source_cell')}"
+    candidates_by_role.setdefault(semantic_role, []).append(
+        {
+            "entity_kind": entity_kind,
+            "entity_id": str(entity["id"]),
+            "source": source,
+            "score": score,
+            "reasons": reasons,
+        }
+    )
+
+
+def _normalized_label(label: str) -> str:
+    return " ".join(_TRAILING_UNIT.sub("", label.strip()).casefold().split())
 
 
 class SemanticBindingService:

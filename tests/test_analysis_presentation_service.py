@@ -6,6 +6,7 @@ from apps.api.app.analysis_presentation_service import AnalysisPresentationServi
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
     FinancialSeries,
+    ModelSemanticBinding,
     ModelVersion,
     WorkbookVersion,
 )
@@ -334,6 +335,154 @@ def test_overview_resolves_cfads_from_direct_role_without_label_alias() -> None:
             "cfads",
         ]
         assert trajectory.series[1].label == "Cash available for lenders"
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_overview_prefers_persisted_best_match_bindings_for_ambiguous_series() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        workbook_id = new_uuid()
+        model_id = new_uuid()
+        run_id = new_uuid()
+        graph_id = new_uuid()
+        selected_revenue_id = new_uuid()
+        alias_revenue_id = new_uuid()
+        ebitda_id = new_uuid()
+        dscr_id = new_uuid()
+        session.add(
+            WorkbookVersion(
+                id=workbook_id,
+                sha256="d" * 64,
+                original_filename="bound-overview.xlsx",
+                storage_type="database",
+                storage_ref="workbooks/bound-overview.xlsx",
+                content_bytes=b"x",
+                file_size=1,
+            )
+        )
+        session.add(
+            ModelVersion(
+                id=model_id,
+                workbook_version_id=workbook_id,
+                upload_filename="bound-overview.xlsx",
+                status="materialized",
+                validation_status="validated",
+                submitted=True,
+            )
+        )
+
+        series_specs = (
+            (selected_revenue_id, "Revenue", "revenue", "P&L!B3:C3"),
+            (alias_revenue_id, "Revenue", "revenue", "P&L!B4:C4"),
+            (ebitda_id, "EBITDA", "ebitda", "P&L!B5:C5"),
+            (dscr_id, "DSCR", "minimum_dscr", "Debt!B6:C6"),
+        )
+        session.add_all(
+            [
+                FinancialSeries(
+                    id=series_id,
+                    model_version_id=model_id,
+                    entity_kind="financial_series",
+                    label=label,
+                    semantic_role="financial_series",
+                    business_role=business_role,
+                    unit="x" if label == "DSCR" else "USDm",
+                    frequency="annual",
+                    orientation="horizontal",
+                    calculation_type="formula",
+                    period_source_range="P&L!B2:C2",
+                    value_source_range=value_range,
+                    materialization_status="materialized",
+                    validation_status="validated",
+                )
+                for series_id, label, business_role, value_range in series_specs
+            ]
+        )
+        session.flush()
+        session.add_all(
+            [
+                ModelSemanticBinding(
+                    id=new_uuid(),
+                    model_version_id=model_id,
+                    semantic_role="revenue",
+                    financial_series_id=selected_revenue_id,
+                    binding_source="extracted",
+                    evidence_json={"selection_method": "deterministic_best_match"},
+                ),
+                ModelSemanticBinding(
+                    id=new_uuid(),
+                    model_version_id=model_id,
+                    semantic_role="dscr",
+                    financial_series_id=dscr_id,
+                    binding_source="extracted",
+                    evidence_json={"selection_method": "deterministic_best_match"},
+                ),
+            ]
+        )
+        session.commit()
+
+        projection_rows = []
+        for series_id, label, business_role, _value_range in series_specs:
+            projection_rows.append(
+                {
+                    "output_id": series_id,
+                    "entity_kind": "series",
+                    "business_role": business_role,
+                    "label": label,
+                    "unit": "x" if label == "DSCR" else "USDm",
+                    "mapping_status": "mapped",
+                    "support_status": "supported",
+                    "availability_status": "available",
+                    "points": [
+                        {
+                            "financial_series_value_id": new_uuid(),
+                            "period_index": index,
+                            "period": str(2026 + index),
+                            "mapping_status": "mapped",
+                            "support_status": "supported",
+                            "availability_status": "available",
+                            "baseline": _projected_number(value),
+                            "current": _projected_number(value),
+                        }
+                        for index, value in enumerate(("10", "12"))
+                    ],
+                }
+            )
+        projection = CalculationRunOutputsResponse.model_validate(
+            {
+                "calculation_run_id": run_id,
+                "model_version_id": model_id,
+                "graph_version_id": graph_id,
+                "comparison_baseline_run_id": run_id,
+                "outputs": projection_rows,
+            }
+        )
+        service = AnalysisPresentationService(
+            session,
+            _ProjectionService(projection),  # type: ignore[arg-type]
+        )
+
+        response = service.overview(run_id)
+
+        operating = next(
+            chart for chart in response.charts if chart.slot == "operating_trajectory"
+        )
+        assert operating.availability_status == "available"
+        assert [series.source_ids for series in operating.series] == [
+            [selected_revenue_id],
+            [ebitda_id],
+        ]
+        debt_coverage = next(
+            chart for chart in response.charts if chart.slot == "debt_coverage"
+        )
+        assert debt_coverage.availability_status == "available"
+        assert debt_coverage.fallback_used == "dscr_only"
+        assert debt_coverage.series[0].source_ids == [dscr_id]
+        assert debt_coverage.series[0].role == "dscr"
     finally:
         session.close()
         engine.dispose()

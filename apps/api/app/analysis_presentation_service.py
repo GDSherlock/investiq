@@ -17,7 +17,11 @@ from .calculation_integration_service import (
     CalculationIntegrationService,
 )
 from .calculation_rules.phase2_models import CalculationRunRecord
-from .model_extraction_models import ModelParameter, ModelVersion
+from .model_extraction_models import (
+    ModelParameter,
+    ModelSemanticBinding,
+    ModelVersion,
+)
 from .schemas import (
     AnalysisBenchmarkItem,
     AnalysisChartItem,
@@ -300,8 +304,8 @@ class AnalysisPresentationService:
         default_label: str,
     ) -> AnalysisKpiItem:
         for role in roles:
-            output = resolve_analysis_output(
-                projection.outputs,
+            output = self._resolve_projected_output(
+                projection,
                 role,
                 entity_kind="scalar",
             )
@@ -426,8 +430,8 @@ class AnalysisPresentationService:
         projection: CalculationRunOutputsResponse,
         role: str,
     ) -> AnalysisSeriesItem | None:
-        output = resolve_analysis_output(
-            projection.outputs,
+        output = self._resolve_projected_output(
+            projection,
             role,
             entity_kind="series",
         )
@@ -487,6 +491,43 @@ class AnalysisPresentationService:
             source_ids=[output.output_id],
             points=points,
         )
+
+    def _resolve_projected_output(
+        self,
+        projection: CalculationRunOutputsResponse,
+        role: str,
+        *,
+        entity_kind: str,
+    ) -> CalculationRunScalarOutputItem | CalculationRunSeriesOutputItem | None:
+        binding = self._session.scalar(
+            select(ModelSemanticBinding).where(
+                ModelSemanticBinding.model_version_id == projection.model_version_id,
+                ModelSemanticBinding.semantic_role == role,
+            )
+        )
+        if binding is None:
+            return resolve_analysis_output(
+                projection.outputs,
+                role,
+                entity_kind=entity_kind,
+            )
+
+        bound_output_id = (
+            binding.canonical_output_id or binding.financial_series_id
+        )
+        if bound_output_id is None:
+            return None
+        output = next(
+            (
+                item
+                for item in projection.outputs
+                if item.output_id == bound_output_id
+            ),
+            None,
+        )
+        if entity_kind == "scalar":
+            return output if isinstance(output, CalculationRunScalarOutputItem) else None
+        return output
 
     def _cumulative_chart(
         self,

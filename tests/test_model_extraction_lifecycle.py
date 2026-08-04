@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from io import BytesIO
 import os
 from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
@@ -15,17 +17,22 @@ from apps.api.app.model_extraction_models import (
     FinancialSeries,
     FinancialSeriesValue,
     ModelParameter,
+    ModelSemanticBinding,
     ModelVersion,
     WorkbookVersion,
 )
 from apps.api.app.model_extraction_read_service import ModelExtractionReadService
 from apps.api.app.model_extraction_repository import ModelExtractionRepository
-from apps.api.app.model_extraction_service import ModelExtractionPersistenceService
+from apps.api.app.model_extraction_service import (
+    ModelExtractionPersistenceService,
+    _canonicalize_outputs,
+)
 from apps.api.app.model_extraction_types import (
     CanonicalSourceConflictError,
     FinancialEntityIdFactory,
     ModelExtractionPersistenceError,
     WorkbookTooLargeError,
+    new_uuid,
 )
 from apps.api.app.workbook_storage import DatabaseWorkbookStorage
 from apps.api.app.workbook_validation import (
@@ -103,6 +110,146 @@ def _contains_key(value, target: str) -> bool:
     if isinstance(value, list):
         return any(_contains_key(item, target) for item in value)
     return False
+
+
+def test_validated_derived_scalar_is_promoted_to_canonical_output() -> None:
+    snapshot = deterministic_extraction_result()
+    final_extraction = snapshot["final_extraction"]
+    final_extraction["output_candidates"] = []
+    final_extraction["derived_value_candidates"] = [
+        {
+            "candidate_id": "summary-project-irr",
+            "original_label": "Project IRR",
+            "submitted_role": "formula_derived_value",
+            "business_role": "project_irr",
+            "raw_value": 0.074,
+            "unit": "%",
+            "source_references": [{"sheet_name": "P&L", "cell": "B3"}],
+            "reasoning_summary": "Displayed project return",
+            "llm_confidence": 0.99,
+        }
+    ]
+    snapshot["validation_results"] = [
+        {
+            "candidate_id": "summary-project-irr",
+            "_bucket": "derived_value_candidates",
+            "source_reference": "P&L!B3",
+            "source_validation_status": "validated",
+            "submitted_role": "formula_derived_value",
+            "validated_role": "formula_derived_value",
+            "role_validation_status": "validated",
+            "validation_status": "validated",
+            "validated_value": 0.074,
+            "validation_confidence": 0.99,
+            "validation_warnings": [],
+        }
+    ]
+    tools = WorkbookToolset(file_bytes=persistence_workbook_bytes())
+
+    outputs = _canonicalize_outputs(new_uuid(), snapshot, tools)
+
+    assert len(outputs) == 1
+    assert outputs[0]["business_role"] == "project_irr"
+    assert outputs[0]["label"] == "Project IRR"
+    assert outputs[0]["source_sheet"] == "P&L"
+    assert outputs[0]["source_cell"] == "B3"
+    assert "BEST_MATCH_SCALAR_PROMOTED" in outputs[0][
+        "validation_warnings_json"
+    ]
+
+
+def test_multiple_scalar_candidates_create_best_match_extracted_binding(
+    lifecycle_context,
+) -> None:
+    _engine, _session_factory, session = lifecycle_context
+    workbook = load_workbook(BytesIO(persistence_workbook_bytes()))
+    returns = workbook.create_sheet("Returns")
+    returns["A7"] = "Project IRR"
+    returns["B7"] = "=0.074"
+    returns["A8"] = "IRR"
+    returns["B8"] = "=0.073"
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+
+    result = deterministic_extraction_result()
+    final_extraction = result["final_extraction"]
+    final_extraction["output_candidates"] = []
+    final_extraction["derived_value_candidates"] = [
+        {
+            "candidate_id": "summary-project-irr",
+            "original_label": "Project IRR",
+            "submitted_role": "formula_derived_value",
+            "business_role": "project_irr",
+            "raw_value": None,
+            "unit": "%",
+            "source_references": [{"sheet_name": "Returns", "cell": "B7"}],
+            "reasoning_summary": "Explicit summary return",
+            "llm_confidence": 0.99,
+        }
+    ]
+    final_extraction["review_candidates"] = [
+        {
+            "candidate_id": "calculation-project-irr",
+            "original_label": "IRR",
+            "submitted_role": "formula_output",
+            "business_role": "project_irr",
+            "raw_value": None,
+            "unit": "%",
+            "source_references": [{"sheet_name": "Returns", "cell": "B8"}],
+            "reasoning_summary": "Calculation return",
+            "llm_confidence": 0.99,
+        }
+    ]
+    result["validation_results"] = [
+        {
+            "candidate_id": "summary-project-irr",
+            "_bucket": "derived_value_candidates",
+            "source_reference": "Returns!B7",
+            "source_validation_status": "validated_null",
+            "submitted_role": "formula_derived_value",
+            "validated_role": "formula_derived_value",
+            "role_validation_status": "validated",
+            "validation_status": "validated_null",
+            "validated_value": None,
+            "validation_confidence": 0.95,
+            "validation_warnings": ["formula_cache_missing"],
+        },
+        {
+            "candidate_id": "calculation-project-irr",
+            "_bucket": "review_candidates",
+            "source_reference": "Returns!B8",
+            "source_validation_status": "validated_null",
+            "submitted_role": "formula_output",
+            "validated_role": "formula_output",
+            "role_validation_status": "validated",
+            "validation_status": "validated_null",
+            "validated_value": None,
+            "validation_confidence": 0.95,
+            "validation_warnings": ["formula_cache_missing"],
+        },
+    ]
+    service = ModelExtractionPersistenceService(
+        session,
+        validation_runner=RecordingRunner(result),
+    )
+
+    response = service.process_upload(buffer.getvalue(), "returns.xlsx")
+
+    binding = session.scalar(
+        select(ModelSemanticBinding).where(
+            ModelSemanticBinding.model_version_id == response["model_version_id"],
+            ModelSemanticBinding.semantic_role == "project_irr",
+        )
+    )
+    assert binding is not None
+    assert binding.binding_source == "extracted"
+    assert binding.canonical_output is not None
+    assert binding.canonical_output.source_sheet == "Returns"
+    assert binding.canonical_output.source_cell == "B7"
+    assert binding.evidence_json["selected_score"] > binding.evidence_json[
+        "alternatives"
+    ][0]["score"]
 
 
 def test_t1_commits_workbook_and_extracting_model_before_runner(lifecycle_context) -> None:
@@ -581,6 +728,7 @@ def test_t3_failure_rolls_back_children_and_marks_persistence_failed(
     assert _count(session, ModelParameter) == 0
     assert _count(session, FinancialSeries) == 0
     assert _count(session, FinancialSeriesValue) == 0
+    assert _count(session, ModelSemanticBinding) == 0
     assert session.scalar(select(ModelVersion.status)) == "persistence_failed"
 
 

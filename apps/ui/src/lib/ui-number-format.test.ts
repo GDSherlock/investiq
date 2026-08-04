@@ -75,6 +75,14 @@ test('analysis values preserve role and unit semantics within the cap', () => {
     '1.23x',
   );
   assert.equal(
+    formatAnalysisValue('debt_ratio', '0.65', '%'),
+    '65%',
+  );
+  assert.equal(
+    formatAnalysisValue('equity_ratio', '0.35', '%'),
+    '35%',
+  );
+  assert.equal(
     formatAnalysisValue('payback_period', '2.34567', null, 'stale'),
     '2.3 yrs',
   );

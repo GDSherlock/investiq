@@ -481,6 +481,7 @@ class AnalysisChartItem(_CalculationDTO):
     availability_status: Literal["available", "partial", "unavailable"]
     source_type: Literal["calculated", "derived", "unavailable"]
     fallback_used: str | None = None
+    unavailable_reason: str | None = None
     series: list[AnalysisSeriesItem] = Field(default_factory=list)
 
 

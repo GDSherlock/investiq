@@ -468,6 +468,7 @@ export interface AnalysisChart {
   availability_status: 'available' | 'partial' | 'unavailable';
   source_type: 'calculated' | 'derived' | 'unavailable';
   fallback_used: string | null;
+  unavailable_reason?: string | null;
   series: AnalysisSeries[];
 }
 

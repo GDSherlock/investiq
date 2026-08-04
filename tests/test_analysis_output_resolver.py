@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from apps.api.app.analysis_output_resolver import resolve_analysis_output
+from types import SimpleNamespace
+
+from apps.api.app.analysis_output_resolver import (
+    resolve_analysis_output,
+    resolve_analysis_parameter,
+)
 from apps.api.app.model_extraction_types import new_uuid
 from apps.api.app.schemas import CalculationRunOutputsResponse
 
@@ -88,3 +93,33 @@ def test_legacy_label_resolution_rejects_fuzzy_and_ambiguous_matches() -> None:
         )
         is None
     )
+
+
+def test_debt_share_parameter_uses_only_controlled_exact_aliases() -> None:
+    debt_share = SimpleNamespace(
+        business_role=None,
+        label="Debt share",
+    )
+    assert (
+        resolve_analysis_parameter([debt_share], "debt_ratio")
+        is debt_share
+    )
+
+    for rejected_label in (
+        "Debt service",
+        "Debt allocation estimate",
+    ):
+        rejected = SimpleNamespace(
+            business_role=None,
+            label=rejected_label,
+        )
+        assert resolve_analysis_parameter([rejected], "debt_ratio") is None
+
+
+def test_duplicate_debt_share_parameters_are_ambiguous() -> None:
+    candidates = [
+        SimpleNamespace(business_role=None, label="Debt share"),
+        SimpleNamespace(business_role=None, label="Debt share (%)"),
+    ]
+
+    assert resolve_analysis_parameter(candidates, "debt_ratio") is None

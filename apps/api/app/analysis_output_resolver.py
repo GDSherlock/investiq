@@ -42,6 +42,7 @@ _LABEL_ALIASES: dict[str, frozenset[str]] = {
 }
 
 _PARAMETER_LABEL_ALIASES: dict[str, frozenset[str]] = {
+    "debt_ratio": frozenset({"debt share", "debt ratio", "debt percentage"}),
     "discount_rate": frozenset({"discount rate", "wacc"}),
     "project_irr_hurdle": frozenset(
         {"project irr hurdle", "project irr hurdle rate"}

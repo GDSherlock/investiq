@@ -998,6 +998,18 @@ test('persisted line charts expose Line elements directly to Recharts', () => {
   );
 });
 
+test('capital structure remains a backend-derived Debt and Equity pie', () => {
+  const source = readFileSync('src/app/dashboard/page.tsx', 'utf8');
+
+  assert.match(source, /<Pie/);
+  assert.match(source, /debt_ratio/);
+  assert.match(source, /equity_ratio/);
+  assert.match(source, /formatAnalysisValue/);
+  assert.match(source, /unavailable_reason/);
+  assert.doesNotMatch(source, /1\s*-\s*(?:debt|ratio)/i);
+  assert.doesNotMatch(source, /debt\s*\/\s*total_project_cost/i);
+});
+
 test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => {
   const source = readFileSync(
     'src/app/montecarlo/page.tsx',

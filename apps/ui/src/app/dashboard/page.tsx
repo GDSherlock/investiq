@@ -28,7 +28,8 @@ import {
   formatUiNumber,
 } from '@/lib/ui-number-format';
 
-const CAPITAL_COLORS = ['#3b82f6', '#ef4444', '#34d399'];
+const CAPITAL_COLORS = ['#3b82f6', '#ef4444'];
+const CAPITAL_ROLES = ['debt_ratio', 'equity_ratio'] as const;
 
 function chartBySlot(
   charts: AnalysisChart[],
@@ -42,26 +43,50 @@ function chartBySlot(
       availability_status: 'unavailable',
       source_type: 'unavailable',
       fallback_used: null,
+      unavailable_reason: null,
       series: [],
     }
   );
 }
 
 function CapitalStructure({ chart }: { chart: AnalysisChart }) {
-  const data = chart.series
-    .map((series) => {
-      const point = [...series.points]
-        .reverse()
-        .find((candidate) => candidate.value !== null);
+  const data = CAPITAL_ROLES
+    .map((role) => {
+      const series = chart.series.find(
+        (candidate) => candidate.role === role,
+      );
+      const point = series?.points.find(
+        (candidate) =>
+          candidate.availability_status === 'available' &&
+          candidate.value !== null,
+      );
+      const value = point?.value === undefined ? null : Number(point.value);
+      if (series === undefined || value === null || !Number.isFinite(value)) {
+        return null;
+      }
       return {
+        role: series.role,
         name: series.label,
-        value: point?.value === null ? null : Number(point?.value),
+        value,
+        displayValue: formatAnalysisValue(
+          series.role,
+          point?.value,
+          series.unit,
+        ),
       };
     })
     .filter(
-      (item): item is { name: string; value: number } =>
-        item.value !== null && Number.isFinite(item.value),
+      (item): item is NonNullable<typeof item> => item !== null,
     );
+
+  const subtitle =
+    chart.fallback_used === 'model_debt_share'
+      ? 'Model debt share'
+      : chart.fallback_used === 'debt_over_total_project_cost'
+        ? 'Derived from debt / total project cost'
+        : chart.unavailable_reason
+          ? chart.unavailable_reason.replaceAll('_', ' ')
+          : 'Unavailable';
 
   return (
     <section className="bg-d-card rounded-lg shadow-sm border border-d-border p-5 min-w-0">
@@ -69,11 +94,9 @@ function CapitalStructure({ chart }: { chart: AnalysisChart }) {
         Capital structure
       </h2>
       <p className="text-[10px] text-d-muted mt-1">
-        {chart.fallback_used
-          ? `Persisted amounts · fallback: ${chart.fallback_used}`
-          : 'Persisted debt and equity proportions'}
+        {subtitle}
       </p>
-      {data.length < 2 ? (
+      {data.length !== 2 ? (
         <div className="h-[230px] flex items-center justify-center text-xs text-d-muted">
           Unavailable
         </div>
@@ -105,8 +128,8 @@ function CapitalStructure({ chart }: { chart: AnalysisChart }) {
                   border: '1px solid #1B2B65',
                   color: '#A3AED0',
                 }}
-                formatter={(value: number, name: string) => [
-                  formatUiNumber(value),
+                formatter={(_value, name, item) => [
+                  item.payload?.displayValue ?? 'Unavailable',
                   name,
                 ]}
               />
@@ -127,7 +150,7 @@ function CapitalStructure({ chart }: { chart: AnalysisChart }) {
                       ],
                   }}
                 />
-                {item.name}
+                {item.name} · {item.displayValue}
               </span>
             ))}
           </div>

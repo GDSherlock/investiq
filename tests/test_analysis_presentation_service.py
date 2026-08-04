@@ -3,9 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from apps.api.app.analysis_presentation_service import AnalysisPresentationService
+from apps.api.app.calculation_rules.phase2_models import (
+    CalculationGraphVersionRecord,
+    CalculationRunRecord,
+)
 from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
+    CanonicalOutput,
     FinancialSeries,
+    ModelParameter,
     ModelSemanticBinding,
     ModelVersion,
     WorkbookVersion,
@@ -66,6 +72,136 @@ def _scalar_output(role: str, value: str) -> dict[str, object]:
         "baseline": _projected_number(value),
         "current": _projected_number(value),
     }
+
+
+def _capital_scalar(
+    output_id: str,
+    role: str,
+    label: str,
+    value: str,
+    unit: str | None = "USDm",
+) -> dict[str, object]:
+    return {
+        "output_id": output_id,
+        "entity_kind": "scalar",
+        "business_role": role,
+        "label": label,
+        "unit": unit,
+        "scenario": None,
+        "formula_cell_id": new_uuid(),
+        "mapping_status": "mapped",
+        "support_status": "supported",
+        "number_format": "0.00",
+        "availability_status": "available",
+        "baseline": _projected_number(value),
+        "current": _projected_number(value),
+    }
+
+
+def _persist_capital_model(session):
+    workbook_id = new_uuid()
+    model_id = new_uuid()
+    graph_id = new_uuid()
+    run_id = new_uuid()
+    session.add(
+        WorkbookVersion(
+            id=workbook_id,
+            sha256="e" * 64,
+            original_filename="capital.xlsx",
+            storage_type="database",
+            storage_ref="workbooks/capital.xlsx",
+            content_bytes=b"x",
+            file_size=1,
+        )
+    )
+    session.add(
+        ModelVersion(
+            id=model_id,
+            workbook_version_id=workbook_id,
+            upload_filename="capital.xlsx",
+            status="materialized",
+            validation_status="validated",
+            submitted=True,
+        )
+    )
+    session.flush()
+    session.add(
+        CalculationGraphVersionRecord(
+            id=graph_id,
+            workbook_version_id=workbook_id,
+            compiler_version="test",
+            ir_version="test",
+            function_registry_version="test",
+            semantics_profile="test",
+            compiler_manifest_hash="1" * 64,
+            content_fingerprint="2" * 64,
+            node_count=0,
+            edge_count=0,
+            topological_layers_json=[],
+            volatile_nodes_json=[],
+        )
+    )
+    session.commit()
+    return model_id, graph_id, run_id
+
+
+def _persist_debt_share(
+    session,
+    model_id: str,
+    value: str,
+) -> str:
+    parameter_id = new_uuid()
+    session.add(
+        ModelParameter(
+            id=parameter_id,
+            model_version_id=model_id,
+            entity_kind="parameter",
+            source_bucket="parameter_candidates",
+            label="Debt share",
+            business_role=None,
+            submitted_role="assumption",
+            validated_role="assumption",
+            raw_value_json=value,
+            validated_value_json=value,
+            unit="%",
+            source_sheet="Assumptions",
+            source_cell="B4",
+            formula_status="static_value",
+            source_validation_status="valid",
+            role_validation_status="confirmed",
+            validation_status="validated",
+        )
+    )
+    session.commit()
+    return parameter_id
+
+
+def _capital_overview(
+    session,
+    *,
+    model_id: str,
+    graph_id: str,
+    run_id: str,
+    outputs: list[dict[str, object]],
+):
+    projection = CalculationRunOutputsResponse.model_validate(
+        {
+            "calculation_run_id": run_id,
+            "model_version_id": model_id,
+            "graph_version_id": graph_id,
+            "comparison_baseline_run_id": run_id,
+            "outputs": outputs,
+        }
+    )
+    response = AnalysisPresentationService(
+        session,
+        _ProjectionService(projection),  # type: ignore[arg-type]
+    ).overview(run_id)
+    return next(
+        chart
+        for chart in response.charts
+        if chart.slot == "capital_structure"
+    )
 
 
 def _overview_projection(
@@ -163,6 +299,227 @@ def test_overview_does_not_fallback_when_derived_equity_multiple_is_unavailable(
     assert leverage.source_type == "unavailable"
     assert leverage.quality_status == "EQUITY_CASH_OUTFLOW_ZERO"
     assert leverage.source_ids == projection.derived_kpis[0].source_ids
+
+
+def test_capital_structure_prefers_model_debt_share() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        model_id, graph_id, run_id = _persist_capital_model(session)
+        parameter_id = _persist_debt_share(session, model_id, "0.65")
+
+        capital = _capital_overview(
+            session,
+            model_id=model_id,
+            graph_id=graph_id,
+            run_id=run_id,
+            outputs=[],
+        )
+
+        assert capital.availability_status == "available"
+        assert capital.source_type == "derived"
+        assert capital.fallback_used == "model_debt_share"
+        assert capital.unavailable_reason is None
+        assert [(item.role, item.points[0].value) for item in capital.series] == [
+            ("debt_ratio", "0.65"),
+            ("equity_ratio", "0.35"),
+        ]
+        assert all(item.source_ids == [parameter_id] for item in capital.series)
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_capital_structure_uses_current_debt_share_override() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        model_id, graph_id, run_id = _persist_capital_model(session)
+        parameter_id = _persist_debt_share(session, model_id, "0.65")
+        session.add(
+            CalculationRunRecord(
+                id=run_id,
+                model_version_id=model_id,
+                graph_version_id=graph_id,
+                engine_version="test",
+                function_registry_version="test",
+                semantics_profile="test",
+                normalized_override_hash="3" * 64,
+                run_policy_hash="4" * 64,
+                overrides_json=[
+                    {
+                        "target_kind": "parameter",
+                        "target_id": parameter_id,
+                        "typed_value": {"kind": "number", "number": "0.70"},
+                    }
+                ],
+                run_policy_json={},
+                status="completed",
+            )
+        )
+        session.commit()
+
+        capital = _capital_overview(
+            session,
+            model_id=model_id,
+            graph_id=graph_id,
+            run_id=run_id,
+            outputs=[],
+        )
+
+        assert [(item.role, item.points[0].value) for item in capital.series] == [
+            ("debt_ratio", "0.70"),
+            ("equity_ratio", "0.30"),
+        ]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_capital_structure_derives_debt_over_total_project_cost() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        model_id, graph_id, run_id = _persist_capital_model(session)
+        debt_id = new_uuid()
+        cost_id = new_uuid()
+        session.add(
+            CanonicalOutput(
+                id=debt_id,
+                model_version_id=model_id,
+                entity_kind="canonical_output",
+                label="Total debt",
+                business_role="total_debt",
+                submitted_role="formula_output",
+                validated_role="formula_output",
+                raw_value_json="70",
+                unit="USDm",
+                source_sheet="Funding",
+                source_cell="B2",
+                formula_status="formula_with_cached_value",
+                source_validation_status="valid",
+                role_validation_status="confirmed",
+                validation_status="validated",
+            )
+        )
+        session.flush()
+        session.add(
+            ModelSemanticBinding(
+                id=new_uuid(),
+                model_version_id=model_id,
+                semantic_role="total_debt",
+                canonical_output_id=debt_id,
+                binding_source="extracted",
+            )
+        )
+        session.commit()
+
+        capital = _capital_overview(
+            session,
+            model_id=model_id,
+            graph_id=graph_id,
+            run_id=run_id,
+            outputs=[
+                _capital_scalar(debt_id, "unclassified", "Debt", "70"),
+                _capital_scalar(
+                    cost_id,
+                    "total_project_cost",
+                    "Total project cost",
+                    "100",
+                ),
+            ],
+        )
+
+        assert capital.fallback_used == "debt_over_total_project_cost"
+        assert [(item.role, item.points[0].value) for item in capital.series] == [
+            ("debt_ratio", "0.7"),
+            ("equity_ratio", "0.3"),
+        ]
+        assert capital.series[0].source_ids == [debt_id, cost_id]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_capital_structure_reports_stable_unavailable_reasons() -> None:
+    cases = (
+        ("-0.1", [], "CAPITAL_DEBT_SHARE_INVALID"),
+        ("1.1", [], "CAPITAL_DEBT_SHARE_INVALID"),
+        (None, [], "CAPITAL_DEBT_NOT_FOUND"),
+        (
+            None,
+            [("total_debt", "Total debt", "70", "USDm")],
+            "CAPITAL_PROJECT_COST_NOT_FOUND",
+        ),
+        (
+            None,
+            [
+                ("total_debt", "Total debt", "70", "USDm"),
+                ("total_project_cost", "Total project cost", "0", "USDm"),
+            ],
+            "CAPITAL_RATIO_OUT_OF_RANGE",
+        ),
+        (
+            None,
+            [
+                ("total_debt", "Total debt", "110", "USDm"),
+                ("total_project_cost", "Total project cost", "100", "USDm"),
+            ],
+            "CAPITAL_RATIO_OUT_OF_RANGE",
+        ),
+        (
+            None,
+            [
+                ("total_debt", "Total debt", "70", "USDm"),
+                ("total_project_cost", "Total project cost", "100", "USDm"),
+                (
+                    "total_project_cost",
+                    "Total funding requirement",
+                    "120",
+                    "USDm",
+                ),
+            ],
+            "CAPITAL_PROJECT_COST_AMBIGUOUS",
+        ),
+        (
+            None,
+            [
+                ("total_debt", "Total debt", "70", "USDm"),
+                ("total_project_cost", "Total project cost", "100", "EURm"),
+            ],
+            "CAPITAL_UNIT_MISMATCH",
+        ),
+    )
+    for debt_share, output_specs, reason in cases:
+        engine, session_factory = create_sqlite_session_factory()
+        Base.metadata.create_all(engine)
+        session = session_factory()
+        try:
+            model_id, graph_id, run_id = _persist_capital_model(session)
+            if debt_share is not None:
+                _persist_debt_share(session, model_id, debt_share)
+            outputs = [
+                _capital_scalar(new_uuid(), role, label, value, unit)
+                for role, label, value, unit in output_specs
+            ]
+
+            capital = _capital_overview(
+                session,
+                model_id=model_id,
+                graph_id=graph_id,
+                run_id=run_id,
+                outputs=outputs,
+            )
+
+            assert capital.availability_status == "unavailable"
+            assert capital.series == []
+            assert capital.unavailable_reason == reason
+        finally:
+            session.close()
+            engine.dispose()
 
 
 def test_cumulative_cash_flow_propagates_a_missing_annual_value() -> None:

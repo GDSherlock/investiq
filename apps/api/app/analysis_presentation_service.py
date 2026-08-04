@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .analysis_output_resolver import (
+    normalized_analysis_label,
     resolve_analysis_output,
     resolve_analysis_parameter,
 )
@@ -222,37 +223,7 @@ class AnalysisPresentationService:
                 [],
             )
 
-        debt_ratio = self._series_for_role(projection, "debt_ratio")
-        equity_ratio = self._series_for_role(projection, "equity_ratio")
-        if debt_ratio is not None and equity_ratio is not None:
-            capital = self._chart(
-                "capital_structure",
-                "Capital structure",
-                [debt_ratio, equity_ratio],
-            )
-        else:
-            total_debt = self._series_for_role(
-                projection,
-                "total_debt",
-            )
-            total_equity = self._series_for_role(
-                projection,
-                "total_equity",
-            )
-            capital = self._chart(
-                "capital_structure",
-                "Capital structure",
-                (
-                    [total_debt, total_equity]
-                    if total_debt is not None and total_equity is not None
-                    else []
-                ),
-                fallback_used=(
-                    "debt_amount+equity_amount"
-                    if total_debt is not None and total_equity is not None
-                    else None
-                ),
-            )
+        capital = self._capital_structure_chart(projection)
 
         dscr = self._series_for_role(projection, "dscr")
         covenant = self._series_for_role(
@@ -587,6 +558,154 @@ class AnalysisPresentationService:
         if entity_kind == "scalar":
             return output if isinstance(output, CalculationRunScalarOutputItem) else None
         return output
+
+    def _capital_structure_chart(
+        self,
+        projection: CalculationRunOutputsResponse,
+    ) -> AnalysisChartItem:
+        debt_share = self._parameter_for_role(
+            projection.model_version_id,
+            "debt_ratio",
+        )
+        if debt_share is not None:
+            value = self._current_parameter_value(
+                projection.calculation_run_id,
+                debt_share.id,
+                debt_share.validated_value_json,
+            )
+            ratio = self._finite_decimal(value)
+            if ratio is None or ratio < 0 or ratio > 1:
+                return self._capital_unavailable("CAPITAL_DEBT_SHARE_INVALID")
+            return self._capital_ratio_chart(
+                ratio,
+                [debt_share.id],
+                "model_debt_share",
+            )
+
+        debt_output = self._resolve_projected_output(
+            projection,
+            "total_debt",
+            entity_kind="scalar",
+        )
+        if not isinstance(debt_output, CalculationRunScalarOutputItem):
+            return self._capital_unavailable("CAPITAL_DEBT_NOT_FOUND")
+        debt = self._finite_decimal(self._number(debt_output.current))
+        if debt is None:
+            return self._capital_unavailable("CAPITAL_DEBT_NOT_FOUND")
+
+        cost_candidates = [
+            output
+            for output in projection.outputs
+            if isinstance(output, CalculationRunScalarOutputItem)
+            and output.business_role == "total_project_cost"
+            and normalized_analysis_label(output.label)
+            in {"total project cost", "total funding requirement"}
+        ]
+        if not cost_candidates:
+            return self._capital_unavailable("CAPITAL_PROJECT_COST_NOT_FOUND")
+        resolved_costs = [
+            (
+                output,
+                self._finite_decimal(self._number(output.current)),
+                self._normalized_unit(output.unit),
+            )
+            for output in cost_candidates
+        ]
+        if any(value is None for _output, value, _unit in resolved_costs):
+            return self._capital_unavailable(
+                "CAPITAL_PROJECT_COST_AMBIGUOUS"
+                if len(resolved_costs) > 1
+                else "CAPITAL_PROJECT_COST_NOT_FOUND"
+            )
+        cost_values = {
+            value
+            for _output, value, _unit in resolved_costs
+            if value is not None
+        }
+        cost_units = {
+            unit
+            for _output, _value, unit in resolved_costs
+            if unit
+        }
+        if len(cost_values) != 1 or len(cost_units) > 1:
+            return self._capital_unavailable("CAPITAL_PROJECT_COST_AMBIGUOUS")
+        cost = next(iter(cost_values))
+        cost_unit = next(iter(cost_units), "")
+        debt_unit = self._normalized_unit(debt_output.unit)
+        if debt_unit and cost_unit and debt_unit != cost_unit:
+            return self._capital_unavailable("CAPITAL_UNIT_MISMATCH")
+        if cost <= 0 or debt < 0 or debt > cost:
+            return self._capital_unavailable("CAPITAL_RATIO_OUT_OF_RANGE")
+        return self._capital_ratio_chart(
+            debt / cost,
+            [debt_output.output_id]
+            + [output.output_id for output, _value, _unit in resolved_costs],
+            "debt_over_total_project_cost",
+        )
+
+    @staticmethod
+    def _finite_decimal(value: str | None) -> Decimal | None:
+        if value is None:
+            return None
+        try:
+            number = Decimal(value)
+        except (InvalidOperation, ValueError):
+            return None
+        return number if number.is_finite() else None
+
+    @staticmethod
+    def _normalized_unit(unit: str | None) -> str:
+        return " ".join((unit or "").casefold().split())
+
+    @staticmethod
+    def _capital_unavailable(reason: str) -> AnalysisChartItem:
+        return AnalysisChartItem(
+            slot="capital_structure",
+            title="Capital structure",
+            availability_status="unavailable",
+            source_type="unavailable",
+            unavailable_reason=reason,
+        )
+
+    @staticmethod
+    def _capital_ratio_chart(
+        debt_ratio: Decimal,
+        source_ids: list[str],
+        fallback_used: str,
+    ) -> AnalysisChartItem:
+        ratios = (
+            ("debt_ratio", "Debt", debt_ratio),
+            ("equity_ratio", "Equity", Decimal("1") - debt_ratio),
+        )
+        series = [
+            AnalysisSeriesItem(
+                role=role,
+                label=label,
+                unit="%",
+                source_type="derived",
+                availability_status="available",
+                source_ids=source_ids,
+                points=[
+                    AnalysisSeriesPointItem(
+                        period_index=0,
+                        period="Capital structure",
+                        value=str(value),
+                        availability_status="available",
+                        validation_status="derived",
+                        source_ids=source_ids,
+                    )
+                ],
+            )
+            for role, label, value in ratios
+        ]
+        return AnalysisChartItem(
+            slot="capital_structure",
+            title="Capital structure",
+            availability_status="available",
+            source_type="derived",
+            fallback_used=fallback_used,
+            series=series,
+        )
 
     def _cumulative_chart(
         self,

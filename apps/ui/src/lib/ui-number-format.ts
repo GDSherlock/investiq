@@ -74,6 +74,8 @@ export function formatUiNumber(
 const ANALYSIS_PERCENTAGE_ROLES = new Set([
   'project_irr',
   'equity_irr',
+  'debt_ratio',
+  'equity_ratio',
   'discount_rate',
   'project_irr_hurdle',
   'equity_irr_hurdle',

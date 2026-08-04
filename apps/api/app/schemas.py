@@ -361,6 +361,17 @@ CalculationRunOutputItem = Annotated[
 ]
 
 
+class CalculationDerivedKpiItem(_CalculationDTO):
+    role: Literal["equity_multiple"]
+    label: StrictStr
+    unit: Literal["x"]
+    source_type: Literal["derived"]
+    availability_status: Literal["available", "partial", "unavailable"]
+    source_ids: list[UUIDString] = Field(default_factory=list)
+    baseline: CalculationProjectedValueItem
+    current: CalculationProjectedValueItem
+
+
 class CalculationRunOutputsResponse(_CalculationDTO):
     calculation_run_id: UUIDString
     model_version_id: UUIDString
@@ -368,6 +379,7 @@ class CalculationRunOutputsResponse(_CalculationDTO):
     base_run_id: UUIDString | None = None
     comparison_baseline_run_id: UUIDString
     outputs: list[CalculationRunOutputItem] = Field(default_factory=list)
+    derived_kpis: list[CalculationDerivedKpiItem] = Field(default_factory=list)
 
 
 class SemanticBindingEntityItem(_CalculationDTO):

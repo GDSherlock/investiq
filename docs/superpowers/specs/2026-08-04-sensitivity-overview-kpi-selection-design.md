@@ -20,20 +20,23 @@ NPV in Sensitivity even though both pages refer to the same calculation run.
 
 ## Scope
 
-This change affects only the output selected for display in the five fixed
-Sensitivity KPI slots:
+This change affects the display source selected for four fixed Sensitivity KPI
+slots:
 
 - IRR;
 - NPV;
 - Payback;
-- DSCR; and
-- Equity Multiple / leverage.
+- DSCR.
 
 Sensitivity uses the current run's existing Overview response as the selection
-authority. Each available Overview KPI identifies its canonical calculation
-output through `source_ids[0]`. Sensitivity matches that UUID to its existing
-`SensitivityKpi.outputId` and displays the matched KPI's baseline, current value,
-delta, unit, and availability details.
+authority for those four scalar slots. Each available Overview KPI identifies
+its canonical calculation output through `source_ids[0]`. Sensitivity matches
+that UUID to its existing `SensitivityKpi.outputId` and displays the matched
+KPI's baseline, current value, delta, unit, and availability details.
+
+Equity × is governed by
+`2026-08-04-derived-equity-multiple-design.md`. It bypasses scalar source-ID
+alignment and consumes the exact backend `derived_kpis` projection.
 
 ## Non-Goals
 
@@ -47,7 +50,7 @@ The change must not alter:
 - Two-way matrix calculation;
 - debounce, request coalescing, or stale-response guards;
 - localStorage keys, document format, or restoration behavior;
-- backend schemas, routes, semantic-binding persistence, or calculation logic;
+- routes, semantic-binding persistence, or calculation logic;
 - fixed-page layout or user-facing KPI labels.
 
 ## Selected Approach
@@ -64,12 +67,14 @@ alignDashboardSlotsWithOverview(
   dashboard: FixedDashboardViewModel,
   sensitivityKpis: readonly SensitivityKpi[],
   overviewKpis: readonly AnalysisKpi[],
+  derivedKpis: readonly SensitivityDerivedKpi[] = [],
 ): FixedDashboardViewModel
 ```
 
-The adapter returns a dashboard whose `slots[*].kpi` values are selected by
-Overview source UUID. It preserves `dashboard.irrOutputId` exactly, preventing
-the presentation alignment from changing the Sensitivity analysis target.
+The adapter returns a dashboard whose four scalar `slots[*].kpi` values are
+selected by Overview source UUID. It fills Equity × from the separate derived
+collection. It preserves `dashboard.irrOutputId` exactly, preventing the
+presentation alignment from changing the Sensitivity analysis target.
 
 ## Slot Mapping
 
@@ -81,11 +86,17 @@ The display adapter uses these Overview slots:
 | `npv` | `npv` |
 | `payback` | `payback_period` |
 | `dscr` | `average_dscr` when available, otherwise `minimum_dscr` |
-| `equity_multiple` | `leverage` |
 
 The DSCR order preserves the existing Sensitivity display preference. Each DSCR
 candidate has already been resolved through Overview's semantic binding before
 the display adapter sees it.
+
+### Derived Equity × exception
+
+Equity × consumes
+`CalculationRunOutputsResponse.derived_kpis[role="equity_multiple"]`. The
+derived item has no `output_id`, is not added to the scalar KPI/output catalog,
+and cannot affect `irrOutputId`, `selected_output_id`, or a Sensitivity request.
 
 ## Data Flow
 
@@ -99,7 +110,9 @@ During initial workbench bootstrap:
 4. build the existing exact or estimated Sensitivity KPI view;
 5. build the existing fixed dashboard, retaining its calculation-owned
    `irrOutputId`; and
-6. align only the dashboard's displayed slots using Overview `source_ids`.
+6. align four scalar dashboard slots using Overview `source_ids`; and
+7. fill Equity × from the exact `derived_kpis` item returned with the run
+   projection.
 
 After an exact override calculation completes, Overview is fetched for the new
 current run so the displayed cards remain aligned. Failure to refresh Overview
@@ -110,9 +123,10 @@ The Overview response and derived display selection remain in React memory.
 They are not written to localStorage because Overview remains the server-owned
 selection authority.
 
-Estimated slider previews continue to update the already selected output UUIDs.
-The preview may change a matched KPI's displayed numeric value, but it cannot
-change which output UUID the slot represents.
+Estimated slider previews continue to update the already selected scalar output
+UUIDs. Equity × retains the last exact derived baseline/current values until a
+new exact calculation-run projection arrives; the browser does not aggregate
+or divide equity cash-flow points.
 
 ## Availability and Error Behavior
 
@@ -130,6 +144,9 @@ change which output UUID the slot represents.
   remains visible.
 - Overview fetch failure affects only the aligned KPI display. It must not submit
   another calculation or mutate calculation identity in browser storage.
+- Missing, partial, or unavailable derived Equity × evidence remains typed
+  `Unavailable` and never falls back to scalar `equity_multiple` or
+  `debt_to_equity_ratio`.
 
 ## Testing Strategy
 
@@ -140,7 +157,7 @@ Implementation follows RED to GREEN with focused frontend tests.
 - Provide available Project NPV and Equity NPV outputs and prove an Overview
   `source_ids` reference to Project NPV selects Project NPV regardless of label
   order.
-- Prove each of the five fixed slots maps to its specified Overview slot.
+- Prove each of the four scalar fixed slots maps to its specified Overview slot.
 - Prove Average DSCR remains preferred over Minimum DSCR when both Overview slots
   are available.
 - Prove an unavailable Overview slot remains unavailable without role or label
@@ -151,6 +168,8 @@ Implementation follows RED to GREEN with focused frontend tests.
   alignment.
 - Prove estimated KPI values update the bound UUID without changing the bound
   UUID.
+- Prove Equity × uses the derived KPI with `outputId: null`, never displays a
+  scalar workbook multiple, and is never marked as an estimated output.
 
 ### Page contract tests
 

@@ -72,6 +72,14 @@ _PARAMETER_ROLES = {
     "equity_ratio",
 }
 
+_PROJECT_FCF_STRONG_LABELS = {
+    "project free cash flow",
+    "project fcf",
+    "unlevered project cash flow",
+}
+_PROJECT_FCF_GENERIC_LABELS = {"project cash flow", "project cf"}
+_PROJECT_FCF_COMPATIBLE_ROLES = {"cash_flow", "cfads"}
+
 _SEMANTIC_LABEL_ALIASES = {
     "project_irr": {"project irr"},
     "equity_irr": {"equity irr"},
@@ -124,13 +132,32 @@ def build_extracted_semantic_bindings(
         if semantic_role in _SERIES_ROLES:
             for series in financial_series:
                 exact_role = series.get("business_role") == semantic_role
+                normalized_label = _normalized_label(
+                    str(series.get("label") or "")
+                )
                 compatible_dscr = (
                     semantic_role == "dscr"
                     and series.get("business_role") == "minimum_dscr"
-                    and _normalized_label(str(series.get("label") or "")) == "dscr"
+                    and normalized_label == "dscr"
                     and len(values_by_series.get(str(series["id"]), [])) > 1
                 )
-                if not exact_role and not compatible_dscr:
+                compatible_project_fcf = (
+                    semantic_role == "project_free_cash_flow"
+                    and series.get("business_role")
+                    in _PROJECT_FCF_COMPATIBLE_ROLES
+                    and normalized_label
+                    in _PROJECT_FCF_STRONG_LABELS
+                    | _PROJECT_FCF_GENERIC_LABELS
+                    and (
+                        series.get("business_role") != "cfads"
+                        or normalized_label in _PROJECT_FCF_STRONG_LABELS
+                    )
+                )
+                if (
+                    not exact_role
+                    and not compatible_dscr
+                    and not compatible_project_fcf
+                ):
                     continue
                 points = values_by_series.get(str(series["id"]), [])
                 pure_alias = bool(points) and all(
@@ -145,6 +172,14 @@ def build_extracted_semantic_bindings(
                     series,
                     exact_role=exact_role,
                     pure_alias=pure_alias,
+                    semantic_label_score=(
+                        40
+                        if compatible_project_fcf
+                        and normalized_label in _PROJECT_FCF_STRONG_LABELS
+                        else 20
+                        if compatible_project_fcf
+                        else None
+                    ),
                 )
         if semantic_role in _PARAMETER_ROLES:
             for parameter in parameters:
@@ -226,13 +261,21 @@ def _append_scored_candidate(
     *,
     exact_role: bool,
     pure_alias: bool,
+    semantic_label_score: int | None = None,
 ) -> None:
     score = 100 if exact_role else 70
     reasons = ["exact_business_role" if exact_role else "compatible_business_role"]
     score += 35
     reasons.append("entity_kind_match")
     label = _normalized_label(str(entity.get("label") or ""))
-    if label in _SEMANTIC_LABEL_ALIASES.get(semantic_role, set()):
+    if semantic_label_score is not None:
+        score += semantic_label_score
+        reasons.append(
+            "strong_project_fcf_label"
+            if semantic_label_score == 40
+            else "generic_project_fcf_label"
+        )
+    elif label in _SEMANTIC_LABEL_ALIASES.get(semantic_role, set()):
         score += 30
         reasons.append("exact_label")
     formula_status = str(entity.get("formula_status") or "")

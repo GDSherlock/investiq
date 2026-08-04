@@ -275,6 +275,132 @@ def test_cumulative_cash_flow_propagates_a_missing_annual_value() -> None:
         engine.dispose()
 
 
+def test_cash_flow_charts_use_persisted_project_fcf_binding() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        workbook_id = new_uuid()
+        model_id = new_uuid()
+        series_id = new_uuid()
+        run_id = new_uuid()
+        graph_id = new_uuid()
+        session.add(
+            WorkbookVersion(
+                id=workbook_id,
+                sha256="d" * 64,
+                original_filename="bound-cash-flow.xlsx",
+                storage_type="database",
+                storage_ref="workbooks/bound-cash-flow.xlsx",
+                content_bytes=b"x",
+                file_size=1,
+            )
+        )
+        session.add(
+            ModelVersion(
+                id=model_id,
+                workbook_version_id=workbook_id,
+                upload_filename="bound-cash-flow.xlsx",
+                status="materialized",
+                validation_status="validated",
+                submitted=True,
+            )
+        )
+        session.add(
+            FinancialSeries(
+                id=series_id,
+                model_version_id=model_id,
+                entity_kind="financial_series",
+                label="Project FCF",
+                semantic_role="financial_series",
+                business_role="cash_flow",
+                unit="USDm",
+                frequency="annual",
+                orientation="horizontal",
+                calculation_type="formula",
+                period_source_range="Cash Flow!B1:D1",
+                value_source_range="Cash Flow!B2:D2",
+                materialization_status="materialized",
+                validation_status="validated",
+            )
+        )
+        session.flush()
+        session.add(
+            ModelSemanticBinding(
+                id=new_uuid(),
+                model_version_id=model_id,
+                semantic_role="project_free_cash_flow",
+                financial_series_id=series_id,
+                binding_source="extracted",
+                evidence_json={"selection_method": "deterministic_best_match"},
+            )
+        )
+        session.commit()
+        points = [
+            {
+                "financial_series_value_id": new_uuid(),
+                "period_index": index,
+                "period": str(2026 + index),
+                "mapping_status": "mapped",
+                "support_status": "supported",
+                "availability_status": "available",
+                "baseline": _projected_number(value),
+                "current": _projected_number(value),
+            }
+            for index, value in enumerate(("-10", "4", "9"))
+        ]
+        projection = CalculationRunOutputsResponse.model_validate(
+            {
+                "calculation_run_id": run_id,
+                "model_version_id": model_id,
+                "graph_version_id": graph_id,
+                "comparison_baseline_run_id": run_id,
+                "outputs": [
+                    {
+                        "output_id": series_id,
+                        "entity_kind": "series",
+                        "business_role": "unclassified",
+                        "label": "Project FCF",
+                        "unit": "USDm",
+                        "mapping_status": "mapped",
+                        "support_status": "supported",
+                        "availability_status": "available",
+                        "points": points,
+                    }
+                ],
+            }
+        )
+
+        response = AnalysisPresentationService(
+            session,
+            _ProjectionService(projection),  # type: ignore[arg-type]
+        ).cash_flow(run_id)
+
+        annual = next(
+            chart
+            for chart in response.charts
+            if chart.slot == "annual_project_free_cash_flow"
+        )
+        cumulative = next(
+            chart
+            for chart in response.charts
+            if chart.slot == "cumulative_cash_flow"
+        )
+        assert [point.value for point in annual.series[0].points] == [
+            "-10",
+            "4",
+            "9",
+        ]
+        assert [point.value for point in cumulative.series[0].points] == [
+            "-10",
+            "-6",
+            "3",
+        ]
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_overview_operating_trajectory_uses_explicit_revenue_cfads_fallback() -> None:
     engine, session_factory = create_sqlite_session_factory()
     Base.metadata.create_all(engine)

@@ -190,7 +190,7 @@ export default function IntroductionPage({ onSkip }: IntroductionPageProps) {
             {/* Persona system */}
             <h2 className="text-2xl font-bold text-white mb-3">Role-based persona system</h2>
             <p className="text-sm text-d-muted mb-6">
-              Every AI output, chart label and report adapts to your role. Switch persona at any time using the strip at the top of every page.
+              Every AI output, chart label and report adapts to your role. Switch persona from the report composer when you need a different perspective.
             </p>
             <div className="space-y-3">
               {PERSONAS.map((p) => (

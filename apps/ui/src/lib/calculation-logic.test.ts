@@ -1013,6 +1013,10 @@ test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => 
 test('report chat API is available while navigation no longer owns persona selection', () => {
   const apiSource = readFileSync('src/lib/api.ts', 'utf8');
   const navBarSource = readFileSync('src/app/NavBar.tsx', 'utf8');
+  const introductionSource = readFileSync(
+    'src/app/IntroductionPage.tsx',
+    'utf8',
+  );
 
   for (const required of [
     'getReportChat',
@@ -1030,6 +1034,58 @@ test('report chat API is available while navigation no longer owns persona selec
       navBarSource.includes(removedFromNav),
       false,
       `navigation must not include ${removedFromNav}`,
+    );
+  }
+  assert.equal(
+    introductionSource.includes('strip at the top of every page'),
+    false,
+    'onboarding must not describe the removed global selector',
+  );
+});
+
+test('reports page is one shared persona chat without legacy report surfaces', () => {
+  const reportSource = readFileSync('src/app/reports/page.tsx', 'utf8');
+
+  for (const required of [
+    'useActiveAnalysis',
+    'getReportChat',
+    'sendReportChatMessage',
+    'ReportChatComposer',
+    'ReportMessageList',
+  ]) {
+    assert.ok(reportSource.includes(required), `expected ${required}`);
+  }
+  for (const forbidden of [
+    'createCanonicalReport',
+    'getCanonicalReport',
+    'getCanonicalReportHistory',
+    'FloatingAssistant',
+    'AnalysisStatusSidebar',
+    'getModel',
+    'generatePersonaReport',
+    'investiq_model_id',
+    'parsed_json',
+    'dangerouslySetInnerHTML',
+  ]) {
+    assert.equal(
+      reportSource.includes(forbidden),
+      false,
+      `forbidden ${forbidden}`,
+    );
+  }
+  assert.equal(
+    reportSource.match(/No model selected/g)?.length,
+    1,
+    'the empty-state heading must render once',
+  );
+  for (const retryIdentity of [
+    'retry?.personaId ?? persona.id',
+    'retry?.graphVersionId ?? analysis.graphVersionId!',
+    'retry?.calculationRunId ?? analysis.activeRunId!',
+  ]) {
+    assert.ok(
+      reportSource.includes(retryIdentity),
+      `retry must preserve ${retryIdentity}`,
     );
   }
 });

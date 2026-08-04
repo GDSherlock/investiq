@@ -165,6 +165,23 @@ def test_other_personas_fixed_report_prompt_requests_a_switch_without_llm() -> N
     assert client.responses.calls == []
 
 
+def test_generator_does_not_require_provider_credentials_until_generation(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+
+    generator = ReportChatGenerator()
+
+    content = generator.generate(
+        "CF",
+        "Generate a Board One-Pager",
+        [],
+        _catalog(),
+    )
+    assert content.kind == "text"
+
+
 def test_generation_prompt_prioritizes_later_user_corrections_and_conflicts() -> None:
     client = _FakeClient()
     client.responses.output_text = json.dumps(

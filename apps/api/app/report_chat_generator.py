@@ -24,7 +24,7 @@ class ReportChatGenerationError(RuntimeError):
 
 class ReportChatGenerator:
     def __init__(self, client=None, *, deployment: str | None = None) -> None:
-        self._client = client or llm_service._get_client()
+        self._client = client
         self._deployment = deployment or llm_service._DEPLOYMENT
 
     def generate(
@@ -39,6 +39,8 @@ class ReportChatGenerator:
         if switch_response is not None:
             return ReportChatAssistantContent(kind="text", text=switch_response)
 
+        if self._client is None:
+            self._client = llm_service._get_client()
         response = self._client.responses.create(
             model=self._deployment,
             input=[

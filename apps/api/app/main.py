@@ -55,6 +55,7 @@ from .routers import (
     market_data,
     models,
     monitor,
+    report_chat,
     reports,
     scenarios,
 )
@@ -95,6 +96,7 @@ app.include_router(auth_router.router, prefix="/api/v1", tags=["Auth"])
 app.include_router(models.router, prefix="/api/v1", tags=["Models"])
 app.include_router(calculations.router, prefix="/api/v1")
 app.include_router(canonical_reports.router, prefix="/api/v1")
+app.include_router(report_chat.router, prefix="/api/v1")
 app.include_router(scenarios.router, prefix="/api/v1", tags=["Scenarios"])
 app.include_router(debt_analysis.router, prefix="/api/v1", tags=["Debt Analysis"])
 app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])

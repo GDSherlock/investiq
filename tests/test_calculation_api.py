@@ -1432,12 +1432,26 @@ def test_run_output_projection_returns_business_values_without_cell_coordinates(
         },
     )
 
+    with context["session_factory"]() as session:
+        before = (
+            session.scalar(select(func.count()).select_from(CalculationRunRecord)),
+            session.scalar(
+                select(func.count()).select_from(CalculationRunValueRecord)
+            ),
+        )
+
     response = client.get(
+        f"/api/v1/calculation-runs/"
+        f"{override.json()['calculation_run_id']}/outputs"
+    )
+    repeated = client.get(
         f"/api/v1/calculation-runs/"
         f"{override.json()['calculation_run_id']}/outputs"
     )
 
     assert response.status_code == 200
+    assert repeated.status_code == 200
+    assert repeated.json() == response.json()
     payload = response.json()
     assert payload["base_run_id"] == baseline.json()["calculation_run_id"]
     assert (
@@ -1449,8 +1463,22 @@ def test_run_output_projection_returns_business_values_without_cell_coordinates(
     assert by_role["total_project_cost"]["current"]["value"]["value"] == "13"
     assert by_role["revenue"]["points"][0]["baseline"]["value"]["value"] == "10"
     assert by_role["revenue"]["points"][0]["current"]["value"]["value"] == "26"
+    assert len(payload["derived_kpis"]) == 1
+    assert payload["derived_kpis"][0]["role"] == "equity_multiple"
+    assert (
+        payload["derived_kpis"][0]["current"]["unavailable_reason"]
+        == "EQUITY_CASH_FLOW_NOT_FOUND"
+    )
     assert "sheet_name" not in response.text
     assert "cell_address" not in response.text
+    with context["session_factory"]() as session:
+        after = (
+            session.scalar(select(func.count()).select_from(CalculationRunRecord)),
+            session.scalar(
+                select(func.count()).select_from(CalculationRunValueRecord)
+            ),
+        )
+    assert after == before
 
 
 def test_calculation_api_returns_stable_structured_domain_errors(api_context) -> None:

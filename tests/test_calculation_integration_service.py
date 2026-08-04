@@ -60,9 +60,14 @@ def integration_context(tmp_path: Path, request):
             True,
         )
         include_kpi_formulas = parameter.get("include_kpi_formulas", False)
+        include_equity_cash_flow = parameter.get(
+            "include_equity_cash_flow",
+            False,
+        )
     else:
         include_calculation_properties = parameter
         include_kpi_formulas = False
+        include_equity_cash_flow = False
     engine, session_factory = create_sqlite_session_factory(
         sqlite_file_url(tmp_path / "calculation-integration.db")
     )
@@ -73,6 +78,7 @@ def integration_context(tmp_path: Path, request):
             session,
             include_calculation_properties=include_calculation_properties,
             include_kpi_formulas=include_kpi_formulas,
+            include_equity_cash_flow=include_equity_cash_flow,
         )
     )
     other_model = ModelVersion(
@@ -1106,6 +1112,61 @@ def test_run_outputs_project_scalar_and_series_baseline_current_values(
     assert {point.number_format for point in series.points} == {"General"}
     assert [point.baseline.value.value for point in series.points] == ["10", "10"]
     assert [point.current.value.value for point in series.points] == ["26", "26"]
+
+
+@pytest.mark.parametrize(
+    "integration_context",
+    [{"include_equity_cash_flow": True}],
+    indirect=True,
+)
+def test_run_outputs_attach_exact_derived_equity_multiple(
+    integration_context,
+) -> None:
+    from apps.api.app.calculation_integration_service import (
+        CalculationIntegrationService,
+    )
+
+    context = integration_context
+    facade = CalculationIntegrationService(
+        context["session"],
+        context["read_service"],
+    )
+    prepared = facade.prepare(context["model"].id)
+    baseline = facade.calculate(
+        context["model"].id,
+        _calculation_request(prepared.graph_version_id),
+    )
+    override = facade.calculate(
+        context["model"].id,
+        _calculation_request(
+            prepared.graph_version_id,
+            {
+                "target": {
+                    "kind": "parameter",
+                    "parameter_id": context["parameter"].id,
+                },
+                "value": {"value_type": "number", "value": "10"},
+            },
+        ),
+    )
+
+    projection = facade.get_run_outputs(override.calculation_run_id)
+
+    assert projection.comparison_baseline_run_id == baseline.calculation_run_id
+    assert len(projection.derived_kpis) == 1
+    equity_x = projection.derived_kpis[0]
+    assert equity_x.role == "equity_multiple"
+    assert equity_x.baseline.value is not None
+    assert equity_x.current.value is not None
+    assert equity_x.baseline.value.value == "1.2"
+    assert equity_x.current.value.value == "2.8"
+    equity_series = next(
+        item
+        for item in projection.outputs
+        if item.business_role == "equity_cash_flow"
+    )
+    assert equity_x.source_ids == [equity_series.output_id]
+    assert not hasattr(equity_x, "output_id")
 
 
 def test_multiple_overrides_project_against_comparison_baseline(

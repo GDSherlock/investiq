@@ -44,6 +44,7 @@ def calculation_workbook_bytes(
     *,
     include_calculation_properties: bool = True,
     include_kpi_formulas: bool = False,
+    include_equity_cash_flow: bool = False,
 ) -> bytes:
     workbook = Workbook()
     inputs = workbook.active
@@ -62,6 +63,11 @@ def calculation_workbook_bytes(
     calc["B6"] = "=B5+1"
     calc["B7"] = "='[rates.xlsx]Inputs'!A1+1"
     calc["B8"] = "=IF(TRUE,B2,1/0)"
+    if include_equity_cash_flow:
+        calc["A3"] = 2028
+        calc["D1"] = "=0-100"
+        calc["D2"] = "=Inputs!A1*20"
+        calc["D3"] = "=80"
     if include_kpi_formulas:
         inputs["C1"] = -100
         inputs["C2"] = 110
@@ -100,12 +106,14 @@ def create_materialized_rule_model(
     *,
     include_calculation_properties: bool = True,
     include_kpi_formulas: bool = False,
+    include_equity_cash_flow: bool = False,
 ):
     storage = DatabaseWorkbookStorage(session)
     workbook = WorkbookVersionRepository(session, storage).get_or_create(
         calculation_workbook_bytes(
             include_calculation_properties=include_calculation_properties,
             include_kpi_formulas=include_kpi_formulas,
+            include_equity_cash_flow=include_equity_cash_flow,
         ),
         "calculation-rules.xlsx",
     )
@@ -222,6 +230,61 @@ def create_materialized_rule_model(
         number_format="General",
         validation_warnings_json=[],
     )
-    session.add_all([workbook, model, input_parameter, output, series, value])
+    persisted_entities = [workbook, model, input_parameter, output, series, value]
+    if include_equity_cash_flow:
+        equity_series_id = id_factory.series_id(
+            "Calc!A1:A3",
+            "Calc!D1:D3",
+            "base",
+            "Equity",
+            "USD",
+            "USD",
+        )
+        equity_series = FinancialSeries(
+            id=equity_series_id,
+            model_version_id=model.id,
+            entity_kind="financial_series",
+            label="Equity cash flow",
+            semantic_role="financial_series",
+            business_role="equity_cash_flow",
+            unit="USD",
+            frequency="annual",
+            orientation="vertical",
+            scenario="base",
+            entity="Equity",
+            currency="USD",
+            calculation_type="formula",
+            period_source_range="Calc!A1:A3",
+            value_source_range="Calc!D1:D3",
+            materialization_status="materialized",
+            validation_status="validated",
+        )
+        equity_formulas = ("=0-100", "=Inputs!A1*20", "=80")
+        equity_values = [
+            FinancialSeriesValue(
+                id=id_factory.value_id(equity_series_id, index),
+                financial_series_id=equity_series_id,
+                period_index=index,
+                raw_period_label_json=2026 + index,
+                display_period_label=str(2026 + index),
+                period_type="annual",
+                year=2026 + index,
+                is_forecast=True,
+                value_json=None,
+                period_source_sheet="Calc",
+                period_source_cell=f"A{index + 1}",
+                value_source_sheet="Calc",
+                value_source_cell=f"D{index + 1}",
+                exact_formula=equity_formulas[index],
+                formula_status="formula_no_cache",
+                cached_value_available=False,
+                cached_value_freshness="missing",
+                number_format="General",
+                data_type="f",
+            )
+            for index in range(3)
+        ]
+        persisted_entities.extend([equity_series, *equity_values])
+    session.add_all(persisted_entities)
     session.commit()
     return storage, workbook, model, input_parameter, series, value

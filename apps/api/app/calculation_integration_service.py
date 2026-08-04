@@ -8,6 +8,7 @@ import logging
 import traceback
 
 from pydantic import TypeAdapter
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .calculation_rules.phase2_repository import Phase2CalculationRepository
@@ -22,6 +23,8 @@ from .calculation_rules.types import (
     CalculationRuleExtractionConfiguration,
     FormulaIdFactory,
 )
+from .equity_multiple_derivation import derive_equity_multiple
+from .model_extraction_models import ModelSemanticBinding
 from .model_extraction_read_service import ModelExtractionReadService
 from .model_extraction_types import (
     FinancialSeriesValueNotFound,
@@ -741,6 +744,14 @@ class CalculationIntegrationService:
                         points=points,
                     )
                 )
+            binding = self._session.scalar(
+                select(ModelSemanticBinding).where(
+                    ModelSemanticBinding.model_version_id
+                    == current_run.model_version_id,
+                    ModelSemanticBinding.semantic_role == "equity_cash_flow",
+                )
+            )
+            derived_equity_multiple = derive_equity_multiple(outputs, binding)
             return CalculationRunOutputsResponse(
                 calculation_run_id=current_run.calculation_run_id,
                 model_version_id=current_run.model_version_id,
@@ -748,6 +759,7 @@ class CalculationIntegrationService:
                 base_run_id=current_run.base_run_id,
                 comparison_baseline_run_id=baseline_run.calculation_run_id,
                 outputs=outputs,
+                derived_kpis=[derived_equity_multiple],
             )
         except CalculationIntegrationError:
             raise

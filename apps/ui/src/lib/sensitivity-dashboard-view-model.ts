@@ -8,7 +8,11 @@ import type {
   SensitivityAssumption,
   SensitivityTornadoRow,
 } from './sensitivity-analysis';
-import type { SensitivityKpi } from './sensitivity-output-adapter';
+import type {
+  SensitivityDerivedKpi,
+  SensitivityDisplayKpi,
+  SensitivityKpi,
+} from './sensitivity-output-adapter';
 
 export const FIXED_DASHBOARD_SLOT_KEYS = [
   'irr',
@@ -62,13 +66,12 @@ const FIXED_DASHBOARD_SLOT_DEFINITIONS: readonly FixedDashboardSlotDefinition[] 
 ];
 
 const OVERVIEW_SLOTS_BY_FIXED_SLOT: Readonly<
-  Record<FixedDashboardSlotKey, readonly string[]>
+  Record<Exclude<FixedDashboardSlotKey, 'equity_multiple'>, readonly string[]>
 > = {
   irr: ['primary_return'],
   npv: ['npv'],
   payback: ['payback_period'],
   dscr: ['average_dscr', 'minimum_dscr'],
-  equity_multiple: ['leverage'],
 };
 
 export interface FixedDashboardKpiSlot {
@@ -76,7 +79,7 @@ export interface FixedDashboardKpiSlot {
   label: string;
   displayLabel: string;
   sourceLabel: string | null;
-  kpi: SensitivityKpi | null;
+  kpi: SensitivityDisplayKpi | null;
   unavailable: boolean;
   unavailableDetail: string | null;
 }
@@ -98,7 +101,7 @@ export type FixedDashboardCalculationMode =
   | 'sensitivity'
   | 'calculation';
 
-function isAvailableNumericKpi(kpi: SensitivityKpi): boolean {
+function isAvailableNumericKpi(kpi: SensitivityDisplayKpi): boolean {
   return (
     kpi.current.availabilityStatus === 'available' &&
     kpi.current.numericValue !== null
@@ -213,6 +216,7 @@ export function alignDashboardSlotsWithOverview(
   dashboard: FixedDashboardViewModel,
   sensitivityKpis: readonly SensitivityKpi[],
   overviewKpis: readonly AnalysisKpi[],
+  derivedKpis: readonly SensitivityDerivedKpi[] = [],
 ): FixedDashboardViewModel {
   const sensitivityByOutputId = new Map(
     sensitivityKpis.map((kpi) => [kpi.outputId, kpi]),
@@ -220,6 +224,36 @@ export function alignDashboardSlotsWithOverview(
   const overviewBySlot = new Map(overviewKpis.map((kpi) => [kpi.slot, kpi]));
 
   const slots = dashboard.slots.map((slot) => {
+    if (slot.key === 'equity_multiple') {
+      const derivedEquityMultiple = derivedKpis.find(
+        (kpi) => kpi.businessRole === 'equity_multiple',
+      );
+      if (derivedEquityMultiple === undefined) {
+        return {
+          ...slot,
+          kpi: null,
+          unavailable: true,
+          unavailableDetail: 'EQUITY_CASH_FLOW_NOT_FOUND',
+        };
+      }
+      if (!isAvailableNumericKpi(derivedEquityMultiple)) {
+        return {
+          ...slot,
+          kpi: derivedEquityMultiple,
+          unavailable: true,
+          unavailableDetail:
+            derivedEquityMultiple.current.unavailableReason ??
+            'EQUITY_CASH_FLOW_UNAVAILABLE',
+        };
+      }
+      return {
+        ...slot,
+        kpi: derivedEquityMultiple,
+        unavailable: false,
+        unavailableDetail: null,
+      };
+    }
+
     const overviewKpi = OVERVIEW_SLOTS_BY_FIXED_SLOT[slot.key]
       .map((overviewSlot) => overviewBySlot.get(overviewSlot))
       .find((candidate) => candidate?.source_ids[0] !== undefined);

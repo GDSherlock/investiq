@@ -1532,8 +1532,15 @@ export default function SensitivityPage() {
           overviewMatchesSensitivityOutputs(overview, workbench.outputs)
           ? overview.kpis
           : [],
+        exactOutputView?.derivedKpis ?? [],
       ),
-    [calculationDashboard, outputView, overview, workbench.outputs],
+    [
+      calculationDashboard,
+      exactOutputView,
+      outputView,
+      overview,
+      workbench.outputs,
+    ],
   );
   const orderedAssumptions = useMemo(
     () =>

@@ -1635,6 +1635,144 @@ test('fixed dashboard display follows Overview source UUID without changing anal
   );
 });
 
+test('fixed dashboard Equity x uses the backend-derived KPI and ignores misleading scalar output', () => {
+  const outputView = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'project-irr-output',
+          entity_kind: 'scalar',
+          business_role: 'project_irr',
+          label: 'Project IRR',
+          unit: '%',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.0%',
+          availability_status: 'available',
+          baseline: projectedNumber('0.1'),
+          current: projectedNumber('0.12'),
+        },
+        {
+          output_id: 'misleading-equity-multiple',
+          entity_kind: 'scalar',
+          business_role: 'equity_multiple',
+          label: 'Workbook Equity Multiple',
+          unit: 'x',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.00x',
+          availability_status: 'available',
+          baseline: projectedNumber('8.8'),
+          current: projectedNumber('9.9'),
+        },
+      ],
+      derived_kpis: [
+        {
+          role: 'equity_multiple',
+          label: 'Equity ×',
+          unit: 'x',
+          source_type: 'derived',
+          availability_status: 'available',
+          source_ids: ['equity-cash-flow-series'],
+          baseline: projectedNumber('1.2'),
+          current: projectedNumber('1.8'),
+        },
+      ],
+    }),
+  );
+  const calculationDashboard = resolveFixedDashboardViewModel(outputView.kpis);
+  assert.equal(
+    calculationDashboard.slots.find((slot) => slot.key === 'equity_multiple')
+      ?.kpi?.outputId,
+    'misleading-equity-multiple',
+  );
+
+  const displayDashboard = alignDashboardSlotsWithOverview(
+    calculationDashboard,
+    outputView.kpis,
+    [overviewKpi('primary_return', 'project-irr-output')],
+    outputView.derivedKpis,
+  );
+  const equitySlot = displayDashboard.slots.find(
+    (slot) => slot.key === 'equity_multiple',
+  );
+
+  assert.equal(equitySlot?.kpi?.outputId, null);
+  assert.equal(equitySlot?.kpi?.current.numericValue, 1.8);
+  assert.equal(equitySlot?.kpi?.baseline.numericValue, 1.2);
+  assert.equal(equitySlot?.unavailable, false);
+  assert.equal(displayDashboard.irrOutputId, 'project-irr-output');
+});
+
+test('fixed dashboard Equity x preserves derived unavailability and never falls back', () => {
+  const unavailableView = buildSensitivityOutputView(
+    runOutputsResponse({
+      outputs: [
+        {
+          output_id: 'misleading-equity-multiple',
+          entity_kind: 'scalar',
+          business_role: 'equity_multiple',
+          label: 'Workbook Equity Multiple',
+          unit: 'x',
+          scenario: null,
+          formula_cell_id: null,
+          mapping_status: 'mapped',
+          support_status: 'supported',
+          number_format: '0.00x',
+          availability_status: 'available',
+          baseline: projectedNumber('8.8'),
+          current: projectedNumber('9.9'),
+        },
+      ],
+      derived_kpis: [
+        {
+          role: 'equity_multiple',
+          label: 'Equity ×',
+          unit: 'x',
+          source_type: 'derived',
+          availability_status: 'partial',
+          source_ids: ['equity-cash-flow-series'],
+          baseline: projectedNumber('1.2'),
+          current: unavailableProjection('EQUITY_CASH_FLOW_UNAVAILABLE'),
+        },
+      ],
+    }),
+  );
+  const unavailableDashboard = alignDashboardSlotsWithOverview(
+    resolveFixedDashboardViewModel(unavailableView.kpis),
+    unavailableView.kpis,
+    [],
+    unavailableView.derivedKpis,
+  );
+  const unavailableEquity = unavailableDashboard.slots.find(
+    (slot) => slot.key === 'equity_multiple',
+  );
+
+  assert.equal(unavailableEquity?.kpi?.outputId, null);
+  assert.equal(unavailableEquity?.unavailable, true);
+  assert.equal(
+    unavailableEquity?.unavailableDetail,
+    'EQUITY_CASH_FLOW_UNAVAILABLE',
+  );
+
+  const missingDashboard = alignDashboardSlotsWithOverview(
+    resolveFixedDashboardViewModel(unavailableView.kpis),
+    unavailableView.kpis,
+    [],
+    [],
+  );
+  const missingEquity = missingDashboard.slots.find(
+    (slot) => slot.key === 'equity_multiple',
+  );
+  assert.equal(missingEquity?.kpi, null);
+  assert.equal(missingEquity?.unavailable, true);
+  assert.equal(missingEquity?.unavailableDetail, 'EQUITY_CASH_FLOW_NOT_FOUND');
+});
+
 test('Overview-aligned display does not guess when the authoritative source is unavailable', () => {
   const outputView = buildSensitivityOutputView(
     runOutputsResponse({

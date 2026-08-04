@@ -192,7 +192,9 @@ export function FixedSensitivityDashboard({
                   )
                 : 'Unavailable'}
             </p>
-            {irrKpi && estimatedIds.has(irrKpi.outputId) ? (
+            {irrKpi !== null &&
+            irrKpi.outputId !== null &&
+            estimatedIds.has(irrKpi.outputId) ? (
               <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300">
                 Estimated
               </p>
@@ -229,7 +231,9 @@ export function FixedSensitivityDashboard({
                         )
                       : 'Unavailable'}
                   </dd>
-                  {slot.kpi && estimatedIds.has(slot.kpi.outputId) ? (
+                  {slot.kpi !== null &&
+                  slot.kpi.outputId !== null &&
+                  estimatedIds.has(slot.kpi.outputId) ? (
                     <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300">
                       Estimated
                     </p>
@@ -360,7 +364,9 @@ export function FixedSensitivityDashboard({
                       : 'Unavailable'}
                   </span>
                 </p>
-                {slot.kpi && estimatedIds.has(slot.kpi.outputId) ? (
+                {slot.kpi !== null &&
+                slot.kpi.outputId !== null &&
+                estimatedIds.has(slot.kpi.outputId) ? (
                   <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-sky-300">
                     Estimated
                   </p>

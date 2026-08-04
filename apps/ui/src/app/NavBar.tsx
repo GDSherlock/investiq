@@ -2,7 +2,6 @@
 
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { usePersona } from './PersonaContext';
 import { useAuth } from './AuthContext';
 import { useTheme } from './ThemeContext';
 import { useActiveAnalysis } from './ActiveAnalysisContext';
@@ -18,24 +17,8 @@ const NAV_LINKS: { href: string; label: string; badge?: string; badgeColor?: str
   { href: '/reports', label: 'Reports', badge: 'AI', badgeColor: 'bg-gold-500' },
 ];
 
-const PERSONA_COLORS: Record<string, string> = {
-  IM: 'border-gold-400 text-gold-400',
-  CF: 'border-gold-300 text-gold-300',
-  BD: 'border-gold-500 text-gold-500',
-  FA: 'border-slate-300 text-slate-300',
-  PO: 'border-gold-200 text-gold-200',
-};
-const PERSONA_BG_ACTIVE: Record<string, string> = {
-  IM: 'bg-gold-500/20 border-gold-400 text-gold-200',
-  CF: 'bg-gold-500/15 border-gold-300 text-gold-200',
-  BD: 'bg-gold-500/20 border-gold-500 text-gold-100',
-  FA: 'bg-slate-500/20 border-slate-300 text-slate-200',
-  PO: 'bg-gold-500/15 border-gold-200 text-gold-100',
-};
-
 export default function NavBar() {
   const pathname = usePathname();
-  const { persona, setPersonaById, personas } = usePersona();
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const activeAnalysis = useActiveAnalysis();
@@ -136,42 +119,7 @@ export default function NavBar() {
         </div>
       </div>
 
-      {/* ═══════ ROW 2: Persona selector ═══════ */}
-      <div className="bg-d-bg text-white border-t border-d-border overflow-x-auto">
-        <div className="max-w-[1600px] mx-auto px-4 py-1.5 flex items-center gap-4">
-          <span className="text-[10px] text-slate-400 uppercase tracking-widest font-semibold shrink-0">Viewing as</span>
-          <div className="flex items-center gap-2">
-            {personas.map((p) => {
-              const isActive = p.id === persona.id;
-              const colorCls = isActive ? PERSONA_BG_ACTIVE[p.id] : PERSONA_COLORS[p.id];
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => setPersonaById(p.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all border ${
-                    isActive
-                      ? `${colorCls} border`
-                      : `border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5`
-                  }`}
-                >
-                  <span
-                    className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold border ${
-                      isActive
-                        ? `${PERSONA_COLORS[p.id]} bg-transparent`
-                        : 'border-slate-500 text-slate-400'
-                    }`}
-                  >
-                    {p.short}
-                  </span>
-                  <span>{p.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* ═══════ ROW 3: Navigation links ═══════ */}
+      {/* ═══════ ROW 2: Navigation links ═══════ */}
       <div className="bg-d-bg text-white border-t border-d-border overflow-x-auto">
         <div className="max-w-[1600px] mx-auto px-4 py-2 flex items-center gap-6">
           {NAV_LINKS.map(({ href, label, badge, badgeColor }) => {

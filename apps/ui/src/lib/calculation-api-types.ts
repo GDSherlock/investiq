@@ -656,3 +656,92 @@ export interface CanonicalReportHistoryResponse {
   model_version_id: string;
   reports: CanonicalReportResponse[];
 }
+
+export type ReportPersonaId = 'IM' | 'CF' | 'BD' | 'FA' | 'PO';
+
+export interface ReportHeadingBlock {
+  kind: 'heading';
+  level: 1 | 2 | 3;
+  text: string;
+  citation_ids: string[];
+}
+
+export interface ReportParagraphBlock {
+  kind: 'paragraph';
+  text: string;
+  citation_ids: string[];
+}
+
+export interface ReportBulletListBlock {
+  kind: 'bullet_list';
+  items: string[];
+  citation_ids: string[];
+}
+
+export interface ReportNumberedListBlock {
+  kind: 'numbered_list';
+  items: string[];
+  citation_ids: string[];
+}
+
+export interface ReportTableBlock {
+  kind: 'table';
+  columns: string[];
+  rows: string[][];
+  citation_ids: string[];
+}
+
+export type ReportBlock =
+  | ReportHeadingBlock
+  | ReportParagraphBlock
+  | ReportBulletListBlock
+  | ReportNumberedListBlock
+  | ReportTableBlock;
+
+export interface ReportCitation {
+  id: string;
+  source_type: 'model' | 'user';
+  label: string;
+  source_ref: string;
+  message_id: string | null;
+}
+
+export interface ReportDocument {
+  title: string;
+  blocks: ReportBlock[];
+  citations: ReportCitation[];
+}
+
+export interface ReportChatMessageCreateRequest {
+  client_id: string;
+  graph_version_id: string;
+  calculation_run_id: string;
+  persona_id: ReportPersonaId;
+  message: string;
+  idempotency_key: string;
+}
+
+export interface ReportChatMessageResponse {
+  message_id: string;
+  thread_id: string;
+  role: 'user' | 'assistant' | 'system';
+  kind: 'text' | 'report' | 'error';
+  persona_id: ReportPersonaId;
+  text: string | null;
+  report: ReportDocument | null;
+  graph_version_id: string;
+  calculation_run_id: string;
+  created_at: string;
+}
+
+export interface ReportChatThreadResponse {
+  thread_id: string | null;
+  model_version_id: string;
+  messages: ReportChatMessageResponse[];
+}
+
+export interface ReportChatExchangeResponse {
+  thread_id: string;
+  user_message: ReportChatMessageResponse;
+  assistant_message: ReportChatMessageResponse;
+}

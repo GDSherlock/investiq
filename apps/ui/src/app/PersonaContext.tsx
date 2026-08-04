@@ -1,9 +1,10 @@
 'use client';
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import type { ReportPersonaId } from '@/lib/calculation-api-types';
 
 export interface PersonaDef {
-  id: string;
+  id: ReportPersonaId;
   name: string;
   short: string;
   assistant_system_addendum: {
@@ -44,7 +45,7 @@ const PERSONAS: PersonaDef[] = [
       monte_carlo: 'What is the probability of falling below hurdle?',
       cash_flow: 'Where are the weakest DSCR years?',
       monitor: 'What variances threaten value?',
-      reports: 'Generate an IC paper with approval recommendation.',
+      reports: 'Generate an Investment Committee Paper',
       assistant: 'Should we approve this investment?',
     },
   },
@@ -72,7 +73,7 @@ const PERSONAS: PersonaDef[] = [
       monte_carlo: 'What is the probability of DSCR breach?',
       cash_flow: 'Where are the liquidity gaps?',
       monitor: 'What funding risks are emerging?',
-      reports: 'Generate a CFO funding note.',
+      reports: 'Generate a CFO Funding Note',
       assistant: 'Is there covenant risk under current scenario?',
     },
   },
@@ -100,7 +101,7 @@ const PERSONAS: PersonaDef[] = [
       monte_carlo: 'What is downside risk exposure?',
       cash_flow: 'Is cash flow adequate for board approval?',
       monitor: 'What should be escalated?',
-      reports: 'Generate a board one-pager.',
+      reports: 'Generate a Board One-Pager',
       assistant: 'What decision should the board make?',
     },
   },
@@ -121,7 +122,7 @@ const PERSONAS: PersonaDef[] = [
     report_system_addendum: {
       tone: 'Technical, detailed, source-heavy',
       emphasis: ['Model mechanics', 'Sensitivity drivers', 'Data quality issues', 'Traceability'],
-      report_type_default: 'Sensitivity Summary',
+      report_type_default: 'Technical Sensitivity Summary',
     },
     starter_prompts: {
       overview: 'Explain assumptions behind KPIs.',
@@ -129,7 +130,7 @@ const PERSONAS: PersonaDef[] = [
       monte_carlo: 'Explain distribution drivers.',
       cash_flow: 'What drives cash flow profile?',
       monitor: 'Explain variance drivers.',
-      reports: 'Generate technical sensitivity summary.',
+      reports: 'Generate a Technical Sensitivity Summary',
       assistant: 'Explain the mechanics behind this result.',
     },
   },
@@ -149,7 +150,7 @@ const PERSONAS: PersonaDef[] = [
     report_system_addendum: {
       tone: 'Operational, execution-focused',
       emphasis: ['Variance', 'Milestones', 'Delivery risks', 'Mitigation actions'],
-      report_type_default: 'Variance Report',
+      report_type_default: 'Variance and Action Report',
     },
     starter_prompts: {
       overview: 'What operational issues affect outcomes?',
@@ -157,7 +158,7 @@ const PERSONAS: PersonaDef[] = [
       monte_carlo: 'What risks impact delivery reliability?',
       cash_flow: 'What impacts funding during execution?',
       monitor: 'What actions are required to stay on track?',
-      reports: 'Generate variance and action report.',
+      reports: 'Generate a Variance and Action Report',
       assistant: 'What should I do next to stay on plan?',
     },
   },
@@ -165,7 +166,7 @@ const PERSONAS: PersonaDef[] = [
 
 interface PersonaContextType {
   persona: PersonaDef;
-  setPersonaById: (id: string) => void;
+  setPersonaById: (id: ReportPersonaId) => void;
   personas: PersonaDef[];
 }
 
@@ -186,7 +187,7 @@ export function PersonaProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const setPersonaById = (id: string) => {
+  const setPersonaById = (id: ReportPersonaId) => {
     const found = PERSONAS.find((p) => p.id === id);
     if (found) {
       setPersona(found);

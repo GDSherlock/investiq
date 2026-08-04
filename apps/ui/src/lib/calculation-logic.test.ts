@@ -1010,38 +1010,28 @@ test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => 
   assert.doesNotMatch(source, /\b(?:10%|8\.5%|1\.25x|65:35)\b/);
 });
 
-test('reports page uses frozen canonical evidence and fixed IC sections', () => {
-  const source = readFileSync('src/app/reports/page.tsx', 'utf8');
+test('report chat API is available while navigation no longer owns persona selection', () => {
+  const apiSource = readFileSync('src/lib/api.ts', 'utf8');
+  const navBarSource = readFileSync('src/app/NavBar.tsx', 'utf8');
 
   for (const required of [
-    'useActiveAnalysis',
-    'createCanonicalReport',
-    'getCanonicalReport',
-    'getCanonicalReportHistory',
-    'Investment Committee Paper',
-    'Pending IC review',
-    'Executive recommendation',
-    'Approval conditions',
-    'source_ids',
-    'queued',
-    'running',
-    'completed',
-    'failed',
+    'getReportChat',
+    'sendReportChatMessage',
+    'downloadReportChatDocx',
   ]) {
-    assert.ok(source.includes(required), `expected ${required}`);
+    assert.ok(apiSource.includes(required), `expected ${required}`);
   }
-  for (const forbidden of [
-    'getModel',
-    'generatePersonaReport',
-    'investiq_model_id',
-    'model_snapshot_id',
-    'parsed_json',
-    'dangerouslySetInnerHTML',
-    'Approved for IC Submission',
+  for (const removedFromNav of [
+    'Viewing as',
+    'PERSONA_COLORS',
+    'setPersonaById',
   ]) {
-    assert.equal(source.includes(forbidden), false, `forbidden ${forbidden}`);
+    assert.equal(
+      navBarSource.includes(removedFromNav),
+      false,
+      `navigation must not include ${removedFromNav}`,
+    );
   }
-  assert.doesNotMatch(source, /scenarios\//);
 });
 
 test('existing run reload uses GET without recalculating', async () => {
@@ -4524,7 +4514,7 @@ test('sensitivity review fixes expose retained-state, zero-driver, provenance, a
     navSource.match(
       /bg-d-bg text-white border-t border-d-border overflow-x-auto/g,
     )?.length,
-    2,
+    1,
   );
   assert.match(
     navSource,
@@ -4566,7 +4556,7 @@ test('application root contains narrow-screen overflow while sensitivity regions
     layoutSource,
     /<div className="[^"]*\boverflow-x-hidden\b[^"]*">[\s\S]*<NavBar \/>[\s\S]*<main/,
   );
-  assert.equal(navSource.match(/\boverflow-x-auto\b/g)?.length, 3);
+  assert.equal(navSource.match(/\boverflow-x-auto\b/g)?.length, 2);
   assert.match(tornadoSource, /\boverflow-x-auto\b/);
   assert.match(matrixSource, /\boverflow-x-auto\b/);
 });

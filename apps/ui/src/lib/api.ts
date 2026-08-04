@@ -17,6 +17,9 @@ import type {
   MonteCarloRunHistoryResponse,
   MonteCarloRunResponse,
   OverviewAnalysisResponse,
+  ReportChatExchangeResponse,
+  ReportChatMessageCreateRequest,
+  ReportChatThreadResponse,
   WorkbookValidationResponse,
 } from './calculation-api-types';
 import { parseCalculationApiErrorPayload } from './calculation-flow';
@@ -382,6 +385,58 @@ export async function getCanonicalReportHistory(
       },
     ),
   );
+}
+
+export async function getReportChat(
+  modelVersionId: string,
+  clientId: string,
+): Promise<ReportChatThreadResponse> {
+  const response = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}` +
+      `/report-chat?client_id=${encodeURIComponent(clientId)}`,
+    {
+      cache: 'no-store',
+      headers: { ...getAuthHeaders() },
+    },
+  );
+  return parseJsonResponse<ReportChatThreadResponse>(response);
+}
+
+export async function sendReportChatMessage(
+  modelVersionId: string,
+  request: ReportChatMessageCreateRequest,
+): Promise<ReportChatExchangeResponse> {
+  const response = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}` +
+      '/report-chat/messages',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify(request),
+    },
+  );
+  return parseJsonResponse<ReportChatExchangeResponse>(response);
+}
+
+export async function downloadReportChatDocx(
+  modelVersionId: string,
+  messageId: string,
+  clientId: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_BASE}/api/v1/models/${encodeURIComponent(modelVersionId)}` +
+      `/report-chat/messages/${encodeURIComponent(messageId)}` +
+      `/docx?client_id=${encodeURIComponent(clientId)}`,
+    { headers: { ...getAuthHeaders() } },
+  );
+  if (!response.ok) {
+    await parseJsonResponse<never>(response);
+    throw new Error('Unable to download report.');
+  }
+  return response.blob();
 }
 
 export async function runCalculationSensitivity(

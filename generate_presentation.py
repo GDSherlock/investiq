@@ -66,15 +66,6 @@ SLIDES = [
         "Powered by NumPy/SciPy with Cholesky decomposition for correlated sampling",
     ]),
 
-    # Monitor
-    ("06_monitor.png", "DSCR Covenant Monitor", [
-        "Real-time DSCR tracking against lender covenant thresholds",
-        "Traffic-light alert system: Green (safe), Amber (watch), Red (breach)",
-        "Debt service coverage waterfall chart",
-        "Automated alert rules with configurable thresholds",
-        "AI commentary on covenant risk and recommended actions",
-    ]),
-
     # AI Assistant
     ("07_assistant.png", "AI Assistant — Persona-Toned Q&A", [
         "Natural language Q&A powered by Azure OpenAI GPT-5.2",

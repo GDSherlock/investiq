@@ -54,7 +54,6 @@ from .routers import (
     debt_analysis,
     market_data,
     models,
-    monitor,
     report_chat,
     reports,
     scenarios,
@@ -104,7 +103,6 @@ app.include_router(alerts.router, prefix="/api/v1", tags=["Alerts"])
 app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
 app.include_router(market_data.router, prefix="/api/v1", tags=["Market Data"])
 app.include_router(assistant.router, prefix="/api/v1", tags=["Assistant"])
-app.include_router(monitor.router, prefix="/api/v1", tags=["Monitor"])
 
 
 @app.get("/health")

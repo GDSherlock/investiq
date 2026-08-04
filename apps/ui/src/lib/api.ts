@@ -565,20 +565,6 @@ export async function getCashFlows(scenarioId: string) {
   return res.json();
 }
 
-export async function getMonitor(scenarioId: string) {
-  const res = await fetch(`${API_BASE}/api/v1/scenarios/${scenarioId}/monitor`, {
-    headers: { ...getAuthHeaders() },
-  });
-  return res.json();
-}
-
-export async function getMonitorLegacy(investmentId: string) {
-  const res = await fetch(`${API_BASE}/api/v1/investments/${investmentId}/monitor`, {
-    headers: { ...getAuthHeaders() },
-  });
-  return res.json();
-}
-
 export async function generateReport(investmentId: string) {
   const res = await fetch(`${API_BASE}/api/v1/reports/generate?investment_id=${investmentId}`, {
     method: 'POST',

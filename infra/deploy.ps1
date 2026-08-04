@@ -358,7 +358,7 @@ az containerapp create `
     --env-vars "DATABASE_URL=$DatabaseUrl" "REDIS_URL=$RedisUrl" "AZURE_OPENAI_ENDPOINT=$AiEndpoint" "AZURE_OPENAI_API_KEY=$AiKey" "AZURE_OPENAI_GPT_DEPLOYMENT=$GptDeployment" "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=$EmbeddingDeployment"
 
 # M5: Agent Container Apps
-$Agents = @("ingest", "sens", "mc", "cf", "debt", "monitor", "report", "assistant")
+$Agents = @("ingest", "sens", "mc", "cf", "debt", "report", "assistant")
 
 foreach ($Agent in $Agents) {
     Write-Host ">>> Deploying Agent: InvestIQAppNL-agent-$Agent..." -ForegroundColor Yellow

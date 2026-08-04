@@ -1070,15 +1070,6 @@ class AlertResponse(BaseModel):
     created_at: datetime | None
 
 
-# --- Monitor schemas ---
-class MonitorDashboard(BaseModel):
-    investment_id: str
-    kpis: dict[str, Any]
-    dscr_status: list[dict[str, Any]]
-    alerts: list[dict[str, Any]]
-    variance_analysis: dict[str, Any] | None = None
-
-
 # --- Audit schemas ---
 class AuditEntry(BaseModel):
     id: str

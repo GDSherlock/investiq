@@ -539,8 +539,8 @@ az containerapp create \
     "AZURE_OPENAI_GPT_DEPLOYMENT=${GPT_DEPLOYMENT}" \
     "AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${EMBEDDING_DEPLOYMENT}"
 
-# M5: Agent Container Apps (8 agents)
-AGENTS=("ingest" "sens" "mc" "cf" "debt" "monitor" "report" "assistant")
+# M5: Agent Container Apps (7 agents)
+AGENTS=("ingest" "sens" "mc" "cf" "debt" "report" "assistant")
 
 for AGENT in "${AGENTS[@]}"; do
   echo ">>> Deploying Agent: investiqappnl-agent-${AGENT}..."

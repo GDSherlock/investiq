@@ -11,7 +11,7 @@ interface Message {
 
 interface FloatingAssistantProps {
   /** Which tab the assistant is on — used for starter prompts */
-  tabKey: 'overview' | 'sensitivity' | 'cash_flow' | 'monte_carlo' | 'monitor' | 'reports';
+  tabKey: 'overview' | 'sensitivity' | 'cash_flow' | 'monte_carlo' | 'reports';
   /** Brief description of what's on screen for context */
   pageContext?: string;
 }

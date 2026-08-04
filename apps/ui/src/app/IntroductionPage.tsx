@@ -14,7 +14,6 @@ const CAPABILITIES = [
   { title: 'Sensitivity engine', desc: 'Live sliders, tornado chart, sensitivity & carbon tables, AI in 3 lines', icon: '🎛️' },
   { title: 'Cash flow simulator', desc: 'P10/P50/P90, DSCR covenant, payback tracking', icon: '💰' },
   { title: 'Monte Carlo engine', desc: 'Configure distributions, 5,000 trials, hurdle probability, VaR', icon: '🎲' },
-  { title: 'Performance monitor', desc: 'Actuals vs plan, IRR reforecast, milestone RAG tracker', icon: '📈' },
   { title: 'AI assistant', desc: 'Persona-aware chat — full model context, concise answers, sources shown', icon: '🤖' },
   { title: 'Report generator', desc: 'IC paper, board 1-pager, variance report — live data, instant', icon: '📄' },
 ];
@@ -66,15 +65,6 @@ const MODULES = [
       'P10/P50/P90 distribution bands based on current assumptions',
       'DSCR by year with 1.25x covenant line — trough year flagged',
       'AI: 3-cell "Profile | Risk period | Monitor this" format',
-    ],
-  },
-  {
-    title: 'Performance monitor',
-    desc: 'Post-FID: capex actuals vs plan, IRR quarterly reforecast with variance and threshold alerts.',
-    bullets: [
-      'Capex actuals vs plan — live chart, actuals plotted against approved budget',
-      'IRR reforecast to complete — quarterly trend vs base and hurdle',
-      'Alert badges fire at 7% overrun (board escalation) and DSCR < 1.35x',
     ],
   },
   {

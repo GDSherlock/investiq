@@ -80,7 +80,6 @@ export default function AssistantPage() {
     { key: 'overview', label: persona.starter_prompts.overview },
     { key: 'sensitivity', label: persona.starter_prompts.sensitivity },
     { key: 'cash_flow', label: persona.starter_prompts.cash_flow },
-    { key: 'monitor', label: persona.starter_prompts.monitor },
   ];
 
   if (loading) return <div className="flex items-center justify-center h-64 text-d-muted">Loading model...</div>;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createElement, useState } from 'react';
 import TestRenderer, { act } from 'react-test-renderer';
@@ -1060,6 +1060,30 @@ test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => 
   }
   assert.doesNotMatch(source, /scenarios\//);
   assert.doesNotMatch(source, /\b(?:10%|8\.5%|1\.25x|65:35)\b/);
+});
+
+test('legacy Monitor product surfaces are removed from the frontend', () => {
+  assert.equal(existsSync('src/app/monitor/page.tsx'), false);
+  assert.equal(
+    readFileSync('src/app/NavBar.tsx', 'utf8').includes("href: '/monitor'"),
+    false,
+  );
+  assert.doesNotMatch(
+    readFileSync('src/lib/api.ts', 'utf8'),
+    /getMonitor(?:Legacy)?/,
+  );
+  assert.doesNotMatch(
+    readFileSync('src/app/FloatingAssistant.tsx', 'utf8'),
+    /'monitor'/,
+  );
+  assert.doesNotMatch(
+    readFileSync('src/app/assistant/page.tsx', 'utf8'),
+    /starter_prompts\.monitor/,
+  );
+  assert.doesNotMatch(
+    readFileSync('src/app/IntroductionPage.tsx', 'utf8'),
+    /Performance monitor/,
+  );
 });
 
 test('report chat API is available while navigation no longer owns persona selection', () => {

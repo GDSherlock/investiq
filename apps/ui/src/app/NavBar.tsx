@@ -13,7 +13,6 @@ const NAV_LINKS: { href: string; label: string; badge?: string; badgeColor?: str
   { href: '/sensitivity', label: 'Sensitivity' },
   { href: '/cashflows', label: 'Cash Flow' },
   { href: '/montecarlo', label: 'Monte Carlo', badge: 'ENGINE', badgeColor: 'bg-gold-600' },
-  { href: '/monitor', label: 'Monitor' },
   { href: '/reports', label: 'Reports', badge: 'AI', badgeColor: 'bg-gold-500' },
 ];
 

@@ -25,7 +25,6 @@ class IntentType(str, Enum):
     MONTE_CARLO = "monte_carlo"
     CASH_FLOW = "cash_flow"
     DEBT_ANALYSIS = "debt_analysis"
-    MONITOR = "monitor"
     REPORT = "report"
     ASSISTANT = "assistant"
     UNKNOWN = "unknown"
@@ -61,7 +60,6 @@ _INTENT_PATTERNS = {
     IntentType.MONTE_CARLO: ["monte carlo", "simulation", "probability", "var"],
     IntentType.CASH_FLOW: ["cash flow", "fcf", "cashflow", "free cash"],
     IntentType.DEBT_ANALYSIS: ["debt", "term sheet", "loan", "financing"],
-    IntentType.MONITOR: ["monitor", "dashboard", "alert", "actual vs plan"],
     IntentType.REPORT: ["report", "ic paper", "board pack", "generate report"],
     IntentType.ASSISTANT: ["question", "explain", "what is", "help", "tell me"],
 }
@@ -73,7 +71,6 @@ AGENT_REGISTRY: dict[IntentType, str] = {
     IntentType.MONTE_CARLO: "MonteCarloAgent",
     IntentType.CASH_FLOW: "CashFlowAgent",
     IntentType.DEBT_ANALYSIS: "DebtAnalysisAgent",
-    IntentType.MONITOR: "MonitorAgent",
     IntentType.REPORT: "ReportAgent",
     IntentType.ASSISTANT: "AssistantAgent",
 }

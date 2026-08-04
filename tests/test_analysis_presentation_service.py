@@ -38,6 +38,133 @@ def _projected_number(value: str | None) -> dict[str, object]:
     }
 
 
+def _projected_unavailable(reason: str) -> dict[str, object]:
+    return {
+        "availability_status": "unavailable",
+        "value": None,
+        "unavailable_reason": reason,
+        "execution_status": "derived_unavailable",
+        "engine_error_code": None,
+        "validation_status": "not_comparable",
+        "warnings": [],
+    }
+
+
+def _scalar_output(role: str, value: str) -> dict[str, object]:
+    return {
+        "output_id": new_uuid(),
+        "entity_kind": "scalar",
+        "business_role": role,
+        "label": role,
+        "unit": "x",
+        "scenario": None,
+        "formula_cell_id": new_uuid(),
+        "mapping_status": "mapped",
+        "support_status": "supported",
+        "number_format": "0.00x",
+        "availability_status": "available",
+        "baseline": _projected_number(value),
+        "current": _projected_number(value),
+    }
+
+
+def _overview_projection(
+    *,
+    derived_baseline: str | None = None,
+    derived_current: str | None = None,
+    derived_unavailable_reason: str | None = None,
+) -> CalculationRunOutputsResponse:
+    run_id = new_uuid()
+    unavailable_reason = (
+        derived_unavailable_reason or "EQUITY_CASH_FLOW_UNAVAILABLE"
+    )
+    baseline = (
+        _projected_number(derived_baseline)
+        if derived_baseline is not None
+        else _projected_unavailable(unavailable_reason)
+    )
+    current = (
+        _projected_number(derived_current)
+        if derived_current is not None
+        else _projected_unavailable(unavailable_reason)
+    )
+    return CalculationRunOutputsResponse.model_validate(
+        {
+            "calculation_run_id": run_id,
+            "model_version_id": new_uuid(),
+            "graph_version_id": new_uuid(),
+            "comparison_baseline_run_id": run_id,
+            "outputs": [
+                _scalar_output("equity_multiple", "9.9"),
+                _scalar_output("debt_to_equity_ratio", "4.0"),
+            ],
+            "derived_kpis": [
+                {
+                    "role": "equity_multiple",
+                    "label": "Equity ×",
+                    "unit": "x",
+                    "source_type": "derived",
+                    "availability_status": (
+                        "available"
+                        if derived_baseline is not None
+                        and derived_current is not None
+                        else "unavailable"
+                    ),
+                    "source_ids": [new_uuid()],
+                    "baseline": baseline,
+                    "current": current,
+                }
+            ],
+        }
+    )
+
+
+def _overview(projection: CalculationRunOutputsResponse):
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        return AnalysisPresentationService(
+            session,
+            _ProjectionService(projection),  # type: ignore[arg-type]
+        ).overview(projection.calculation_run_id)
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_overview_leverage_uses_derived_equity_multiple_only() -> None:
+    projection = _overview_projection(
+        derived_baseline="1.2",
+        derived_current="1.8",
+    )
+
+    response = _overview(projection)
+
+    leverage = next(kpi for kpi in response.kpis if kpi.slot == "leverage")
+    assert leverage.role == "equity_multiple"
+    assert leverage.label == "Equity ×"
+    assert leverage.value == "1.8"
+    assert leverage.display_value == "1.80x"
+    assert leverage.source_type == "derived"
+    assert leverage.source_ids == projection.derived_kpis[0].source_ids
+
+
+def test_overview_does_not_fallback_when_derived_equity_multiple_is_unavailable() -> None:
+    projection = _overview_projection(
+        derived_unavailable_reason="EQUITY_CASH_OUTFLOW_ZERO",
+    )
+
+    response = _overview(projection)
+
+    leverage = next(kpi for kpi in response.kpis if kpi.slot == "leverage")
+    assert leverage.value is None
+    assert leverage.display_value == "Unavailable"
+    assert leverage.source_type == "unavailable"
+    assert leverage.quality_status == "EQUITY_CASH_OUTFLOW_ZERO"
+    assert leverage.source_ids == projection.derived_kpis[0].source_ids
+
+
 def test_cumulative_cash_flow_propagates_a_missing_annual_value() -> None:
     engine, session_factory = create_sqlite_session_factory()
     Base.metadata.create_all(engine)

@@ -44,11 +44,6 @@ _KPI_SLOTS = (
     ("payback_period", ("payback_period",), "Payback period"),
     ("minimum_dscr", ("minimum_dscr",), "Minimum DSCR"),
     ("average_dscr", ("average_dscr",), "Average DSCR"),
-    (
-        "leverage",
-        ("equity_multiple", "debt_to_equity_ratio"),
-        "Equity multiple",
-    ),
 )
 
 _CASH_FLOW_CHARTS = (
@@ -110,6 +105,7 @@ class AnalysisPresentationService:
             )
             for slot, roles, label in _KPI_SLOTS
         ]
+        kpis.append(self._derived_equity_multiple_kpi(projection))
         charts = self._overview_charts(projection)
         return OverviewAnalysisResponse(
             calculation_run_id=projection.calculation_run_id,
@@ -348,6 +344,69 @@ class AnalysisPresentationService:
             validation_status=None,
             calculation_run_id=projection.calculation_run_id,
             source_ids=[],
+        )
+
+    def _derived_equity_multiple_kpi(
+        self,
+        projection: CalculationRunOutputsResponse,
+    ) -> AnalysisKpiItem:
+        derived = next(
+            (
+                item
+                for item in projection.derived_kpis
+                if item.role == "equity_multiple"
+            ),
+            None,
+        )
+        if derived is not None:
+            value = self._number(derived.current)
+            if value is not None:
+                return AnalysisKpiItem(
+                    slot="leverage",
+                    role="equity_multiple",
+                    label="Equity ×",
+                    value=value,
+                    unit="x",
+                    display_value=self._display_value(
+                        "equity_multiple",
+                        value,
+                        "x",
+                    ),
+                    benchmark=None,
+                    status="not_assessed",
+                    source_type="derived",
+                    availability_status="available",
+                    quality_status=(
+                        derived.current.validation_status or "derived"
+                    ),
+                    validation_status=derived.current.validation_status,
+                    calculation_run_id=projection.calculation_run_id,
+                    source_ids=derived.source_ids,
+                )
+        unavailable_reason = (
+            derived.current.unavailable_reason
+            if derived is not None
+            else "EQUITY_CASH_FLOW_NOT_FOUND"
+        )
+        return AnalysisKpiItem(
+            slot="leverage",
+            role="equity_multiple",
+            label="Equity ×",
+            value=None,
+            unit="x",
+            display_value="Unavailable",
+            benchmark=None,
+            status="unavailable",
+            source_type="unavailable",
+            availability_status="unavailable",
+            quality_status=unavailable_reason or "unavailable",
+            validation_status=(
+                derived.current.validation_status
+                if derived is not None
+                else None
+            ),
+            calculation_run_id=projection.calculation_run_id,
+            source_ids=derived.source_ids if derived is not None else [],
         )
 
     def _benchmark(

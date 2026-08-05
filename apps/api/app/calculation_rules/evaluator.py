@@ -12,6 +12,7 @@ from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
 from openpyxl.utils.datetime import (
     CALENDAR_MAC_1904,
     CALENDAR_WINDOWS_1900,
+    from_excel,
     to_excel,
 )
 
@@ -516,6 +517,8 @@ class SafeCalculationEvaluator:
             except (ArithmeticError, OverflowError, ValueError):
                 return ScalarValue.error("#NUM!")
             return _finite_number(result)
+        if name == "YEAR":
+            return _year(first_number, context.catalog.workbook_date_system)
         if name == "ABS":
             return _finite_number(abs(first_number))
         if name == "ROUND":
@@ -678,6 +681,23 @@ def _numeric_range_values(
         if item.kind in {"number", "date_serial"}:
             numbers.append(item.number_value)
     return numbers
+
+
+def _year(serial: float, date_system: str) -> ScalarValue:
+    if not math.isfinite(serial) or serial < 0:
+        return ScalarValue.error("#NUM!")
+    whole_serial = math.floor(serial)
+    if date_system == "1900" and whole_serial in {0, 60}:
+        return ScalarValue.number(1900)
+    if date_system == "1904" and whole_serial == 0:
+        return ScalarValue.number(1904)
+    epoch = CALENDAR_MAC_1904 if date_system == "1904" else CALENDAR_WINDOWS_1900
+    try:
+        converted = from_excel(whole_serial, epoch)
+        year = converted.year
+    except (AttributeError, OverflowError, TypeError, ValueError):
+        return ScalarValue.error("#NUM!")
+    return ScalarValue.number(year)
 
 
 def _irr(cash_flows: Sequence[float], guess: float) -> ScalarValue:

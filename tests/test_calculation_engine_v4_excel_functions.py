@@ -102,3 +102,42 @@ def test_or_flattens_ranges_and_preserves_scalar_coercion_rules() -> None:
     assert empty_range is not None
     assert empty_range.value == ScalarValue.error("#VALUE!")
     assert errored is not None and errored.value == ScalarValue.error("#N/A")
+
+
+@pytest.mark.parametrize(
+    ("date_system", "serial", "expected"),
+    [
+        ("1900", 0, 1900),
+        ("1900", 60, 1900),
+        ("1900", 45292, 2024),
+        ("1904", 0, 1904),
+        ("1904", 43830, 2024),
+    ],
+)
+def test_year_respects_the_workbook_date_system(
+    date_system: str,
+    serial: int,
+    expected: int,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(
+        f"=YEAR({serial})",
+        date_system=date_system,
+    )
+
+    assert execution is not None
+    assert execution.value == ScalarValue.number(expected)
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected"),
+    [("=YEAR(-1)", "#NUM!"), ('=YEAR("not-a-date")', "#VALUE!")],
+)
+def test_year_returns_typed_errors_for_invalid_values(
+    formula: str,
+    expected: str,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(formula)
+
+    assert execution is not None
+    assert execution.status == "execution_error"
+    assert execution.value == ScalarValue.error(expected)

@@ -141,3 +141,60 @@ def test_year_returns_typed_errors_for_invalid_values(
     assert execution is not None
     assert execution.status == "execution_error"
     assert execution.value == ScalarValue.error(expected)
+
+
+@pytest.mark.parametrize(
+    ("formula", "values", "expected"),
+    [
+        ("=MATCH(20,Inputs!A1:A3,0)", {"A1": 10, "A2": 20, "A3": 30}, 2),
+        ("=MATCH(25,Inputs!A1:A3,1)", {"A1": 10, "A2": 20, "A3": 30}, 2),
+        ("=MATCH(25,Inputs!A1:A3,-1)", {"A1": 30, "A2": 20, "A3": 10}, 1),
+        ("=MATCH(2,Inputs!A1:C1,0)", {"A1": 1, "B1": 2, "C1": 3}, 2),
+        (
+            '=MATCH("proj*",Inputs!A1:A3,0)',
+            {"A1": "Base", "A2": "Project", "A3": "Equity"},
+            2,
+        ),
+        ('=MATCH("a~*",Inputs!A1:A2,0)', {"A1": "a?", "A2": "a*"}, 2),
+    ],
+)
+def test_match_supports_excel_one_dimensional_modes(
+    formula: str,
+    values: dict[str, object],
+    expected: int,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(formula, values)
+
+    assert execution is not None
+    assert execution.value == ScalarValue.number(expected)
+
+
+@pytest.mark.parametrize(
+    ("formula", "values", "expected"),
+    [
+        (
+            "=MATCH(99,Inputs!A1:A3,0)",
+            {"A1": 1, "A2": 2, "A3": 3},
+            "#N/A",
+        ),
+        (
+            "=MATCH(2,Inputs!A1:B2,0)",
+            {"A1": 1, "A2": 2, "B1": 3, "B2": 4},
+            "#VALUE!",
+        ),
+        (
+            "=MATCH(2,Inputs!A1:A3,2)",
+            {"A1": 1, "A2": 2, "A3": 3},
+            "#VALUE!",
+        ),
+    ],
+)
+def test_match_returns_typed_errors(
+    formula: str,
+    values: dict[str, object],
+    expected: str,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(formula, values)
+
+    assert execution is not None
+    assert execution.value == ScalarValue.error(expected)

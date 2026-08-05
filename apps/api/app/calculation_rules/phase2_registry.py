@@ -56,5 +56,6 @@ PHASE2_FUNCTION_REGISTRY: Mapping[str, FunctionDefinition] = MappingProxyType(
         "NPV": _phase2_definition("NPV", 2, 255),
         "MOD": _phase2_definition("MOD", 2, 2),
         "YEAR": _phase2_definition("YEAR", 1, 1),
+        "MATCH": _phase2_definition("MATCH", 2, 3),
     }
 )

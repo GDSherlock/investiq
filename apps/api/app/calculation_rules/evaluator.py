@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import math
+import re
 from typing import Any, Mapping, Sequence
 
 from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter
@@ -375,6 +376,27 @@ class SafeCalculationEvaluator:
                     elif name == "COUNTA" and item.kind != "blank":
                         count += 1
             return ScalarValue.number(count)
+
+        if name == "MATCH":
+            lookup = self._evaluate_node(arguments[0], context, trace)
+            lookup_array = self._evaluate_node(arguments[1], context, trace)
+            if isinstance(lookup, _RangeValue) or not isinstance(
+                lookup_array,
+                _RangeValue,
+            ):
+                return ScalarValue.error("#VALUE!")
+            if lookup_array.rows > 1 and lookup_array.columns > 1:
+                return ScalarValue.error("#VALUE!")
+            match_type = 1.0
+            if len(arguments) == 3:
+                raw_match_type = self._evaluate_node(arguments[2], context, trace)
+                match_type_value = _coerce_numeric(raw_match_type)
+                if isinstance(match_type_value, ScalarValue):
+                    return match_type_value
+                match_type = match_type_value
+            if match_type not in {-1.0, 0.0, 1.0}:
+                return ScalarValue.error("#VALUE!")
+            return _match(lookup, lookup_array.values, int(match_type))
 
         if name == "COUNTIF":
             criteria_range = self._evaluate_node(arguments[0], context, trace)
@@ -777,6 +799,77 @@ def _truthy(value: ScalarValue | _RangeValue) -> bool | ScalarValue:
     if value.kind in {"number", "date_serial"}:
         return value.number_value != 0
     return ScalarValue.error("#VALUE!")
+
+
+def _wildcard_regex(source: str) -> re.Pattern[str]:
+    pieces = ["^"]
+    escaped = False
+    for character in source:
+        if escaped:
+            pieces.append(re.escape(character))
+            escaped = False
+        elif character == "~":
+            escaped = True
+        elif character == "*":
+            pieces.append(".*")
+        elif character == "?":
+            pieces.append(".")
+        else:
+            pieces.append(re.escape(character))
+    if escaped:
+        pieces.append(re.escape("~"))
+    pieces.append("$")
+    return re.compile("".join(pieces), re.IGNORECASE)
+
+
+def _match(
+    lookup: ScalarValue,
+    candidates: Sequence[ScalarValue],
+    match_type: int,
+) -> ScalarValue:
+    if lookup.kind == "error":
+        return lookup
+    if match_type == 0:
+        pattern = (
+            _wildcard_regex(str(lookup.value))
+            if lookup.kind == "text"
+            and any(
+                character in str(lookup.value)
+                for character in ("*", "?", "~")
+            )
+            else None
+        )
+        for index, candidate in enumerate(candidates, start=1):
+            if candidate.kind == "error":
+                return candidate
+            if pattern is not None:
+                matched = candidate.kind == "text" and pattern.fullmatch(
+                    str(candidate.value)
+                )
+            else:
+                compared = _compare(candidate, lookup, "equal")
+                matched = compared.kind != "error" and bool(compared.value)
+            if matched:
+                return ScalarValue.number(index)
+        return ScalarValue.error("#N/A")
+
+    operator = "less_equal" if match_type == 1 else "greater_equal"
+    best: int | None = None
+    for index, candidate in enumerate(candidates, start=1):
+        if candidate.kind == "error":
+            return candidate
+        compared = _compare(candidate, lookup, operator)
+        if compared.kind == "error":
+            continue
+        if bool(compared.value):
+            best = index
+        elif best is not None:
+            break
+    return (
+        ScalarValue.number(best)
+        if best is not None
+        else ScalarValue.error("#N/A")
+    )
 
 
 def _countif_match(

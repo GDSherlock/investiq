@@ -226,7 +226,8 @@ implements the smallest handler, and reruns the focused test before proceeding.
 
 ### Registry and compiler tests
 
-- every function is registered with the intended arity and category;
+- every function is registered with the intended arity, range acceptance,
+  laziness, volatility, implementation version, and conformance version;
 - valid calls compile to existing `function_call` IR;
 - invalid arity remains a compile diagnostic;
 - unknown functions remain unsupported; and

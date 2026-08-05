@@ -258,3 +258,72 @@ def test_xnpv_returns_typed_input_and_domain_errors(
 
     assert execution is not None
     assert execution.value == ScalarValue.error(expected)
+
+
+def test_xirr_solves_irregular_dates_deterministically() -> None:
+    values = {
+        "A1": -10000,
+        "A2": 2750,
+        "A3": 4250,
+        "A4": 3250,
+        "A5": 2750,
+        "B1": 39448,
+        "B2": 39508,
+        "B3": 39751,
+        "B4": 39859,
+        "B5": 39904,
+    }
+    first = _compile_and_evaluate(
+        "=XIRR(Inputs!A1:A5,Inputs!B1:B5)",
+        values,
+    )[1]
+    second = _compile_and_evaluate(
+        "=XIRR(Inputs!A1:A5,Inputs!B1:B5,10%)",
+        values,
+    )[1]
+
+    assert first is not None and first.value is not None
+    assert second is not None and second.value is not None
+    assert first.value.number_value == pytest.approx(0.373362535, abs=1e-7)
+    assert second.value.number_value == pytest.approx(
+        first.value.number_value,
+        abs=1e-10,
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({"A1": 100, "A2": 10, "B1": 43831, "B2": 44197}, "#NUM!"),
+        ({"A1": -100, "A2": -10, "B1": 43831, "B2": 44197}, "#NUM!"),
+        ({"A1": -100, "A2": 110, "B1": 44197, "B2": 43831}, "#NUM!"),
+    ],
+)
+def test_xirr_rejects_invalid_sign_and_date_inputs(
+    values: dict[str, object],
+    expected: str,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(
+        "=XIRR(Inputs!A1:A2,Inputs!B1:B2)",
+        values,
+    )
+
+    assert execution is not None
+    assert execution.value == ScalarValue.error(expected)
+
+
+def test_xirr_returns_num_when_no_root_converges() -> None:
+    _compilation, execution = _compile_and_evaluate(
+        "=XIRR(Inputs!A1:A3,Inputs!B1:B3,-99%)",
+        {
+            "A1": -100,
+            "A2": 1,
+            "A3": -1,
+            "B1": 43831,
+            "B2": 43832,
+            "B3": 43833,
+        },
+    )
+
+    assert execution is not None
+    assert execution.value == ScalarValue.error("#NUM!")

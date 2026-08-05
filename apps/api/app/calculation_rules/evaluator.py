@@ -473,6 +473,22 @@ class SafeCalculationEvaluator:
                 guess = guess_number
             return _irr(cash_flows, guess)
 
+        if name == "XIRR":
+            values = self._evaluate_node(arguments[0], context, trace)
+            dates = self._evaluate_node(arguments[1], context, trace)
+            paired = _dated_cash_flows(values, dates)
+            if isinstance(paired, ScalarValue):
+                return paired
+            cash_flows, day_offsets = paired
+            guess = 0.1
+            if len(arguments) == 3:
+                guess_value = self._evaluate_node(arguments[2], context, trace)
+                guess_number = _coerce_numeric(guess_value)
+                if isinstance(guess_number, ScalarValue):
+                    return guess_number
+                guess = guess_number
+            return _xirr(cash_flows, day_offsets, guess)
+
         if name == "XNPV":
             rate_value = self._evaluate_node(arguments[0], context, trace)
             values = self._evaluate_node(arguments[1], context, trace)
@@ -795,6 +811,135 @@ def _year(serial: float, date_system: str) -> ScalarValue:
     except (AttributeError, OverflowError, TypeError, ValueError):
         return ScalarValue.error("#NUM!")
     return ScalarValue.number(year)
+
+
+_XIRR_MIN_RATE = -0.999999999
+_XIRR_MAX_RATE = 1_000_000.0
+_XIRR_MAX_ITERATIONS = 100
+_XIRR_RATE_TOLERANCE = 1e-10
+_XIRR_VALUE_TOLERANCE = 1e-8
+
+
+def _xirr_derivative(
+    rate: float,
+    cash_flows: Sequence[float],
+    day_offsets: Sequence[float],
+) -> float:
+    base = 1.0 + rate
+    return math.fsum(
+        -(day_offset / 365.0)
+        * cash_flow
+        / (base ** ((day_offset / 365.0) + 1.0))
+        for cash_flow, day_offset in zip(cash_flows, day_offsets)
+        if day_offset
+    )
+
+
+def _xirr_bracket(
+    cash_flows: Sequence[float],
+    day_offsets: Sequence[float],
+    guess: float,
+) -> tuple[float, float] | None:
+    grid = sorted(
+        {
+            _XIRR_MIN_RATE,
+            -0.99,
+            -0.9,
+            -0.75,
+            -0.5,
+            -0.25,
+            0.0,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.0,
+            5.0,
+            10.0,
+            100.0,
+            1_000.0,
+            _XIRR_MAX_RATE,
+            min(max(guess, _XIRR_MIN_RATE), _XIRR_MAX_RATE),
+        }
+    )
+    brackets: list[tuple[float, float]] = []
+    previous_rate = grid[0]
+    previous_value = _xnpv_value(previous_rate, cash_flows, day_offsets)
+    for rate in grid[1:]:
+        value = _xnpv_value(rate, cash_flows, day_offsets)
+        if value == 0:
+            return rate, rate
+        if previous_value == 0:
+            return previous_rate, previous_rate
+        if math.copysign(1.0, value) != math.copysign(1.0, previous_value):
+            brackets.append((previous_rate, rate))
+        previous_rate, previous_value = rate, value
+    if not brackets:
+        return None
+    return min(
+        brackets,
+        key=lambda pair: abs(((pair[0] + pair[1]) / 2.0) - guess),
+    )
+
+
+def _xirr(
+    cash_flows: Sequence[float],
+    day_offsets: Sequence[float],
+    guess: float,
+) -> ScalarValue:
+    if (
+        len(cash_flows) < 2
+        or not any(value > 0 for value in cash_flows)
+        or not any(value < 0 for value in cash_flows)
+        or not math.isfinite(guess)
+        or guess <= -1.0
+    ):
+        return ScalarValue.error("#NUM!")
+    rate = min(guess, _XIRR_MAX_RATE)
+    try:
+        for _iteration in range(_XIRR_MAX_ITERATIONS):
+            value = _xnpv_value(rate, cash_flows, day_offsets)
+            if abs(value) <= _XIRR_VALUE_TOLERANCE:
+                return _finite_number(rate)
+            derivative = _xirr_derivative(rate, cash_flows, day_offsets)
+            if not math.isfinite(derivative) or abs(derivative) <= 1e-15:
+                break
+            next_rate = rate - value / derivative
+            if not (_XIRR_MIN_RATE < next_rate <= _XIRR_MAX_RATE):
+                break
+            if (
+                abs(next_rate - rate) <= _XIRR_RATE_TOLERANCE
+                and abs(_xnpv_value(next_rate, cash_flows, day_offsets))
+                <= _XIRR_VALUE_TOLERANCE
+            ):
+                return _finite_number(next_rate)
+            rate = next_rate
+
+        bracket = _xirr_bracket(cash_flows, day_offsets, guess)
+        if bracket is None:
+            return ScalarValue.error("#NUM!")
+        low, high = bracket
+        if low == high:
+            return _finite_number(low)
+        low_value = _xnpv_value(low, cash_flows, day_offsets)
+        for _iteration in range(_XIRR_MAX_ITERATIONS):
+            middle = (low + high) / 2.0
+            middle_value = _xnpv_value(middle, cash_flows, day_offsets)
+            if (
+                abs(middle_value) <= _XIRR_VALUE_TOLERANCE
+                or abs(high - low) <= _XIRR_RATE_TOLERANCE
+            ):
+                return _finite_number(middle)
+            if math.copysign(1.0, middle_value) == math.copysign(
+                1.0,
+                low_value,
+            ):
+                low, low_value = middle, middle_value
+            else:
+                high = middle
+    except (ArithmeticError, OverflowError, ValueError):
+        return ScalarValue.error("#NUM!")
+    return ScalarValue.error("#NUM!")
 
 
 def _irr(cash_flows: Sequence[float], guess: float) -> ScalarValue:

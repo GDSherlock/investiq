@@ -79,6 +79,9 @@ _PROJECT_FCF_STRONG_LABELS = {
 }
 _PROJECT_FCF_GENERIC_LABELS = {"project cash flow", "project cf"}
 _PROJECT_FCF_COMPATIBLE_ROLES = {"cash_flow", "cfads"}
+_SERIES_COMPATIBLE_ROLES: dict[str, frozenset[str]] = {
+    "capex": frozenset({"total_capex"}),
+}
 
 _SEMANTIC_LABEL_ALIASES = {
     "project_irr": {"project irr"},
@@ -91,6 +94,7 @@ _SEMANTIC_LABEL_ALIASES = {
     "ebitda": {"ebitda"},
     "cfads": {"cfads"},
     "dscr": {"dscr"},
+    "capex": {"capex"},
 }
 _TRAILING_UNIT = re.compile(
     r"\s*\((?:\$?\s*(?:m|mm|million)|(?:usd|sgd|eur|gbp)\s*(?:m|mm|million)|%|x)\)\s*$",
@@ -99,6 +103,10 @@ _TRAILING_UNIT = re.compile(
 _DIRECT_REFERENCE = re.compile(
     r"^=\s*(?:'(?:[^']|'')+'|[A-Za-z0-9_. -]+)?!?\$?[A-Z]{1,3}\$?\d+\s*$"
 )
+
+
+def _compatible_series_roles(semantic_role: str) -> frozenset[str]:
+    return _SERIES_COMPATIBLE_ROLES.get(semantic_role, frozenset())
 
 
 def build_extracted_semantic_bindings(
@@ -153,10 +161,14 @@ def build_extracted_semantic_bindings(
                         or normalized_label in _PROJECT_FCF_STRONG_LABELS
                     )
                 )
+                compatible_registered_role = series.get(
+                    "business_role"
+                ) in _compatible_series_roles(semantic_role)
                 if (
                     not exact_role
                     and not compatible_dscr
                     and not compatible_project_fcf
+                    and not compatible_registered_role
                 ):
                     continue
                 points = values_by_series.get(str(series["id"]), [])
@@ -251,6 +263,31 @@ def build_extracted_semantic_bindings(
         row[f"{selected['entity_kind']}_id"] = selected["entity_id"]
         rows.append(row)
     return rows
+
+
+def rank_financial_series_binding(
+    model_version_id: str,
+    semantic_role: str,
+    *,
+    financial_series: list[dict[str, Any]],
+    financial_series_values: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Rank one semantic series role with the canonical selector."""
+
+    return next(
+        (
+            binding
+            for binding in build_extracted_semantic_bindings(
+                model_version_id,
+                outputs=[],
+                financial_series=financial_series,
+                financial_series_values=financial_series_values,
+                parameters=[],
+            )
+            if binding["semantic_role"] == semantic_role
+        ),
+        None,
+    )
 
 
 def _append_scored_candidate(
@@ -503,11 +540,14 @@ class SemanticBindingService:
             )
             candidates.extend(self._entity_items("canonical_output", rows))
         if semantic_role in _SERIES_ROLES:
+            eligible_roles = sorted(
+                {semantic_role, *_compatible_series_roles(semantic_role)}
+            )
             rows = self._session.scalars(
                 select(FinancialSeries)
                 .where(
                     FinancialSeries.model_version_id == model_version_id,
-                    FinancialSeries.business_role == semantic_role,
+                    FinancialSeries.business_role.in_(eligible_roles),
                 )
                 .order_by(FinancialSeries.id)
             )
@@ -571,7 +611,8 @@ class SemanticBindingService:
             return _OUTPUT_ROLE_BY_SEMANTIC.get(semantic_role) == entity.business_role
         if entity_kind == "financial_series":
             return semantic_role in _SERIES_ROLES and (
-                entity.business_role == semantic_role
+                entity.business_role
+                in {semantic_role, *_compatible_series_roles(semantic_role)}
             )
         return semantic_role in _PARAMETER_ROLES and (
             entity.business_role == semantic_role

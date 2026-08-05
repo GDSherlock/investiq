@@ -19,10 +19,13 @@ from .calculation_integration_service import (
 )
 from .calculation_rules.phase2_models import CalculationRunRecord
 from .model_extraction_models import (
+    FinancialSeries,
+    FinancialSeriesValue,
     ModelParameter,
     ModelSemanticBinding,
     ModelVersion,
 )
+from .semantic_binding_service import rank_financial_series_binding
 from .schemas import (
     AnalysisBenchmarkItem,
     AnalysisChartItem,
@@ -85,6 +88,14 @@ _CASH_FLOW_CHARTS = (
         ("interest_expense", "principal_repayment"),
     ),
 )
+
+
+def _row_dict(row: Any) -> dict[str, Any]:
+    return {
+        column.name: getattr(row, column.name)
+        for column in row.__table__.columns
+    }
+
 
 class AnalysisPresentationService:
     def __init__(
@@ -536,6 +547,8 @@ class AnalysisPresentationService:
             )
         )
         if binding is None:
+            if role == "capex" and entity_kind == "series":
+                return self._ranked_capex_output(projection)
             return resolve_analysis_output(
                 projection.outputs,
                 role,
@@ -558,6 +571,63 @@ class AnalysisPresentationService:
         if entity_kind == "scalar":
             return output if isinstance(output, CalculationRunScalarOutputItem) else None
         return output
+
+    def _ranked_capex_output(
+        self,
+        projection: CalculationRunOutputsResponse,
+    ) -> CalculationRunSeriesOutputItem | None:
+        series_rows = list(
+            self._session.scalars(
+                select(FinancialSeries)
+                .where(
+                    FinancialSeries.model_version_id
+                    == projection.model_version_id,
+                    FinancialSeries.business_role.in_(
+                        ("capex", "total_capex")
+                    ),
+                )
+                .order_by(FinancialSeries.id)
+            )
+        )
+        series_ids = [series.id for series in series_rows]
+        value_rows = (
+            list(
+                self._session.scalars(
+                    select(FinancialSeriesValue)
+                    .where(
+                        FinancialSeriesValue.financial_series_id.in_(
+                            series_ids
+                        )
+                    )
+                    .order_by(
+                        FinancialSeriesValue.financial_series_id,
+                        FinancialSeriesValue.period_index,
+                    )
+                )
+            )
+            if series_ids
+            else []
+        )
+        ranked = rank_financial_series_binding(
+            projection.model_version_id,
+            "capex",
+            financial_series=[_row_dict(row) for row in series_rows],
+            financial_series_values=[_row_dict(row) for row in value_rows],
+        )
+        selected_id = ranked.get("financial_series_id") if ranked else None
+        output = next(
+            (
+                item
+                for item in projection.outputs
+                if item.output_id == selected_id
+            ),
+            None,
+        )
+        return (
+            output
+            if isinstance(output, CalculationRunSeriesOutputItem)
+            else None
+        )
 
     def _capital_structure_chart(
         self,

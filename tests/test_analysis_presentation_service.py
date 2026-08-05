@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy import func, select
+
 from apps.api.app.analysis_presentation_service import AnalysisPresentationService
 from apps.api.app.calculation_rules.phase2_models import (
     CalculationGraphVersionRecord,
@@ -11,6 +13,7 @@ from apps.api.app.database import Base
 from apps.api.app.model_extraction_models import (
     CanonicalOutput,
     FinancialSeries,
+    FinancialSeriesValue,
     ModelParameter,
     ModelSemanticBinding,
     ModelVersion,
@@ -54,6 +57,138 @@ def _projected_unavailable(reason: str) -> dict[str, object]:
         "validation_status": "not_comparable",
         "warnings": [],
     }
+
+
+_CAPEX_LABELS = (
+    "Base EPC spend ($mm)",
+    "Capex ($mm)",
+    "Contingency ($mm)",
+    "Cumulative capex ($mm)",
+    "Total capex ($mm)",
+)
+
+
+def _persist_capex_candidates(session):
+    workbook_id = new_uuid()
+    model_id = new_uuid()
+    run_id = new_uuid()
+    graph_id = new_uuid()
+    session.add(
+        WorkbookVersion(
+            id=workbook_id,
+            sha256="a" * 64,
+            original_filename="capex-ranking.xlsx",
+            storage_type="database",
+            storage_ref="workbooks/capex-ranking.xlsx",
+            content_bytes=b"x",
+            file_size=1,
+        )
+    )
+    session.add(
+        ModelVersion(
+            id=model_id,
+            workbook_version_id=workbook_id,
+            upload_filename="capex-ranking.xlsx",
+            status="materialized",
+            validation_status="validated",
+            submitted=True,
+        )
+    )
+    ids = {label: new_uuid() for label in _CAPEX_LABELS}
+    point_ids: dict[str, list[str]] = {}
+    for row_number, label in enumerate(_CAPEX_LABELS, start=3):
+        series_id = ids[label]
+        session.add(
+            FinancialSeries(
+                id=series_id,
+                model_version_id=model_id,
+                entity_kind="financial_series",
+                label=label,
+                semantic_role="financial_series",
+                business_role="total_capex",
+                unit="$mm",
+                frequency="annual",
+                orientation="horizontal",
+                calculation_type="formula",
+                period_source_range="Capex!B1:C1",
+                value_source_range=f"Capex!B{row_number}:C{row_number}",
+                materialization_status="materialized_with_warning",
+                validation_status="validated_with_warning",
+            )
+        )
+        point_ids[label] = []
+        for period_index, column in enumerate(("B", "C")):
+            value_id = new_uuid()
+            point_ids[label].append(value_id)
+            session.add(
+                FinancialSeriesValue(
+                    id=value_id,
+                    financial_series_id=series_id,
+                    period_index=period_index,
+                    raw_period_label_json=2027 + period_index,
+                    display_period_label=str(2027 + period_index),
+                    period_type="year",
+                    year=2027 + period_index,
+                    is_forecast=True,
+                    value_json="50" if period_index == 0 else "60",
+                    period_source_sheet="Capex",
+                    period_source_cell=f"{column}1",
+                    value_source_sheet="Capex",
+                    value_source_cell=f"{column}{row_number}",
+                    exact_formula=f"={column}10+{column}11",
+                    formula_status="formula_with_cached_value",
+                    cached_value_available=True,
+                    cached_value_freshness="unknown",
+                    number_format="$0.00",
+                    data_type="number",
+                )
+            )
+    session.commit()
+    return model_id, run_id, graph_id, ids, point_ids
+
+
+def _capex_projection(
+    model_id: str,
+    run_id: str,
+    graph_id: str,
+    ids: dict[str, str],
+    point_ids: dict[str, list[str]],
+    included_labels: tuple[str, ...],
+) -> CalculationRunOutputsResponse:
+    return CalculationRunOutputsResponse.model_validate(
+        {
+            "calculation_run_id": run_id,
+            "model_version_id": model_id,
+            "graph_version_id": graph_id,
+            "comparison_baseline_run_id": run_id,
+            "outputs": [
+                {
+                    "output_id": ids[label],
+                    "entity_kind": "series",
+                    "business_role": "total_capex",
+                    "label": label,
+                    "unit": "$mm",
+                    "mapping_status": "mapped",
+                    "support_status": "supported",
+                    "availability_status": "available",
+                    "points": [
+                        {
+                            "financial_series_value_id": point_ids[label][index],
+                            "period_index": index,
+                            "period": str(2027 + index),
+                            "mapping_status": "mapped",
+                            "support_status": "supported",
+                            "availability_status": "available",
+                            "baseline": _projected_number(value),
+                            "current": _projected_number(value),
+                        }
+                        for index, value in enumerate(("50", "60"))
+                    ],
+                }
+                for label in included_labels
+            ],
+        }
+    )
 
 
 def _scalar_output(role: str, value: str) -> dict[str, object]:
@@ -753,6 +888,135 @@ def test_cash_flow_charts_use_persisted_project_fcf_binding() -> None:
             "-6",
             "3",
         ]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_cash_flow_capex_uses_ranked_persisted_series_without_writing_binding() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        model_id, run_id, graph_id, ids, point_ids = _persist_capex_candidates(
+            session
+        )
+        projection = _capex_projection(
+            model_id,
+            run_id,
+            graph_id,
+            ids,
+            point_ids,
+            ("Capex ($mm)", "Total capex ($mm)"),
+        )
+
+        response = AnalysisPresentationService(
+            session,
+            _ProjectionService(projection),  # type: ignore[arg-type]
+        ).cash_flow(run_id)
+
+        capex = next(
+            chart
+            for chart in response.charts
+            if chart.slot == "capex_construction_profile"
+        )
+        assert capex.availability_status == "available"
+        assert capex.series[0].role == "capex"
+        assert capex.series[0].label == "Capex ($mm)"
+        assert capex.series[0].source_ids == [ids["Capex ($mm)"]]
+        assert [point.value for point in capex.series[0].points] == [
+            "50",
+            "60",
+        ]
+        assert [point.source_ids for point in capex.series[0].points] == [
+            [point_ids["Capex ($mm)"][0]],
+            [point_ids["Capex ($mm)"][1]],
+        ]
+        assert session.scalar(
+            select(func.count())
+            .select_from(ModelSemanticBinding)
+            .where(ModelSemanticBinding.model_version_id == model_id)
+        ) == 0
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_cash_flow_capex_reviewed_binding_wins_over_read_time_ranking() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        model_id, run_id, graph_id, ids, point_ids = _persist_capex_candidates(
+            session
+        )
+        reviewed_id = ids["Total capex ($mm)"]
+        session.add(
+            ModelSemanticBinding(
+                id=new_uuid(),
+                model_version_id=model_id,
+                semantic_role="capex",
+                financial_series_id=reviewed_id,
+                binding_source="reviewed",
+                evidence_json={"review_method": "canonical_uuid"},
+            )
+        )
+        session.commit()
+        projection = _capex_projection(
+            model_id,
+            run_id,
+            graph_id,
+            ids,
+            point_ids,
+            ("Capex ($mm)", "Total capex ($mm)"),
+        )
+
+        response = AnalysisPresentationService(
+            session,
+            _ProjectionService(projection),  # type: ignore[arg-type]
+        ).cash_flow(run_id)
+
+        capex = next(
+            chart
+            for chart in response.charts
+            if chart.slot == "capex_construction_profile"
+        )
+        assert capex.series[0].label == "Total capex ($mm)"
+        assert capex.series[0].source_ids == [reviewed_id]
+    finally:
+        session.close()
+        engine.dispose()
+
+
+def test_cash_flow_capex_stays_unavailable_when_ranked_series_is_not_projected() -> None:
+    engine, session_factory = create_sqlite_session_factory()
+    Base.metadata.create_all(engine)
+    session = session_factory()
+    try:
+        model_id, run_id, graph_id, ids, point_ids = _persist_capex_candidates(
+            session
+        )
+        projection = _capex_projection(
+            model_id,
+            run_id,
+            graph_id,
+            ids,
+            point_ids,
+            ("Total capex ($mm)",),
+        )
+
+        response = AnalysisPresentationService(
+            session,
+            _ProjectionService(projection),  # type: ignore[arg-type]
+        ).cash_flow(run_id)
+
+        capex = next(
+            chart
+            for chart in response.charts
+            if chart.slot == "capex_construction_profile"
+        )
+        assert capex.availability_status == "unavailable"
+        assert capex.series == []
     finally:
         session.close()
         engine.dispose()

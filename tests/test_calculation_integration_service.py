@@ -266,7 +266,7 @@ def test_fresh_session_reloads_persisted_graph_metadata(integration_context) -> 
     assert graph.graph_version_id == compiled.graph_version_id
     assert graph.workbook_version_id == context["workbook"].id
     assert graph.ir_version == "calc-ir-v2"
-    assert graph.compiler_version == "formula-compiler-v3"
+    assert graph.compiler_version == "formula-compiler-v4"
     assert graph.function_registry_version == "calc-functions-v4"
     assert graph.semantics_profile == "excel-compatible-kpi-v1"
 
@@ -379,7 +379,7 @@ def test_readiness_maps_persisted_state_without_creating_artifacts(
     )
     assert readiness.versions.phase1_ir == "calc-ir-v1"
     assert readiness.versions.phase2_ir == "calc-ir-v2"
-    assert readiness.versions.compiler == "formula-compiler-v3"
+    assert readiness.versions.compiler == "formula-compiler-v4"
     assert readiness.versions.engine == "calc-engine-v4"
     assert readiness.versions.registry == "calc-functions-v4"
     assert readiness.versions.semantics == "excel-compatible-kpi-v1"
@@ -1765,7 +1765,7 @@ def test_fresh_session_reloads_completed_baseline_and_override_without_rerun(
     assert after == before
     assert reloaded[baseline.calculation_run_id]["versions"] == {
         "phase2_ir": "calc-ir-v2",
-        "compiler": "formula-compiler-v3",
+        "compiler": "formula-compiler-v4",
         "engine": "calc-engine-v4",
         "registry": "calc-functions-v4",
         "semantics": "excel-compatible-kpi-v1",
@@ -1934,7 +1934,7 @@ def test_persisted_running_and_failed_runs_reload_without_values(
     assert failed.status == "failed"
     assert failed.values == []
     assert failed.graph_version_id == prepared.graph_version_id
-    assert failed.versions.compiler == "formula-compiler-v3"
+    assert failed.versions.compiler == "formula-compiler-v4"
     assert _run_row_counts(context["session"]) == counts_before
 
 

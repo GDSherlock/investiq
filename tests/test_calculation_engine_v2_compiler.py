@@ -11,7 +11,10 @@ from apps.api.app.calculation_rules.compiler import FormulaCompiler
 from apps.api.app.calculation_rules.evaluator import SafeCalculationEvaluator, ScalarValue
 from apps.api.app.calculation_rules.graph import CalculationGraphBuilder
 from apps.api.app.calculation_rules.inventory import WorkbookFormulaInventory
-from apps.api.app.calculation_rules.types import CalculationRuleExtractionConfiguration
+from apps.api.app.calculation_rules.types import (
+    CalculationRuleExtractionConfiguration,
+    FormulaIdFactory,
+)
 
 
 def _phase2_contracts():
@@ -126,7 +129,7 @@ def test_phase2_registry_is_closed_versioned_and_additive() -> None:
     configuration, registry = _phase2_contracts()
 
     assert configuration.ir_version == "calc-ir-v2"
-    assert configuration.compiler_version == "formula-compiler-v3"
+    assert configuration.compiler_version == "formula-compiler-v4"
     assert configuration.engine_version == "calc-engine-v4"
     assert configuration.function_registry_version == "calc-functions-v4"
     assert configuration.semantics_profile == "excel-compatible-kpi-v1"
@@ -165,6 +168,20 @@ def test_phase2_registry_is_closed_versioned_and_additive() -> None:
     assert registry["MINIFS"].maximum_arguments == 253
     assert registry["IRR"].maximum_arguments == 2
     assert registry["NPV"].maximum_arguments == 255
+
+
+def test_registry_expansion_advances_compilation_identity() -> None:
+    compilation = _compile_formula("=MOD(3,2)")
+    legacy_expression_id = FormulaIdFactory.expression_id(
+        compilation.formula_cell_id,
+        compilation.ir_version,
+        "formula-compiler-v3",
+        compilation.semantics_profile,
+        compilation.formula_sha256,
+    )
+
+    assert compilation.compiler_version == "formula-compiler-v4"
+    assert compilation.expression_id != legacy_expression_id
 
 
 @pytest.mark.parametrize(

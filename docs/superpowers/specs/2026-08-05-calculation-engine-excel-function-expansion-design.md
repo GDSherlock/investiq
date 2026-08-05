@@ -100,11 +100,16 @@ The function registry and evaluator behavior form a new capability version:
 - `PHASE2_FUNCTION_REGISTRY_VERSION`: `calc-functions-v4`
 - `PHASE2_ENGINE_VERSION`: `calc-engine-v4`
 
-The unchanged contracts retain their existing versions:
+The IR and semantics contracts retain their existing versions:
 
 - `PHASE2_IR_VERSION`: `calc-ir-v2`
-- `PHASE2_COMPILER_VERSION`: `formula-compiler-v3`
+- `PHASE2_COMPILER_VERSION`: `formula-compiler-v4`
 - `PHASE2_SEMANTICS_PROFILE`: `excel-compatible-kpi-v1`
+
+The compiler identifier moves to v4 because registry expansion changes both
+support classification and emitted `required_registry_version` evidence.
+Keeping compiler v3 would reuse legacy expression UUIDs and violate immutable
+compilation persistence when a formerly unsupported formula becomes supported.
 
 Previously persisted v3 graphs and runs remain immutable and readable. A model
 uses the new functions only after a new v4 graph is prepared and calculated

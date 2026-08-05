@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Production changes are limited to `apps/api/app/calculation_rules/phase2_types.py`, `apps/api/app/calculation_rules/phase2_registry.py`, and `apps/api/app/calculation_rules/evaluator.py`.
-- Keep `PHASE2_IR_VERSION = "calc-ir-v2"`, `PHASE2_COMPILER_VERSION = "formula-compiler-v3"`, and `PHASE2_SEMANTICS_PROFILE = "excel-compatible-kpi-v1"` unchanged.
+- Keep `PHASE2_IR_VERSION = "calc-ir-v2"` and `PHASE2_SEMANTICS_PROFILE = "excel-compatible-kpi-v1"` unchanged.
+- Set `PHASE2_COMPILER_VERSION = "formula-compiler-v4"` because the expanded registry changes compilation output and requires a distinct persisted expression identity.
 - Set `PHASE2_ENGINE_VERSION = "calc-engine-v4"` and `PHASE2_FUNCTION_REGISTRY_VERSION = "calc-functions-v4"`.
 - Do not modify workbook-agent, partitioning, extraction, validation, canonical materialization, semantic bindings, database migrations, API contracts, or frontend code.
 - Do not read cached workbook results during evaluation and do not coerce unavailable, unsupported, blocked, blank, or errors to zero.

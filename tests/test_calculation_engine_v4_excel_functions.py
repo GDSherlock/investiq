@@ -455,3 +455,110 @@ def test_xirr_returns_num_when_no_root_converges() -> None:
 
     assert execution is not None
     assert execution.value == ScalarValue.error("#NUM!")
+
+
+def _compile_and_evaluate_path(workbook_path: Path):
+    configuration = Phase2CalculationConfiguration()
+    catalog = WorkbookFormulaInventory(configuration).scan(
+        workbook_path.read_bytes(),
+        str(uuid.uuid4()),
+    )
+    compiler = FormulaCompiler(
+        configuration,
+        function_registry=PHASE2_FUNCTION_REGISTRY,
+    )
+    compilations = tuple(
+        compiler.compile(formula, catalog) for formula in catalog.formulas
+    )
+    graph = CalculationGraphBuilder(configuration).build(catalog, compilations)
+    executions = SafeCalculationEvaluator(
+        function_registry=PHASE2_FUNCTION_REGISTRY
+    ).execute(
+        graph,
+        catalog,
+        compilations,
+        configuration,
+    )
+    return catalog, compilations, executions
+
+
+def test_well_rounded_workbook_executes_the_new_function_pack() -> None:
+    configured = os.environ.get("PF_WELL_ROUNDED_WORKBOOK_PATH")
+    if configured is None:
+        pytest.skip("PF_WELL_ROUNDED_WORKBOOK_PATH is not configured")
+    workbook_path = Path(configured)
+    assert workbook_path.is_file()
+
+    catalog, compilations, executions = _compile_and_evaluate_path(workbook_path)
+    formula_by_id = {formula.id: formula for formula in catalog.formulas}
+    target_names = {
+        "MOD",
+        "OR",
+        "YEAR",
+        "MATCH",
+        "XNPV",
+        "XIRR",
+        "DATE",
+        "MONTH",
+        "DAY",
+        "INDEX",
+    }
+    target_compilations = [
+        compilation
+        for compilation in compilations
+        if any(
+            f"{name}("
+            in formula_by_id[compilation.formula_cell_id].exact_formula.upper()
+            for name in target_names
+        )
+    ]
+
+    assert len(target_compilations) == 140
+    unsupported_target_details = [
+        (
+            formula_by_id[item.formula_cell_id].ref.display,
+            formula_by_id[item.formula_cell_id].exact_formula,
+            item.unsupported_constructs,
+        )
+        for item in target_compilations
+        if item.support_status != "supported"
+    ]
+    assert unsupported_target_details == []
+    assert not [
+        item
+        for item in compilations
+        if any(
+            construct.startswith("unsupported_function:")
+            for construct in item.unsupported_constructs
+        )
+    ]
+    assert not [
+        execution
+        for execution in executions.values()
+        if execution.status in {"not_executable", "blocked_by_dependency"}
+    ]
+
+    cached = load_workbook(workbook_path, data_only=True, read_only=True)
+    try:
+        execution_by_address = {
+            (reference.sheet_name, reference.cell_address): execution
+            for reference, execution in executions.items()
+        }
+        for sheet_name, addresses in {
+            "Operations": ("B19", "P19", "B40", "P40"),
+            "Financing": ("B8", "P8", "B14", "P14"),
+            "Summary": ("B14", "B15", "B16", "B17", "B18", "B19", "B20"),
+        }.items():
+            for address in addresses:
+                execution = execution_by_address[(sheet_name, address)]
+                assert execution.status == "executed"
+                cached_value = cached[sheet_name][address].value
+                if isinstance(cached_value, (int, float)):
+                    assert execution.value is not None
+                    assert execution.value.number_value == pytest.approx(
+                        float(cached_value),
+                        rel=1e-7,
+                        abs=1e-7,
+                    )
+    finally:
+        cached.close()

@@ -179,6 +179,42 @@ def test_month_and_day_reject_negative_serials(function_name: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("formula", "date_system", "expected"),
+    [
+        ("=DATE(2024,1,1)", "1900", 45292),
+        ("=DATE(2024,1,1)", "1904", 43830),
+        ("=DATE(2024,13,0)", "1900", 45657),
+        ("=DATE(1900,2,29)", "1900", 60),
+        ("=DATE(2024.9,1.9,1.9)", "1900", 45292),
+    ],
+)
+def test_date_uses_excel_component_normalization(
+    formula: str,
+    date_system: str,
+    expected: int,
+) -> None:
+    compilation, execution = _compile_and_evaluate(
+        formula,
+        date_system=date_system,
+    )
+
+    assert compilation.support_status == "supported"
+    assert execution is not None
+    assert execution.value == ScalarValue.date_serial(expected)
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected"),
+    [("=DATE(-1,1,1)", "#NUM!"), ('=DATE("year",1,1)', "#VALUE!")],
+)
+def test_date_returns_typed_errors(formula: str, expected: str) -> None:
+    _compilation, execution = _compile_and_evaluate(formula)
+
+    assert execution is not None
+    assert execution.value == ScalarValue.error(expected)
+
+
+@pytest.mark.parametrize(
     ("formula", "values", "expected"),
     [
         ("=MATCH(20,Inputs!A1:A3,0)", {"A1": 10, "A2": 20, "A3": 30}, 2),

@@ -556,6 +556,21 @@ class SafeCalculationEvaluator:
         first_number = _coerce_numeric(first)
         if isinstance(first_number, ScalarValue):
             return first_number
+        if name == "DATE":
+            month_value = self._evaluate_node(arguments[1], context, trace)
+            day_value = self._evaluate_node(arguments[2], context, trace)
+            month = _coerce_numeric(month_value)
+            if isinstance(month, ScalarValue):
+                return month
+            day = _coerce_numeric(day_value)
+            if isinstance(day, ScalarValue):
+                return day
+            return _date_serial(
+                first_number,
+                month,
+                day,
+                context.catalog.workbook_date_system,
+            )
         if name == "MOD":
             divisor_value = self._evaluate_node(arguments[1], context, trace)
             divisor = _coerce_numeric(divisor_value)
@@ -822,6 +837,36 @@ def _date_parts(
         return converted.year, converted.month, converted.day
     except (AttributeError, OverflowError, TypeError, ValueError):
         return ScalarValue.error("#NUM!")
+
+
+def _date_serial(
+    year: float,
+    month: float,
+    day: float,
+    date_system: str,
+) -> ScalarValue:
+    if not all(math.isfinite(component) for component in (year, month, day)):
+        return ScalarValue.error("#NUM!")
+    normalized_year = math.trunc(year)
+    normalized_month = math.trunc(month)
+    normalized_day = math.trunc(day)
+    if normalized_year < 0:
+        return ScalarValue.error("#NUM!")
+    if normalized_year < 1900:
+        normalized_year += 1900
+    total_months = normalized_year * 12 + normalized_month - 1
+    normalized_year, zero_based_month = divmod(total_months, 12)
+    if not 1 <= normalized_year <= 9999:
+        return ScalarValue.error("#NUM!")
+    epoch = CALENDAR_MAC_1904 if date_system == "1904" else CALENDAR_WINDOWS_1900
+    try:
+        first_of_month = date(normalized_year, zero_based_month + 1, 1)
+        serial = float(to_excel(first_of_month, epoch)) + normalized_day - 1
+    except (OverflowError, TypeError, ValueError):
+        return ScalarValue.error("#NUM!")
+    if serial < 0:
+        return ScalarValue.error("#NUM!")
+    return ScalarValue.date_serial(serial)
 
 
 _XIRR_MIN_RATE = -0.999999999

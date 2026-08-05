@@ -31,6 +31,7 @@ import type {
   MonteCarloOutputRole,
   MonteCarloRunResponse,
 } from '@/lib/calculation-api-types';
+import { defaultMonteCarloSpread } from '@/lib/monte-carlo-defaults';
 import { formatUiNumber } from '@/lib/ui-number-format';
 
 const RUN_STATUSES = [
@@ -63,16 +64,12 @@ function numeric(value: string): number {
   return parsed;
 }
 
-function positiveSpread(value: number): number {
-  return Math.max(Math.abs(value) * 0.1, 0.1);
-}
-
 function defaultParameters(
   input: MonteCarloEligibleInput,
   distributionType: MonteCarloDistributionType = 'normal',
 ): Record<string, string> {
   const current = numeric(input.current_value);
-  const spread = positiveSpread(current);
+  const spread = defaultMonteCarloSpread(current);
   if (distributionType === 'triangular') {
     return {
       low: String(current - spread),

@@ -568,8 +568,15 @@ class SafeCalculationEvaluator:
             except (ArithmeticError, OverflowError, ValueError):
                 return ScalarValue.error("#NUM!")
             return _finite_number(result)
-        if name == "YEAR":
-            return _year(first_number, context.catalog.workbook_date_system)
+        if name in {"YEAR", "MONTH", "DAY"}:
+            parts = _date_parts(
+                first_number,
+                context.catalog.workbook_date_system,
+            )
+            if isinstance(parts, ScalarValue):
+                return parts
+            part_index = {"YEAR": 0, "MONTH": 1, "DAY": 2}[name]
+            return ScalarValue.number(parts[part_index])
         if name == "ABS":
             return _finite_number(abs(first_number))
         if name == "ROUND":
@@ -796,21 +803,25 @@ def _xnpv(
     return _finite_number(value)
 
 
-def _year(serial: float, date_system: str) -> ScalarValue:
+def _date_parts(
+    serial: float,
+    date_system: str,
+) -> tuple[int, int, int] | ScalarValue:
     if not math.isfinite(serial) or serial < 0:
         return ScalarValue.error("#NUM!")
     whole_serial = math.floor(serial)
-    if date_system == "1900" and whole_serial in {0, 60}:
-        return ScalarValue.number(1900)
+    if date_system == "1900" and whole_serial == 0:
+        return 1900, 1, 0
+    if date_system == "1900" and whole_serial == 60:
+        return 1900, 2, 29
     if date_system == "1904" and whole_serial == 0:
-        return ScalarValue.number(1904)
+        return 1904, 1, 1
     epoch = CALENDAR_MAC_1904 if date_system == "1904" else CALENDAR_WINDOWS_1900
     try:
         converted = from_excel(whole_serial, epoch)
-        year = converted.year
+        return converted.year, converted.month, converted.day
     except (AttributeError, OverflowError, TypeError, ValueError):
         return ScalarValue.error("#NUM!")
-    return ScalarValue.number(year)
 
 
 _XIRR_MIN_RATE = -0.999999999

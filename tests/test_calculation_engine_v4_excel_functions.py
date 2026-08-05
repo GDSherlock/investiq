@@ -144,6 +144,41 @@ def test_year_returns_typed_errors_for_invalid_values(
 
 
 @pytest.mark.parametrize(
+    ("formula", "date_system", "expected"),
+    [
+        ("=MONTH(0)", "1900", 1),
+        ("=DAY(0)", "1900", 0),
+        ("=MONTH(60)", "1900", 2),
+        ("=DAY(60)", "1900", 29),
+        ("=MONTH(0)", "1904", 1),
+        ("=DAY(0)", "1904", 1),
+        ("=MONTH(45292)", "1900", 1),
+        ("=DAY(45292)", "1900", 1),
+    ],
+)
+def test_month_and_day_respect_excel_date_systems(
+    formula: str,
+    date_system: str,
+    expected: int,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(
+        formula,
+        date_system=date_system,
+    )
+
+    assert execution is not None
+    assert execution.value == ScalarValue.number(expected)
+
+
+@pytest.mark.parametrize("function_name", ["MONTH", "DAY"])
+def test_month_and_day_reject_negative_serials(function_name: str) -> None:
+    _compilation, execution = _compile_and_evaluate(f"={function_name}(-1)")
+
+    assert execution is not None
+    assert execution.value == ScalarValue.error("#NUM!")
+
+
+@pytest.mark.parametrize(
     ("formula", "values", "expected"),
     [
         ("=MATCH(20,Inputs!A1:A3,0)", {"A1": 10, "A2": 20, "A3": 30}, 2),

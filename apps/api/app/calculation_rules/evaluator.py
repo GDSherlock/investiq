@@ -473,6 +473,19 @@ class SafeCalculationEvaluator:
                 guess = guess_number
             return _irr(cash_flows, guess)
 
+        if name == "XNPV":
+            rate_value = self._evaluate_node(arguments[0], context, trace)
+            values = self._evaluate_node(arguments[1], context, trace)
+            dates = self._evaluate_node(arguments[2], context, trace)
+            rate = _coerce_numeric(rate_value)
+            if isinstance(rate, ScalarValue):
+                return rate
+            paired = _dated_cash_flows(values, dates)
+            if isinstance(paired, ScalarValue):
+                return paired
+            cash_flows, day_offsets = paired
+            return _xnpv(rate, cash_flows, day_offsets)
+
         if name == "NPV":
             rate_value = self._evaluate_node(arguments[0], context, trace)
             rate = _coerce_numeric(rate_value)
@@ -703,6 +716,68 @@ def _numeric_range_values(
         if item.kind in {"number", "date_serial"}:
             numbers.append(item.number_value)
     return numbers
+
+
+def _strict_numeric_range_values(value: _RangeValue) -> list[float] | ScalarValue:
+    if value.rows > 1 and value.columns > 1:
+        return ScalarValue.error("#VALUE!")
+    numbers: list[float] = []
+    for item in value.values:
+        if item.kind == "error":
+            return item
+        if item.kind not in {"number", "date_serial"}:
+            return ScalarValue.error("#VALUE!")
+        numbers.append(item.number_value)
+    return numbers
+
+
+def _dated_cash_flows(
+    values: ScalarValue | _RangeValue,
+    dates: ScalarValue | _RangeValue,
+) -> tuple[list[float], list[float]] | ScalarValue:
+    if not isinstance(values, _RangeValue) or not isinstance(dates, _RangeValue):
+        return ScalarValue.error("#VALUE!")
+    cash_flows = _strict_numeric_range_values(values)
+    date_serials = _strict_numeric_range_values(dates)
+    if isinstance(cash_flows, ScalarValue):
+        return cash_flows
+    if isinstance(date_serials, ScalarValue):
+        return date_serials
+    if not cash_flows or len(cash_flows) != len(date_serials):
+        return ScalarValue.error("#VALUE!")
+    whole_dates = [math.trunc(value) for value in date_serials]
+    if any(value < 0 for value in whole_dates):
+        return ScalarValue.error("#VALUE!")
+    first_date = whole_dates[0]
+    if any(value < first_date for value in whole_dates):
+        return ScalarValue.error("#NUM!")
+    return cash_flows, [float(value - first_date) for value in whole_dates]
+
+
+def _xnpv_value(
+    rate: float,
+    cash_flows: Sequence[float],
+    day_offsets: Sequence[float],
+) -> float:
+    if rate <= -1.0 or not math.isfinite(rate):
+        raise ValueError("XNPV rate is outside the real-valued domain")
+    base = 1.0 + rate
+    return math.fsum(
+        cash_flow / (base ** (day_offset / 365.0))
+        for cash_flow, day_offset in zip(cash_flows, day_offsets)
+    )
+
+
+def _xnpv(
+    rate: float,
+    cash_flows: Sequence[float],
+    day_offsets: Sequence[float],
+) -> ScalarValue:
+    try:
+        value = _xnpv_value(rate, cash_flows, day_offsets)
+    except (ArithmeticError, OverflowError, ValueError):
+        return ScalarValue.error("#NUM!")
+    return _finite_number(value)
 
 
 def _year(serial: float, date_system: str) -> ScalarValue:

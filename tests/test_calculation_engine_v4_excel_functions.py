@@ -198,3 +198,63 @@ def test_match_returns_typed_errors(
 
     assert execution is not None
     assert execution.value == ScalarValue.error(expected)
+
+
+def test_xnpv_discounts_irregular_cash_flows_from_the_first_date() -> None:
+    _compilation, execution = _compile_and_evaluate(
+        "=XNPV(10%,Inputs!A1:A3,Inputs!B1:B3)",
+        {
+            "A1": -100,
+            "A2": 30,
+            "A3": 90,
+            "B1": 43831,
+            "B2": 44013,
+            "B3": 44197,
+        },
+    )
+
+    expected = -100 + 30 / (1.1 ** (182 / 365)) + 90 / (1.1 ** (366 / 365))
+    assert execution is not None and execution.value is not None
+    assert execution.value.number_value == pytest.approx(expected, abs=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("formula", "values", "expected"),
+    [
+        (
+            "=XNPV(10%,Inputs!A1:A2,Inputs!B1:B3)",
+            {
+                "A1": -100,
+                "A2": 110,
+                "B1": 43831,
+                "B2": 44197,
+                "B3": 44562,
+            },
+            "#VALUE!",
+        ),
+        (
+            "=XNPV(10%,Inputs!A1:A2,Inputs!B1:B2)",
+            {"A1": -100, "A2": "bad", "B1": 43831, "B2": 44197},
+            "#VALUE!",
+        ),
+        (
+            "=XNPV(10%,Inputs!A1:A2,Inputs!B1:B2)",
+            {"A1": -100, "A2": 110, "B1": 44197, "B2": 43831},
+            "#NUM!",
+        ),
+        (
+            "=XNPV(-100%,Inputs!A1:A2,Inputs!B1:B2)",
+            {"A1": -100, "A2": 110, "B1": 43831, "B2": 44197},
+            "#NUM!",
+        ),
+    ],
+)
+def test_xnpv_returns_typed_input_and_domain_errors(
+    formula: str,
+    values: dict[str, object],
+    expected: str,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(formula, values)
+
+    assert execution is not None
+    assert execution.value == ScalarValue.error(expected)

@@ -1229,6 +1229,12 @@ def _compare(left: ScalarValue, right: ScalarValue, operator: str) -> ScalarValu
     elif left.kind in {"number", "date_serial"} and right.kind in {"number", "date_serial"}:
         left_value = left.number_value
         right_value = right.number_value
+    elif left.kind == "text" and right.kind in {"number", "date_serial"}:
+        left_value = 1
+        right_value = 0
+    elif left.kind in {"number", "date_serial"} and right.kind == "text":
+        left_value = 0
+        right_value = 1
     elif left.kind == right.kind == "text":
         left_value = str(left.value).casefold()
         right_value = str(right.value).casefold()

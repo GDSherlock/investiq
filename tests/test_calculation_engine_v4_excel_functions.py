@@ -105,6 +105,20 @@ def test_or_flattens_ranges_and_preserves_scalar_coercion_rules() -> None:
 
 
 @pytest.mark.parametrize(
+    ("formula", "expected"),
+    [('=""<1.3', False), ('=1.3<""', True)],
+)
+def test_relational_comparisons_use_excel_text_number_order(
+    formula: str,
+    expected: bool,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(formula)
+
+    assert execution is not None
+    assert execution.value == ScalarValue.boolean(expected)
+
+
+@pytest.mark.parametrize(
     ("date_system", "serial", "expected"),
     [
         ("1900", 0, 1900),

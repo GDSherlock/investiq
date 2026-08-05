@@ -53,5 +53,6 @@ PHASE2_FUNCTION_REGISTRY: Mapping[str, FunctionDefinition] = MappingProxyType(
         "MINIFS": _phase2_definition("MINIFS", 3, 253),
         "IRR": _phase2_definition("IRR", 1, 2),
         "NPV": _phase2_definition("NPV", 2, 255),
+        "MOD": _phase2_definition("MOD", 2, 2),
     }
 )

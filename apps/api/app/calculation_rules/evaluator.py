@@ -512,6 +512,18 @@ class SafeCalculationEvaluator:
         first_number = _coerce_numeric(first)
         if isinstance(first_number, ScalarValue):
             return first_number
+        if name == "MOD":
+            divisor_value = self._evaluate_node(arguments[1], context, trace)
+            divisor = _coerce_numeric(divisor_value)
+            if isinstance(divisor, ScalarValue):
+                return divisor
+            if divisor == 0:
+                return ScalarValue.error("#DIV/0!")
+            try:
+                result = first_number - divisor * math.floor(first_number / divisor)
+            except (ArithmeticError, OverflowError, ValueError):
+                return ScalarValue.error("#NUM!")
+            return _finite_number(result)
         if name == "ABS":
             return _finite_number(abs(first_number))
         if name == "ROUND":

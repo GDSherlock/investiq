@@ -90,7 +90,7 @@ def test_compile_workbook_is_idempotent_and_additive(
     assert first.graph_version_id == second.graph_version_id
     assert first.ir_version == "calc-ir-v2"
     assert first.compiler_version == "formula-compiler-v3"
-    assert first.function_registry_version == "calc-functions-v3"
+    assert first.function_registry_version == "calc-functions-v4"
     assert first.formula_cells_total == 10
     assert first.formula_cells_supported == 9
     assert first.formula_cells_unsupported == 1

@@ -116,7 +116,7 @@ def test_v2_compiler_emits_additive_envelope_and_v1_remains_exact() -> None:
     assert v2.support_status == "supported"
     assert v2.ir_json is not None
     assert v2.ir_json["ir_version"] == "calc-ir-v2"
-    assert v2.ir_json["required_registry_version"] == "calc-functions-v3"
+    assert v2.ir_json["required_registry_version"] == "calc-functions-v4"
     assert v2.ir_json["capabilities"] == ["conditional-aggregation"]
     assert v2.ir_json["limits"]["node_count"] > 0
     assert v2.ir_json["limits"]["max_depth"] > 0
@@ -127,8 +127,8 @@ def test_phase2_registry_is_closed_versioned_and_additive() -> None:
 
     assert configuration.ir_version == "calc-ir-v2"
     assert configuration.compiler_version == "formula-compiler-v3"
-    assert configuration.engine_version == "calc-engine-v3"
-    assert configuration.function_registry_version == "calc-functions-v3"
+    assert configuration.engine_version == "calc-engine-v4"
+    assert configuration.function_registry_version == "calc-functions-v4"
     assert configuration.semantics_profile == "excel-compatible-kpi-v1"
     assert set(registry) == {
         "SUM",
@@ -146,6 +146,7 @@ def test_phase2_registry_is_closed_versioned_and_additive() -> None:
         "MINIFS",
         "IRR",
         "NPV",
+        "MOD",
     }
     assert registry["COUNTIF"].minimum_arguments == 2
     assert registry["COUNTIF"].maximum_arguments == 2

@@ -267,7 +267,7 @@ def test_fresh_session_reloads_persisted_graph_metadata(integration_context) -> 
     assert graph.workbook_version_id == context["workbook"].id
     assert graph.ir_version == "calc-ir-v2"
     assert graph.compiler_version == "formula-compiler-v3"
-    assert graph.function_registry_version == "calc-functions-v3"
+    assert graph.function_registry_version == "calc-functions-v4"
     assert graph.semantics_profile == "excel-compatible-kpi-v1"
 
 
@@ -380,8 +380,8 @@ def test_readiness_maps_persisted_state_without_creating_artifacts(
     assert readiness.versions.phase1_ir == "calc-ir-v1"
     assert readiness.versions.phase2_ir == "calc-ir-v2"
     assert readiness.versions.compiler == "formula-compiler-v3"
-    assert readiness.versions.engine == "calc-engine-v3"
-    assert readiness.versions.registry == "calc-functions-v3"
+    assert readiness.versions.engine == "calc-engine-v4"
+    assert readiness.versions.registry == "calc-functions-v4"
     assert readiness.versions.semantics == "excel-compatible-kpi-v1"
     if with_graph:
         assert readiness.summary.graph_nodes == 10
@@ -1766,8 +1766,8 @@ def test_fresh_session_reloads_completed_baseline_and_override_without_rerun(
     assert reloaded[baseline.calculation_run_id]["versions"] == {
         "phase2_ir": "calc-ir-v2",
         "compiler": "formula-compiler-v3",
-        "engine": "calc-engine-v3",
-        "registry": "calc-functions-v3",
+        "engine": "calc-engine-v4",
+        "registry": "calc-functions-v4",
         "semantics": "excel-compatible-kpi-v1",
     }
 

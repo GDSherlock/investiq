@@ -143,6 +143,7 @@ def test_phase2_registry_is_closed_versioned_and_additive() -> None:
         "COUNTIF",
         "IFERROR",
         "AND",
+        "OR",
         "MINIFS",
         "IRR",
         "NPV",

@@ -80,3 +80,25 @@ def test_mod_returns_division_error_for_zero_divisor() -> None:
 
     assert execution is not None
     assert execution.value == ScalarValue.error("#DIV/0!")
+
+
+def test_or_flattens_ranges_and_preserves_scalar_coercion_rules() -> None:
+    _compilation, truthy = _compile_and_evaluate(
+        "=OR(FALSE,Inputs!A1:A3)",
+        {"A1": 0, "A2": "ignored", "A3": 2},
+    )
+    _compilation, falsey = _compile_and_evaluate("=OR(FALSE,0)")
+    _compilation, scalar_text = _compile_and_evaluate('=OR(FALSE,"text")')
+    _compilation, empty_range = _compile_and_evaluate(
+        "=OR(Inputs!A1:A2)",
+        {"A1": "ignored", "A2": None},
+    )
+    _compilation, errored = _compile_and_evaluate("=OR(TRUE,#N/A)")
+
+    assert truthy is not None and truthy.value == ScalarValue.boolean(True)
+    assert falsey is not None and falsey.value == ScalarValue.boolean(False)
+    assert scalar_text is not None
+    assert scalar_text.value == ScalarValue.error("#VALUE!")
+    assert empty_range is not None
+    assert empty_range.value == ScalarValue.error("#VALUE!")
+    assert errored is not None and errored.value == ScalarValue.error("#N/A")

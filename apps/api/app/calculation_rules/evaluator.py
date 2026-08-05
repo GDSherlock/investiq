@@ -341,32 +341,24 @@ class SafeCalculationEvaluator:
                 )
             raise ValueError(f"Unsupported lazy calculation function: {name}")
 
-        if name == "AND":
-            result = True
+        if name in {"AND", "OR"}:
+            result = name == "AND"
             found_logical = False
             for argument in arguments:
                 value = self._evaluate_node(argument, context, trace)
-                if isinstance(value, _RangeValue):
-                    for item in value.values:
-                        if item.kind == "error":
-                            return item
-                        if item.kind in {"text", "blank"}:
+                values = value.values if isinstance(value, _RangeValue) else (value,)
+                for item in values:
+                    if item.kind == "error":
+                        return item
+                    if item.kind in {"text", "blank"}:
+                        if isinstance(value, _RangeValue):
                             continue
-                        truth = _truthy(item)
-                        if isinstance(truth, ScalarValue):
-                            return truth
-                        found_logical = True
-                        result = result and truth
-                    continue
-                if value.kind == "error":
-                    return value
-                if value.kind in {"text", "blank"}:
-                    return ScalarValue.error("#VALUE!")
-                truth = _truthy(value)
-                if isinstance(truth, ScalarValue):
-                    return truth
-                found_logical = True
-                result = result and truth
+                        return ScalarValue.error("#VALUE!")
+                    truth = _truthy(item)
+                    if isinstance(truth, ScalarValue):
+                        return truth
+                    found_logical = True
+                    result = result and truth if name == "AND" else result or truth
             if not found_logical:
                 return ScalarValue.error("#VALUE!")
             return ScalarValue.boolean(result)

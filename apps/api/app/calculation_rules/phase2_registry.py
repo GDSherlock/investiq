@@ -50,6 +50,7 @@ PHASE2_FUNCTION_REGISTRY: Mapping[str, FunctionDefinition] = MappingProxyType(
         "COUNTIF": _phase2_definition("COUNTIF", 2, 2),
         "IFERROR": _phase2_definition("IFERROR", 2, 2, lazy=True),
         "AND": _phase2_definition("AND", 1, 255),
+        "OR": _phase2_definition("OR", 1, 255),
         "MINIFS": _phase2_definition("MINIFS", 3, 253),
         "IRR": _phase2_definition("IRR", 1, 2),
         "NPV": _phase2_definition("NPV", 2, 255),

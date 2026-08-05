@@ -152,6 +152,7 @@ def test_phase2_registry_is_closed_versioned_and_additive() -> None:
         "MONTH",
         "DAY",
         "DATE",
+        "INDEX",
         "MATCH",
         "XNPV",
         "XIRR",

@@ -377,6 +377,32 @@ class SafeCalculationEvaluator:
                         count += 1
             return ScalarValue.number(count)
 
+        if name == "INDEX":
+            array = self._evaluate_node(arguments[0], context, trace)
+            if not isinstance(array, _RangeValue):
+                return ScalarValue.error("#VALUE!")
+            row_value = self._evaluate_node(arguments[1], context, trace)
+            row_number = _coerce_numeric(row_value)
+            if isinstance(row_number, ScalarValue):
+                return row_number
+            column_number = 1.0
+            if len(arguments) == 3:
+                column_value = self._evaluate_node(arguments[2], context, trace)
+                coerced_column = _coerce_numeric(column_value)
+                if isinstance(coerced_column, ScalarValue):
+                    return coerced_column
+                column_number = coerced_column
+            row = math.trunc(row_number)
+            column = math.trunc(column_number)
+            if (
+                row < 1
+                or column < 1
+                or row > array.rows
+                or column > array.columns
+            ):
+                return ScalarValue.error("#REF!")
+            return array.values[(row - 1) * array.columns + column - 1]
+
         if name == "MATCH":
             lookup = self._evaluate_node(arguments[0], context, trace)
             lookup_array = self._evaluate_node(arguments[1], context, trace)

@@ -271,6 +271,49 @@ def test_match_returns_typed_errors(
     assert execution.value == ScalarValue.error(expected)
 
 
+@pytest.mark.parametrize(
+    ("formula", "values", "expected"),
+    [
+        ("=INDEX(Inputs!A1:A3,2)", {"A1": 10, "A2": 20, "A3": 30}, 20),
+        (
+            "=INDEX(Inputs!A1:C2,2,3)",
+            {"A1": 1, "B1": 2, "C1": 3, "A2": 4, "B2": 5, "C2": 6},
+            6,
+        ),
+        (
+            "=INDEX(Inputs!A1:C1,1,MATCH(1,Inputs!A2:C2,0))",
+            {"A1": 10, "B1": 20, "C1": 30, "A2": 0, "B2": 1, "C2": 0},
+            20,
+        ),
+    ],
+)
+def test_index_selects_from_one_and_two_dimensional_ranges(
+    formula: str,
+    values: dict[str, object],
+    expected: int,
+) -> None:
+    compilation, execution = _compile_and_evaluate(formula, values)
+
+    assert compilation.support_status == "supported"
+    assert execution is not None
+    assert execution.value == ScalarValue.number(expected)
+
+
+@pytest.mark.parametrize(
+    ("formula", "expected"),
+    [
+        ("=INDEX(Inputs!A1:B2,3,1)", "#REF!"),
+        ("=INDEX(Inputs!A1:B2,1,3)", "#REF!"),
+        ("=INDEX(1,1)", "#VALUE!"),
+    ],
+)
+def test_index_returns_typed_reference_errors(formula: str, expected: str) -> None:
+    _compilation, execution = _compile_and_evaluate(formula)
+
+    assert execution is not None
+    assert execution.value == ScalarValue.error(expected)
+
+
 def test_xnpv_discounts_irregular_cash_flows_from_the_first_date() -> None:
     _compilation, execution = _compile_and_evaluate(
         "=XNPV(10%,Inputs!A1:A3,Inputs!B1:B3)",

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   Bar,
@@ -15,14 +15,18 @@ import {
 import { useActiveAnalysis } from '../ActiveAnalysisContext';
 import FloatingAssistant from '../FloatingAssistant';
 import AnalysisStatusSidebar from '@/components/analysis/AnalysisStatusSidebar';
+import { MonteCarloCorrelationDialog } from '@/components/monte-carlo/MonteCarloCorrelationDialog';
 import {
   cancelMonteCarloRun,
   createMonteCarloRun,
+  getModelDiagnostics,
   getMonteCarloInputs,
   getMonteCarloRun,
   getMonteCarloRunHistory,
+  getOverviewAnalysis,
 } from '@/lib/api';
 import type {
+  ModelDiagnosticsResponse,
   MonteCarloConfiguredInput,
   MonteCarloDistributionType,
   MonteCarloEligibleInput,
@@ -30,6 +34,7 @@ import type {
   MonteCarloMetricResult,
   MonteCarloOutputRole,
   MonteCarloRunResponse,
+  OverviewAnalysisResponse,
 } from '@/lib/calculation-api-types';
 import { defaultMonteCarloSpread } from '@/lib/monte-carlo-defaults';
 import { formatUiNumber } from '@/lib/ui-number-format';
@@ -247,15 +252,19 @@ function ParameterFields({
 
 function MetricCard({
   metric,
+  run,
+  persistedStatus,
 }: {
   metric: MonteCarloMetricResult;
+  run: MonteCarloRunResponse | null;
+  persistedStatus: string;
 }) {
   if (
     metric.availability_status !== 'available' ||
     metric.percentiles === null
   ) {
     return (
-      <section className="rounded-lg border border-d-border bg-d-card p-4">
+      <section className="flex h-full min-h-[29rem] flex-col rounded-lg border border-d-border bg-d-card p-6">
         <div className="text-[10px] uppercase tracking-wider text-d-muted">
           {metric.label}
         </div>
@@ -268,30 +277,58 @@ function MetricCard({
       </section>
     );
   }
+  const { p10, p50, p90 } = metric.percentiles;
+  const percentileSpan = p90 - p10;
+  const p50Position =
+    Number.isFinite(percentileSpan) && percentileSpan > 0
+      ? Math.min(
+          100,
+          Math.max(0, ((p50 - p10) / percentileSpan) * 100),
+        )
+      : 50;
   return (
-    <section className="rounded-lg border border-d-border bg-d-card p-4">
-      <div className="text-[10px] uppercase tracking-wider text-d-muted">
+    <section className="flex h-full min-h-[29rem] flex-col rounded-lg border border-d-border bg-d-card p-6">
+      <div className="text-[11px] uppercase tracking-wider text-d-muted">
         {metric.label}
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-2">
-        {(['p10', 'p50', 'p90'] as const).map((percentile) => (
-          <div key={percentile}>
-            <div className="text-[9px] uppercase text-d-muted">
-              {percentile}
-            </div>
-            <div className="text-sm font-semibold text-white">
-              {formatMetricValue(
-                metric.role,
-                metric.percentiles?.[percentile],
-              )}
+      <div className="mt-8 flex items-end gap-3">
+        <div className="pb-1 text-[10px] uppercase tracking-wider text-d-muted">
+          P50 median
+        </div>
+        <div className="text-5xl font-bold leading-none text-gold-400">
+          {formatMetricValue(metric.role, p50)}
+        </div>
+      </div>
+      <div
+        className="mt-8 border-t border-d-border pt-4"
+        aria-label="P10 to P90 percentile range"
+      >
+        <div className="relative h-2 rounded-full bg-d-border">
+          <div className="absolute inset-0 rounded-full bg-gold-500/20" />
+          <span
+            className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gold-400"
+            style={{ left: `${p50Position}%` }}
+          />
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <div>
+            <div className="text-[10px] uppercase text-d-muted">P10</div>
+            <div className="mt-1 text-xl font-semibold text-white">
+              {formatMetricValue(metric.role, p10)}
             </div>
           </div>
-        ))}
+          <div className="text-right">
+            <div className="text-[10px] uppercase text-d-muted">P90</div>
+            <div className="mt-1 text-xl font-semibold text-white">
+              {formatMetricValue(metric.role, p90)}
+            </div>
+          </div>
+        </div>
       </div>
       {Object.entries(metric.probabilities).map(([label, value]) => (
         <div
           key={label}
-          className="mt-3 flex justify-between gap-3 border-t border-d-border pt-2 text-[10px]"
+          className="mt-3 flex justify-between gap-3 border-t border-d-border pt-2 text-[11px]"
         >
           <span className="text-d-muted">
             {label.replaceAll('_', ' ')}
@@ -301,6 +338,31 @@ function MetricCard({
           </span>
         </div>
       ))}
+      <div className="mt-auto pt-8 text-[10px] leading-5 text-d-muted">
+        <div>
+          {persistedStatus === 'completed' ? 'Completed' : persistedStatus}
+          {' · '}
+          {formatUiNumber(run?.trial_count, {
+            maximumFractionDigits: 0,
+            fallback: '—',
+          })}{' '}
+          trials
+        </div>
+        {run && (
+          <div>
+            Run {run.monte_carlo_run_id.slice(0, 8)}
+            {run.runtime_ms !== null && (
+              <>
+                {' · '}
+                {formatUiNumber(run.runtime_ms / 1000, {
+                  maximumFractionDigits: 2,
+                })}{' '}
+                sec
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -316,28 +378,28 @@ function DistributionChart({
       count: bin.count,
     })) ?? [];
   return (
-    <section className="rounded-lg border border-d-border bg-d-card p-5 min-w-0">
-      <h2 className="text-sm font-semibold text-white">
+    <section className="h-full min-h-[29rem] min-w-0 rounded-lg border border-d-border bg-d-card p-6">
+      <h2 className="text-base font-semibold text-white">
         {metric.label} distribution
       </h2>
-      <p className="mt-1 text-[10px] text-d-muted">
+      <p className="mt-1 text-[11px] text-d-muted">
         Persisted bounded histogram · no per-trial calculation runs
       </p>
       {rows.length === 0 ? (
-        <div className="flex h-56 items-center justify-center text-xs text-d-muted">
+        <div className="flex h-60 items-center justify-center text-sm text-d-muted">
           Unavailable
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={230}>
+        <ResponsiveContainer width="100%" height={360}>
           <BarChart data={rows}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1B2B65" />
             <XAxis
               dataKey="bucket"
               interval="preserveStartEnd"
-              tick={{ fontSize: 8 }}
+              tick={{ fontSize: 10 }}
             />
             <YAxis
-              tick={{ fontSize: 9 }}
+              tick={{ fontSize: 10 }}
               tickFormatter={(value: number) =>
                 formatUiNumber(value, {
                   maximumFractionDigits: 0,
@@ -346,7 +408,7 @@ function DistributionChart({
             />
             <Tooltip
               contentStyle={{
-                fontSize: 11,
+                fontSize: 12,
                 backgroundColor: '#111C44',
                 border: '1px solid #1B2B65',
               }}
@@ -368,6 +430,7 @@ function DistributionChart({
 export default function MonteCarloPage() {
   const analysis = useActiveAnalysis();
   const requestRevision = useRef(0);
+  const sidebarRequestRevision = useRef(0);
   const [catalog, setCatalog] =
     useState<MonteCarloInputCatalogResponse | null>(null);
   const [drafts, setDrafts] = useState<Record<string, DraftInput>>(
@@ -377,6 +440,14 @@ export default function MonteCarloPage() {
   const [trialCount, setTrialCount] = useState(50000);
   const [randomSeed, setRandomSeed] = useState(1729);
   const [run, setRun] = useState<MonteCarloRunResponse | null>(null);
+  const [overview, setOverview] =
+    useState<OverviewAnalysisResponse | null>(null);
+  const [diagnostics, setDiagnostics] =
+    useState<ModelDiagnosticsResponse | null>(null);
+  const [correlationDialogOpen, setCorrelationDialogOpen] =
+    useState(false);
+  const [inputQuery, setInputQuery] = useState('');
+  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -438,6 +509,46 @@ export default function MonteCarloPage() {
   ]);
 
   useEffect(() => {
+    const revision = ++sidebarRequestRevision.current;
+    if (
+      analysis.status !== 'ready' ||
+      analysis.modelVersionId === null ||
+      analysis.activeRunId === null
+    ) {
+      setOverview(null);
+      setDiagnostics(null);
+      return;
+    }
+
+    const modelVersionId = analysis.modelVersionId;
+    const activeRunId = analysis.activeRunId;
+    void Promise.allSettled([
+      getOverviewAnalysis(activeRunId),
+      getModelDiagnostics(modelVersionId),
+    ]).then(([overviewResult, diagnosticsResult]) => {
+      if (revision !== sidebarRequestRevision.current) {
+        return;
+      }
+      setOverview(
+        overviewResult.status === 'fulfilled' &&
+          overviewResult.value.calculation_run_id === activeRunId
+          ? overviewResult.value
+          : null,
+      );
+      setDiagnostics(
+        diagnosticsResult.status === 'fulfilled' &&
+          diagnosticsResult.value.model_version_id === modelVersionId
+          ? diagnosticsResult.value
+          : null,
+      );
+    });
+  }, [
+    analysis.activeRunId,
+    analysis.modelVersionId,
+    analysis.status,
+  ]);
+
+  useEffect(() => {
     if (run === null || !['queued', 'running'].includes(run.status)) {
       return;
     }
@@ -468,6 +579,7 @@ export default function MonteCarloPage() {
   useEffect(
     () => () => {
       requestRevision.current += 1;
+      sidebarRequestRevision.current += 1;
     },
     [],
   );
@@ -479,6 +591,36 @@ export default function MonteCarloPage() {
       ) ?? [],
     [catalog, drafts],
   );
+  const visibleInputs = useMemo(() => {
+    const normalizedQuery = inputQuery.trim().toLowerCase();
+    return (
+      catalog?.inputs.filter((input) => {
+        const draft = drafts[input.parameter_id];
+        if (showSelectedOnly && !draft?.selected) {
+          return false;
+        }
+        if (normalizedQuery.length === 0) {
+          return true;
+        }
+        return [input.label, input.business_role, input.unit]
+          .filter(Boolean)
+          .some((value) =>
+            String(value).toLowerCase().includes(normalizedQuery),
+          );
+      }) ?? []
+    );
+  }, [catalog, drafts, inputQuery, showSelectedOnly]);
+
+  const setAllInputsSelected = (selected: boolean) => {
+    setDrafts((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([parameterId, draft]) => [
+          parameterId,
+          { ...draft, selected },
+        ]),
+      ),
+    );
+  };
 
   const handleDistributionChange = (
     input: MonteCarloEligibleInput,
@@ -608,21 +750,31 @@ export default function MonteCarloPage() {
     analysis.status === 'ready' && catalog !== null && !loading;
   const projectIrrAvailable =
     catalog?.supported_output_roles.includes('project_irr') ?? false;
+  const projectIrrKpis = useMemo(
+    () =>
+      overview?.kpis
+        .filter((kpi) => kpi.role === 'project_irr')
+        .slice(0, 1) ?? [],
+    [overview],
+  );
 
   return (
-    <div className="flex flex-col lg:flex-row gap-4">
-      <AnalysisStatusSidebar analysis={analysis} />
+    <div className="flex flex-col gap-4 lg:relative lg:left-1/2 lg:w-[calc(100vw-2rem)] lg:-translate-x-1/2 lg:flex-row lg:gap-6">
+      <AnalysisStatusSidebar
+        analysis={analysis}
+        kpis={projectIrrKpis}
+        diagnostics={diagnostics}
+        featuredKpi
+        wide
+      />
 
-      <div className="flex-1 min-w-0 space-y-4">
-        <section className="rounded-lg border border-d-border bg-d-card p-5">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+      <div className="flex min-w-0 flex-1 flex-col gap-4">
+        <section className="min-h-[6.75rem] rounded-lg border border-d-border bg-d-card p-6">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-lg">🎲</span>
-                <h1 className="text-lg font-semibold text-white">
-                  Monte Carlo simulation engine
-                </h1>
-              </div>
+              <h1 className="text-lg font-semibold text-white">
+                Monte Carlo simulation engine
+              </h1>
               <p className="mt-1 text-xs text-d-muted">
                 Dynamic canonical inputs · calibrated model · persisted
                 asynchronous results
@@ -695,273 +847,242 @@ export default function MonteCarloPage() {
         )}
 
         {canConfigure && catalog && (
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-            <div className="space-y-3">
-              {catalog.inputs.length === 0 && (
-                <section className="rounded-lg border border-d-border bg-d-card p-5 text-xs text-d-muted">
-                  No editable stochastic-eligible canonical parameters
-                  are available.
-                </section>
-              )}
-              {catalog.inputs.map((input) => {
-                const draft = drafts[input.parameter_id];
-                if (!draft) {
-                  return null;
-                }
-                return (
-                  <section
-                    key={input.parameter_id}
-                    className="rounded-lg border border-d-border bg-d-card p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <label className="flex min-w-0 items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={draft.selected}
-                          onChange={(event) =>
-                            setDrafts((current) => ({
-                              ...current,
-                              [input.parameter_id]: {
-                                ...draft,
-                                selected: event.target.checked,
-                              },
-                            }))
-                          }
-                          className="mt-0.5 accent-gold-500"
-                        />
-                        <span>
-                          <span className="block text-xs font-semibold text-white">
-                            {input.label}
-                          </span>
-                          <span className="mt-0.5 block text-[9px] text-d-muted">
-                            {input.business_role ?? 'Unclassified'} ·
-                            current{' '}
-                            {formatUiNumber(input.current_value, {
-                              fallback: input.current_value,
-                            })}{' '}
-                            {input.unit ?? ''}
-                          </span>
-                        </span>
-                      </label>
-                      <select
-                        value={draft.distributionType}
-                        onChange={(event) =>
-                          handleDistributionChange(
-                            input,
-                            event.target
-                              .value as MonteCarloDistributionType,
-                          )
-                        }
-                        className="rounded border border-d-border bg-d-bg px-2 py-1 text-[9px] uppercase text-emerald-400"
-                      >
-                        {DISTRIBUTION_TYPES.map((distribution) => (
-                          <option key={distribution} value={distribution}>
-                            {distribution}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    {draft.selected && (
-                      <ParameterFields
-                        input={input}
-                        draft={draft}
-                        onChange={(next) =>
-                          setDrafts((current) => ({
-                            ...current,
-                            [input.parameter_id]: next,
-                          }))
-                        }
-                      />
-                    )}
-                  </section>
-                );
-              })}
-            </div>
-
-            <div className="min-w-0 space-y-4">
-              <section className="rounded-lg border border-d-border bg-d-card p-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-sm font-semibold text-white">
-                      Target output
-                    </h2>
-                    <p className="mt-1 text-[10px] text-d-muted">
-                      Fixed for comparable persisted simulations.
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-semibold text-white">
-                      Project IRR
-                    </div>
-                    {!projectIrrAvailable && (
-                      <p className="mt-1 text-[10px] text-amber-300">
-                        Project IRR is unavailable for this model.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </section>
-
-              {selectedInputs.length > 1 && (
-                <section className="overflow-x-auto rounded-lg border border-d-border bg-d-card p-4">
+          <div className="grid grid-cols-1 items-stretch gap-4 xl:grid-cols-[minmax(360px,0.48fr)_minmax(0,1fr)]">
+            <section className="flex h-[calc(100vh-12rem)] min-h-[36rem] min-w-0 flex-col rounded-lg border border-d-border bg-d-card p-4 xl:h-0 xl:min-h-full">
+              <header className="flex items-start justify-between gap-3">
+                <div>
                   <h2 className="text-sm font-semibold text-white">
-                    Correlation matrix
+                    Stochastic inputs
                   </h2>
                   <p className="mt-1 text-[10px] text-d-muted">
-                    Symmetric positive-definite matrix required.
+                    {selectedInputs.length} of {catalog.inputs.length} selected
+                    · scroll to configure
                   </p>
-                  <table className="mt-3 min-w-full text-[9px]">
-                    <thead>
-                      <tr>
-                        <th className="p-1" />
-                        {selectedInputs.map((input) => (
-                          <th
-                            key={input.parameter_id}
-                            className="max-w-24 truncate p-1 text-d-muted"
-                          >
-                            {input.label}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedInputs.map((rowInput) => {
-                        const row = catalog.inputs.findIndex(
-                          (input) =>
-                            input.parameter_id ===
-                            rowInput.parameter_id,
-                        );
-                        return (
-                          <tr key={rowInput.parameter_id}>
-                            <th className="max-w-28 truncate p-1 text-left text-d-muted">
-                              {rowInput.label}
-                            </th>
-                            {selectedInputs.map((columnInput) => {
-                              const column = catalog.inputs.findIndex(
-                                (input) =>
-                                  input.parameter_id ===
-                                  columnInput.parameter_id,
-                              );
-                              return (
-                                <td
-                                  key={columnInput.parameter_id}
-                                  className="p-1"
-                                >
-                                  <input
-                                    type="number"
-                                    min={-1}
-                                    max={1}
-                                    step={0.05}
-                                    disabled={row === column}
-                                    value={
-                                      correlations[row]?.[column] ?? 0
-                                    }
-                                    onChange={(event) =>
-                                      updateCorrelation(
-                                        row,
-                                        column,
-                                        event.target.value,
-                                      )
-                                    }
-                                    className="w-16 rounded border border-d-border bg-d-bg p-1 text-center text-white disabled:opacity-50"
-                                  />
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </section>
-              )}
-
-              <section className="rounded-lg border border-d-border bg-d-card p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wider text-d-muted">
-                      Persisted run status
-                    </div>
-                    <div className="mt-1 text-base font-semibold text-white">
-                      {persistedStatus}
-                    </div>
-                  </div>
-                  {run && (
-                    <div className="text-right text-[9px] text-d-muted">
-                      <div>
-                        Run {run.monte_carlo_run_id.slice(0, 8)}
-                      </div>
-                      <div>
-                        {run.method_version} ·{' '}
-                        {formatUiNumber(run.trial_count, {
-                          maximumFractionDigits: 0,
-                        })}{' '}
-                        trials
-                      </div>
-                      {run.runtime_ms !== null && (
-                        <div>
-                          {formatUiNumber(run.runtime_ms)} ms
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
-                {run?.error_message && (
-                  <p className="mt-3 text-xs text-red-300">
-                    {run.error_code}: {run.error_message}
+                <button
+                  type="button"
+                  disabled={selectedInputs.length === 0}
+                  onClick={() => setAllInputsSelected(false)}
+                  className="text-[10px] font-medium text-gold-400 transition hover:text-gold-300 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Clear all
+                </button>
+              </header>
+              <div className="mt-4 flex gap-2 border-b border-d-border pb-4">
+                <input
+                  type="search"
+                  value={inputQuery}
+                  onChange={(event) => setInputQuery(event.target.value)}
+                  placeholder="Search inputs"
+                  aria-label="Search inputs"
+                  className="min-w-0 flex-1 rounded-lg border border-d-border bg-d-bg px-3 py-2 text-xs text-white placeholder:text-d-muted focus:border-gold-400 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  aria-pressed={showSelectedOnly}
+                  onClick={() => setShowSelectedOnly((current) => !current)}
+                  className="rounded-lg border border-d-border px-3 py-2 text-[10px] font-medium text-d-muted transition hover:border-gold-500/70 hover:text-white aria-pressed:border-gold-500 aria-pressed:text-gold-400"
+                >
+                  Selected
+                </button>
+              </div>
+              <div className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
+                {catalog.inputs.length === 0 && (
+                  <div className="rounded-lg border border-d-border bg-d-bg/40 p-5 text-xs text-d-muted">
+                    No editable stochastic-eligible canonical parameters
+                    are available.
+                  </div>
+                )}
+                {catalog.inputs.length > 0 && visibleInputs.length === 0 && (
+                  <div className="rounded-lg border border-d-border bg-d-bg/40 p-5 text-xs text-d-muted">
+                    No inputs match the current filter.
+                  </div>
+                )}
+                {visibleInputs.map((input) => {
+                  const draft = drafts[input.parameter_id];
+                  if (!draft) {
+                    return null;
+                  }
+                  return (
+                    <section
+                      key={input.parameter_id}
+                      className="rounded-lg border border-d-border bg-d-bg/40 p-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <label className="flex min-w-0 items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={draft.selected}
+                            onChange={(event) =>
+                              setDrafts((current) => ({
+                                ...current,
+                                [input.parameter_id]: {
+                                  ...draft,
+                                  selected: event.target.checked,
+                                },
+                              }))
+                            }
+                            className="mt-0.5 accent-gold-500"
+                          />
+                          <span>
+                            <span className="block text-xs font-semibold text-white">
+                              {input.label}
+                            </span>
+                            <span className="mt-0.5 block text-[9px] text-d-muted">
+                              {input.business_role ?? 'Unclassified'} ·
+                              current{' '}
+                              {formatUiNumber(input.current_value, {
+                                fallback: input.current_value,
+                              })}{' '}
+                              {input.unit ?? ''}
+                            </span>
+                          </span>
+                        </label>
+                        <select
+                          value={draft.distributionType}
+                          onChange={(event) =>
+                            handleDistributionChange(
+                              input,
+                              event.target
+                                .value as MonteCarloDistributionType,
+                            )
+                          }
+                          className="rounded border border-d-border bg-d-bg px-2 py-1 text-[9px] uppercase text-emerald-400"
+                        >
+                          {DISTRIBUTION_TYPES.map((distribution) => (
+                            <option key={distribution} value={distribution}>
+                              {distribution}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      {draft.selected && (
+                        <ParameterFields
+                          input={input}
+                          draft={draft}
+                          onChange={(next) =>
+                            setDrafts((current) => ({
+                              ...current,
+                              [input.parameter_id]: next,
+                            }))
+                          }
+                        />
+                      )}
+                    </section>
+                  );
+                })}
+              </div>
+            </section>
+
+            <div className="grid min-w-0 grid-cols-1 items-stretch gap-4 xl:grid-cols-[minmax(300px,0.8fr)_minmax(0,1.2fr)]">
+              <section className="min-h-40 rounded-lg border border-d-border bg-d-card p-5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-d-muted">
+                  Target output
+                </div>
+                <div className="mt-5 text-3xl font-bold text-gold-400">
+                  Project IRR
+                </div>
+                <p className="mt-1 text-[10px] text-d-muted">
+                  Fixed for comparable persisted simulations
+                </p>
+                {!projectIrrAvailable && (
+                  <p className="mt-2 text-[10px] text-amber-300">
+                    Project IRR is unavailable for this model.
                   </p>
                 )}
               </section>
 
-              {metrics.length > 0 && (
-                <>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {metrics.map((metric) => (
-                      <MetricCard key={metric.role} metric={metric} />
-                    ))}
+              <section className="min-h-40 rounded-lg border border-d-border bg-d-card p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-base font-semibold text-white">
+                      Correlation matrix
+                    </h2>
+                    <p className="mt-1 max-w-sm text-[10px] text-d-muted">
+                      Configure relationships without occupying the main
+                      workspace.
+                    </p>
                   </div>
-                  <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
-                    {metrics.map((metric) => (
-                      <DistributionChart
-                        key={metric.role}
-                        metric={metric}
-                      />
-                    ))}
+                  <button
+                    type="button"
+                    disabled={selectedInputs.length < 2}
+                    onClick={() => setCorrelationDialogOpen(true)}
+                    className="rounded-lg border border-d-border px-4 py-2 text-xs font-semibold text-white transition hover:border-gold-500/70 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Open full matrix
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2 text-[9px] text-d-muted">
+                  <span className="rounded-full border border-d-border px-3 py-1">
+                    {selectedInputs.length} inputs
+                  </span>
+                  <span className="rounded-full border border-d-border px-3 py-1">
+                    Symmetric draft
+                  </span>
+                </div>
+              </section>
+
+              {metrics.map((metric) => (
+                <Fragment key={metric.role}>
+                  <div className="min-w-0">
+                    <MetricCard
+                      metric={metric}
+                      run={run}
+                      persistedStatus={persistedStatus}
+                    />
                   </div>
-                </>
+                  <div className="min-w-0">
+                    <DistributionChart metric={metric} />
+                  </div>
+                </Fragment>
+              ))}
+
+              {metrics.length === 0 && (
+                <section className="flex min-h-44 items-center justify-center rounded-lg border border-d-border bg-d-card p-6 text-center xl:col-span-2">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-d-muted">
+                      Persisted run status
+                    </div>
+                    <div className="mt-2 text-lg font-semibold text-white">
+                      {persistedStatus}
+                    </div>
+                    {run?.error_message && (
+                      <p className="mt-3 text-xs text-red-300">
+                        {run.error_code}: {run.error_message}
+                      </p>
+                    )}
+                  </div>
+                </section>
               )}
 
-              <section className="rounded-lg border border-d-border bg-d-card p-5">
-                <h2 className="text-sm font-semibold text-white">
-                  Sensitivity ranking
-                </h2>
-                <p className="mt-1 text-[10px] text-d-muted">
-                  Correlation and contribution computed from persisted
-                  trial outputs.
-                </p>
+              <section className="rounded-lg border border-d-border bg-d-card p-5 xl:col-span-2">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-base font-semibold text-white">
+                      Sensitivity ranking
+                    </h2>
+                    <p className="mt-1 text-[10px] text-d-muted">
+                      Top drivers shown · scroll for all selected inputs
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-d-border px-3 py-1 text-[9px] text-d-muted">
+                    Contribution to Project IRR
+                  </span>
+                </div>
                 {rankingMetric === null ? (
                   <div className="flex h-28 items-center justify-center text-xs text-d-muted">
                     Unavailable
                   </div>
                 ) : (
-                  <div className="mt-4 space-y-3">
+                  <div className="mt-4 flex max-h-80 flex-col overflow-y-auto pr-2 [scrollbar-gutter:stable]">
                     {rankingMetric.rankings.map((ranking) => (
-                      <div key={ranking.parameter_id}>
-                        <div className="mb-1 flex justify-between gap-3 text-[10px]">
-                          <span className="text-white">
-                            {ranking.label}
-                          </span>
-                          <span className="text-d-muted">
-                            corr{' '}
-                            {formatUiNumber(ranking.correlation, {
-                              maximumFractionDigits: 3,
-                            })}{' '}
-                            ·{' '}
-                            {formatProbability(
-                              ranking.contribution,
-                            )}
-                          </span>
-                        </div>
+                      <div
+                        key={ranking.parameter_id}
+                        className="grid items-center gap-3 border-b border-d-border py-3 last:border-b-0 xl:grid-cols-[minmax(180px,0.8fr)_minmax(220px,1fr)_auto]"
+                      >
+                        <span className="text-[10px] font-medium text-white">
+                          {ranking.label}
+                        </span>
                         <div className="h-1.5 overflow-hidden rounded bg-d-bg">
                           <div
                             className="h-full rounded bg-gold-500"
@@ -976,6 +1097,13 @@ export default function MonteCarloPage() {
                             }}
                           />
                         </div>
+                        <span className="text-right text-[10px] text-d-muted">
+                          corr{' '}
+                          {formatUiNumber(ranking.correlation, {
+                            maximumFractionDigits: 3,
+                          })}{' '}
+                          · {formatProbability(ranking.contribution)}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -985,6 +1113,18 @@ export default function MonteCarloPage() {
           </div>
         )}
       </div>
+
+      <MonteCarloCorrelationDialog
+        open={correlationDialogOpen}
+        allInputs={catalog?.inputs ?? []}
+        selectedInputs={selectedInputs}
+        correlations={correlations}
+        onCorrelationChange={updateCorrelation}
+        onResetIdentity={() =>
+          setCorrelations(identityMatrix(catalog?.inputs.length ?? 0))
+        }
+        onClose={() => setCorrelationDialogOpen(false)}
+      />
 
       <FloatingAssistant
         tabKey="monte_carlo"

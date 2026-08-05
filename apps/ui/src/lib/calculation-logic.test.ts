@@ -1041,7 +1041,6 @@ test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => 
     assert.ok(source.includes(required), `expected ${required}`);
   }
   for (const forbidden of [
-    'getModel',
     'parsed_json',
     'createScenario',
     'runMonteCarlo',
@@ -1058,8 +1057,105 @@ test('monte carlo page uses dynamic canonical inputs and persisted jobs', () => 
   ]) {
     assert.equal(source.includes(forbidden), false, `forbidden ${forbidden}`);
   }
+  assert.doesNotMatch(source, /\bgetModel\s*\(/);
   assert.doesNotMatch(source, /scenarios\//);
   assert.doesNotMatch(source, /\b(?:10%|8\.5%|1\.25x|65:35)\b/);
+});
+
+test('monte carlo workspace follows the approved results-first layout', () => {
+  const pageSource = readFileSync(
+    'src/app/montecarlo/page.tsx',
+    'utf8',
+  );
+  const dialogPath =
+    'src/components/monte-carlo/MonteCarloCorrelationDialog.tsx';
+
+  for (const required of [
+    'getOverviewAnalysis',
+    'getModelDiagnostics',
+    "kpi.role === 'project_irr'",
+    'kpis={projectIrrKpis}',
+    'diagnostics={diagnostics}',
+    'featuredKpi',
+    'wide',
+    'MonteCarloCorrelationDialog',
+    'Open full matrix',
+    'Search inputs',
+    'Clear all',
+    'items-stretch',
+    'h-[calc(100vh-12rem)] min-h-[36rem]',
+    'xl:h-0 xl:min-h-full',
+    'min-h-0 flex-1',
+    'max-h-80',
+    'xl:grid-cols-[minmax(360px,0.48fr)_minmax(0,1fr)]',
+    'lg:w-[calc(100vw-2rem)]',
+    'xl:grid-cols-[minmax(300px,0.8fr)_minmax(0,1.2fr)]',
+    'xl:col-span-2',
+    'metric={metric}',
+    'run={run}',
+    'persistedStatus={persistedStatus}',
+  ]) {
+    assert.ok(pageSource.includes(required), `expected ${required}`);
+  }
+
+  assert.equal(
+    pageSource.includes('🎲'),
+    false,
+    'the approved header does not use an emoji icon',
+  );
+
+  assert.equal(
+    existsSync(dialogPath),
+    true,
+    'expected the correlation matrix to be extracted into a dialog component',
+  );
+  const dialogSource = readFileSync(dialogPath, 'utf8');
+  for (const required of [
+    '<dialog',
+    'aria-modal="true"',
+    'Correlation matrix',
+    'Reset identity',
+    "event.key === 'Escape'",
+    'max-h-[min(70vh,44rem)]',
+    'overflow-x-auto',
+  ]) {
+    assert.ok(dialogSource.includes(required), `expected ${required}`);
+  }
+});
+
+test('stochastic inputs card stretches to the results height and fills its scroll region', () => {
+  const pageSource = readFileSync(
+    'src/app/montecarlo/page.tsx',
+    'utf8',
+  );
+
+  assert.match(
+    pageSource,
+    /<div className="[^"]*items-stretch[^"]*xl:grid-cols-\[minmax\(360px,0\.48fr\)_minmax\(0,1fr\)\][^"]*">\s*<section className="[^"]*h-\[calc\(100vh-12rem\)\][^"]*min-h-\[36rem\][^"]*xl:h-0[^"]*xl:min-h-full[^"]*">\s*<header[\s\S]*?Stochastic inputs/,
+  );
+  assert.match(
+    pageSource,
+    /<div className="[^"]*min-h-0 flex-1[^"]*overflow-y-auto[^"]*">\s*\{catalog\.inputs\.length/,
+  );
+  assert.equal(pageSource.includes('max-h-[calc(100vh-24rem)]'), false);
+});
+
+test('project IRR metric card is compact and visualizes its percentile range', () => {
+  const pageSource = readFileSync(
+    'src/app/montecarlo/page.tsx',
+    'utf8',
+  );
+
+  for (const required of [
+    'p50Position',
+    'P10 to P90 percentile range',
+    'mt-auto',
+    "persistedStatus === 'completed' ? 'Completed'",
+    'run?.trial_count',
+  ]) {
+    assert.ok(pageSource.includes(required), `expected ${required}`);
+  }
+  assert.equal(pageSource.includes('min-h-80'), false);
 });
 
 test('legacy Monitor product surfaces are removed from the frontend', () => {

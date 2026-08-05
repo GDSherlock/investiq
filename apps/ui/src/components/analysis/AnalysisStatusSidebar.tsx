@@ -64,14 +64,22 @@ export default function AnalysisStatusSidebar({
   analysis,
   kpis = [],
   diagnostics = null,
+  featuredKpi = false,
+  wide = false,
 }: {
   analysis: ActiveAnalysisContextValue;
   kpis?: AnalysisKpi[];
   diagnostics?: ModelDiagnosticsResponse | null;
+  featuredKpi?: boolean;
+  wide?: boolean;
 }) {
   const status = statusCopy(analysis);
   return (
-    <aside className="w-full lg:w-60 flex-shrink-0 space-y-4">
+    <aside
+      className={`flex w-full flex-shrink-0 flex-col gap-4 ${
+        wide ? 'lg:w-[21rem]' : 'lg:w-60'
+      }`}
+    >
       <section className="bg-d-card rounded-lg shadow-sm border border-d-border p-4">
         <div className="text-[10px] text-d-muted uppercase tracking-wider font-medium mb-2">
           Calculation status
@@ -98,14 +106,31 @@ export default function AnalysisStatusSidebar({
         </div>
         <div className="grid grid-cols-2 gap-2">
           {kpis.slice(0, 6).map((kpi) => (
-            <div key={kpi.slot} className="bg-d-bg rounded p-2 min-w-0">
-              <div className="text-[9px] text-d-muted truncate">
+            <div
+              key={kpi.slot}
+              className={
+                featuredKpi
+                  ? 'col-span-2 min-w-0 rounded-lg border border-d-border bg-d-bg p-4'
+                  : 'min-w-0 rounded bg-d-bg p-2'
+              }
+            >
+              <div
+                className={
+                  featuredKpi
+                    ? 'truncate text-[10px] uppercase tracking-wide text-d-muted'
+                    : 'truncate text-[9px] text-d-muted'
+                }
+              >
                 {kpi.label}
               </div>
               <div
-                className={`text-base font-bold truncate ${
+                className={`${
+                  featuredKpi ? 'mt-2 text-3xl' : 'text-base'
+                } truncate font-bold ${
                   kpi.availability_status === 'available'
-                    ? 'text-white'
+                    ? featuredKpi
+                      ? 'text-gold-400'
+                      : 'text-white'
                     : 'text-d-muted'
                 }`}
               >
@@ -116,8 +141,14 @@ export default function AnalysisStatusSidebar({
                   kpi.display_value,
                 )}
               </div>
-              <div className="text-[8px] text-d-muted truncate">
-                {kpi.validation_status ?? kpi.quality_status}
+              <div
+                className={`${
+                  featuredKpi ? 'mt-2 text-[9px]' : 'text-[8px]'
+                } truncate text-d-muted`}
+              >
+                {featuredKpi
+                  ? 'Current deterministic calculation'
+                  : (kpi.validation_status ?? kpi.quality_status)}
               </div>
             </div>
           ))}

@@ -1,107 +1,52 @@
-# Fixed Sensitivity Workbench Design QA
+# Monte Carlo Layout Design QA
 
-## Evidence
+- Source visual truth: `/var/folders/g8/s6phb4wx17z2csq6lmzm8wsm0000gn/T/TemporaryItems/NSIRD_screencaptureui_2wIVpq/Screenshot 2026-08-05 at 14.13.20.png`
+- Latest alignment reference: `/var/folders/g8/s6phb4wx17z2csq6lmzm8wsm0000gn/T/TemporaryItems/NSIRD_screencaptureui_tKeghP/Screenshot 2026-08-05 at 14.45.06.png`
+- Normalized source: `/tmp/monte-carlo-reference-normalized.png`
+- Implementation screenshot: `/tmp/monte-carlo-layout-aligned.png`
+- Mobile screenshot: `/tmp/monte-carlo-layout-mobile.png`
+- Desktop viewport: requested `1920 x 1291`; captured page pixels `1914 x 1287`
+- Mobile viewport: requested `390 x 844`; captured page pixels `384 x 831`
+- Source pixels: `2560 x 1722`, normalized to `1920 x 1292` for comparison
+- State: persisted baseline model with 30 stochastic inputs and completed Project IRR Monte Carlo result
+- Density normalization: source was reduced to 75%; implementation was compared at browser CSS-pixel density
 
-- Reference: `/Users/kingjason/Downloads/localhost_3000_dashboard (1).png`
-- Implementation: `docs/reports/evidence/fixed-sensitivity-final-desktop-1722.png`
-- Side-by-side comparison: `docs/reports/evidence/fixed-sensitivity-final-comparison.png`
-- Responsive captures:
-  - `docs/reports/evidence/fixed-sensitivity-final-responsive-1024.png`
-  - `docs/reports/evidence/fixed-sensitivity-final-responsive-640.png`
-  - `docs/reports/evidence/fixed-sensitivity-final-responsive-320.png`
+## Full-view comparison
 
-The browser viewport was 1722 × 1408. Browser chrome is excluded from the 1722 ×
-1329 implementation capture. The 3444 × 2816 @2x reference was normalized to
-1722 × 1408 and cropped to the implementation capture height for the combined
-comparison.
+The implementation reproduces the approved three-column composition while preserving the existing InvestIQ navigation shell. At desktop size, the sidebar starts at `x=13` with width `336`; the work area starts at `x=373`. The input column is `490` pixels wide, and the result area uses aligned `402` and `603` pixel tracks.
 
-## State and interaction
+The Target output and Correlation matrix cards share `y=235`, `height=160`, and `bottom=395`. Project IRR and Project IRR distribution share `y=411`, `height=464`, and `bottom=875`. Sensitivity ranking spans both result tracks from `x=879` to `x=1901`. The stochastic-input card and Sensitivity ranking now both end at `y=1312` (`0px` delta). The input list occupies the remaining `921px` inside its card and ends `17px` above the outer border, matching the card padding.
 
-The final capture uses an isolated fixture with Project IRR, three model-derived
-canonical assumptions, and an active persisted sensitivity analysis. Resetting
-`First reporting year` moved the workbench through `Recalculating` to the
-persisted result with exactly one sensitivity POST. The response contains real
-one-way driver runs and 25 persisted top-impact matrix runs. The browser console
-was clean.
+## Focused-region comparison
 
-## Visual comparison history
+- Fonts and typography: existing InvestIQ font stack, weights, uppercase labels, and gold emphasis were retained. Heading and KPI scale follow the source hierarchy.
+- Spacing and layout rhythm: the 24-pixel outer gutter, 16-pixel card gaps, shared result-track boundaries, and bounded input/ranking scroll areas match the reference structure.
+- Colors and tokens: existing `d-*`, gold, muted, border, success, warning, and error tokens were reused; no parallel palette was introduced.
+- Image and chart fidelity: no new raster assets were required. The histogram continues to render persisted bins, so its exact bar silhouette correctly follows real data rather than the illustrative source distribution.
+- Copy and content: layout labels match the approved design. Persisted values, diagnostic status, and canonical input order remain source-backed.
 
-1. The initial implementation reached 1486 px document height because assumption
-   cards and per-cell provenance details were too tall. Control and table density
-   were reduced without changing the fixed information hierarchy.
-2. The desktop document then fit the 1408 px viewport. Narrow-width root overflow
-   was removed at the shell and document-element boundaries.
-3. At 320 px, the active matrix still measured 597 px wide because screen-reader
-   provenance was retained in normal table layout. Provenance moved to cell
-   `title` and `aria-label`; the final document width is 314 px within the 314 px
-   client width.
-4. Final calculation-contract and diagnostic fixes did not materially change the
-   active fixture visual because this fixture has no unavailable controlled-role
-   output candidate.
+## Interaction checks
 
-## Required surfaces
-
-- Typography: retained the application font stack, compact hierarchy, tabular
-  numeric treatment, and readable unavailable-state detail.
-- Spacing: fixed left rail, five-card KPI row, split analysis row, split
-  comparison row, and current-assumptions footer follow the reference hierarchy.
-- Color: preserved the dark navy shell, warm gold controls, green upside, and red
-  downside encoding.
-- Copy: assumption labels and units come from canonical model metadata; KPI labels
-  remain the fixed platform contract.
-- Assets: no decorative assets were introduced; the charts are rendered from
-  persisted calculation results.
-- Responsive: inspected at 1722, 1024, 640, and 320 px. No page-level horizontal
-  overflow was present at any tested width.
-- Accessibility: inputs retain labels, matrix cells expose run provenance through
-  accessible names and titles, unavailable cards expose typed diagnostic detail,
-  and color is not the sole carrier of tornado values.
-
-## Intentional differences and limitations
-
-- The fixture does not contain NPV, Payback, DSCR, or Equity Multiple roles, so
-  those fixed cards correctly display `Unavailable`. Controlled-role diagnostic
-  rendering is covered by automated tests, but the fixture has absent roles
-  rather than unavailable candidates.
-- The fixture/application shell does not provide the reference project's scenario
-  and persona header metadata, so those controls were not fabricated.
-- Persisted `run_id` provenance remains visible even though it is absent from the
-  reference image; this is intentional for calculation auditability.
-
-final result: passed
-
----
-
-# Upload Historical Model Selector Design QA (Design 2)
-
-## Reference and implementation
-
-- Approved source: `/Users/kingjason/.codex/generated_images/019fc6dc-0cee-7f93-9e57-9a93882f7a9a/exec-1c9c3f4d-c66e-4c63-a7c8-78e8c609f4ed.png`
-- Verified implementation: `/Users/kingjason/.codex/visualizations/2026/08/03/019fc6dc-0cee-7f93-9e57-9a93882f7a9a/design-2-final-verified.jpg`
-- Side-by-side comparison: `/Users/kingjason/.codex/visualizations/2026/08/03/019fc6dc-0cee-7f93-9e57-9a93882f7a9a/design-2-comparison.jpg`
-- Browser and viewport: Codex in-app browser, 1487 × 1058 CSS pixels
-- Compared state: `Use existing model` selected, history dropdown open, latest model selected
-
-## Visual review
-
-- The approved two-option source switcher, gold selected state, centered heading, bordered history card, model field, expanded option list, primary action, and upload-return link all match the selected direction.
-- The expanded list participates in card layout and does not cover the primary action.
-- Card and form widths were adjusted against the combined source/implementation image; no cropped controls, horizontal overflow, or broken spacing remained.
-- Deliberate data differences: the implementation renders the one real persisted model currently available, its canonical model identifier, timestamp, and baseline status instead of the three illustrative mock rows and invented version labels.
-- Deliberate product-context difference: the existing security notice remains beneath the new card.
-
-## Interaction and runtime review
-
-- Source tabs switch between the existing upload flow and the historical-model flow.
-- The newest real model is selected by default; opening the picker exposes an accessible listbox and selected option.
-- `Continue to analysis` atomically restores workbook/model/graph/baseline identity, clears stale override and sensitivity state, and restores the existing preparation summary.
-- A timestamp-bounded API log check after `Continue to analysis` showed only readiness/run GET requests; no upload, prepare, calculation, or sensitivity POST was issued.
-- Browser console warnings/errors: none.
+- Search filters the stochastic list to matching turbine inputs.
+- With only two filtered input cards, the scroll region remains `921px` high and the outer card remains `1077px` high, so the content area never collapses or leaves an unfilled lower section.
+- Clearing the search restores the full canonical list.
+- Open full matrix displays an accessible dialog with the Correlation matrix title and Reset identity action.
+- Apply correlations closes the dialog.
+- Desktop console returned no warnings or errors.
+- Mobile check found no document-level horizontal overflow (`scrollWidth=384`, `clientWidth=384`). The stochastic card remains `652px` high with a `496px` independently scrollable list instead of inheriting the desktop sibling-height technique.
 
 ## Comparison history
 
-1. Initial browser comparison found that the absolutely positioned list covered the primary action.
-2. The list was moved into normal card flow, the approved content width was matched, and latest-model default selection was added.
-3. The final combined comparison confirmed the approved hierarchy and interaction state with real persisted data.
+1. Initial implementation was constrained by the application-wide `1600px` maximum width. This narrowed the reference proportions. Fixed with a Monte Carlo-only large-screen breakout, a `336px` sidebar, a `490px` input track, and aligned `402px / 603px` result tracks.
+2. After widening, the stochastic-input card stopped short of the Sensitivity ranking bottom. Fixed by making the desktop grid stretch its children and using a zero intrinsic height plus `min-height: 100%` so the right result column determines the shared row height.
+3. The first desktop-only constraint collapsed the list on narrow screens. Fixed with a bounded mobile card height and applying sibling-height alignment only at the `xl` breakpoint.
+
+## Accepted differences
+
+- The existing InvestIQ global navigation remains above the page; it is product-shell infrastructure outside this page-layout change.
+- Sidebar KPI precision and histogram shape use persisted application data rather than copying illustrative mock values.
+- Correlation status says `Symmetric draft` instead of claiming `Valid` before matrix validation.
+
+No actionable P0, P1, or P2 visual findings remain.
 
 final result: passed

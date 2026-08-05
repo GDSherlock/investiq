@@ -24,9 +24,9 @@
 ## File Structure
 
 - Modify `apps/api/app/calculation_rules/phase2_types.py`: current engine and registry capability identifiers only.
-- Modify `apps/api/app/calculation_rules/phase2_registry.py`: six additive `FunctionDefinition` entries and their exact arities.
+- Modify `apps/api/app/calculation_rules/phase2_registry.py`: ten additive `FunctionDefinition` entries and their exact arities.
 - Modify `apps/api/app/calculation_rules/evaluator.py`: dispatch branches plus private, pure comparison/date/financial helpers.
-- Create `tests/test_calculation_engine_v4_excel_functions.py`: isolated workbook compiler/evaluator harness, six function conformance suites, and opt-in exact-workbook acceptance.
+- Create `tests/test_calculation_engine_v4_excel_functions.py`: isolated workbook compiler/evaluator harness, ten function conformance suites, and opt-in exact-workbook acceptance.
 - Modify `tests/test_calculation_engine_v2_compiler.py`: current Phase 2 registry membership and v4 envelope expectations.
 - Modify `tests/test_calculation_engine_v2_service.py`: current graph registry-version expectation.
 - Modify `tests/test_calculation_integration_service.py`: current readiness/graph version expectations while keeping the explicit legacy-v3 reload fixture unchanged.
@@ -985,6 +985,266 @@ git commit -m "feat(calculation): add Excel XIRR support"
 
 ---
 
+### Task 6A: Add Masked `MONTH` and `DAY` Date Components
+
+**Files:**
+- Modify: `tests/test_calculation_engine_v4_excel_functions.py`
+- Modify: `tests/test_calculation_engine_v2_compiler.py`
+- Modify: `apps/api/app/calculation_rules/phase2_registry.py`
+- Modify: `apps/api/app/calculation_rules/evaluator.py`
+
+**Interfaces:**
+- Consumes: `context.catalog.workbook_date_system`, `from_excel`, and the existing `YEAR` numeric coercion path.
+- Produces: `MONTH(1, 1)`, `DAY(1, 1)`, and `_date_parts(serial: float, date_system: str) -> tuple[int, int, int] | ScalarValue`.
+
+- [ ] **Step 1: Add failing component and error tests**
+
+```python
+@pytest.mark.parametrize(
+    ("formula", "date_system", "expected"),
+    [
+        ("=MONTH(0)", "1900", 1),
+        ("=DAY(0)", "1900", 0),
+        ("=MONTH(60)", "1900", 2),
+        ("=DAY(60)", "1900", 29),
+        ("=MONTH(0)", "1904", 1),
+        ("=DAY(0)", "1904", 1),
+        ("=MONTH(45292)", "1900", 1),
+        ("=DAY(45292)", "1900", 1),
+    ],
+)
+def test_month_and_day_respect_excel_date_systems(
+    formula: str,
+    date_system: str,
+    expected: int,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(
+        formula,
+        date_system=date_system,
+    )
+    assert execution is not None
+    assert execution.value == ScalarValue.number(expected)
+
+
+@pytest.mark.parametrize("function_name", ["MONTH", "DAY"])
+def test_month_and_day_reject_negative_serials(function_name: str) -> None:
+    _compilation, execution = _compile_and_evaluate(f"={function_name}(-1)")
+    assert execution is not None
+    assert execution.value == ScalarValue.error("#NUM!")
+```
+
+- [ ] **Step 2: Run the component tests RED**
+
+Run the v4 test file with `-k 'month or day'`. Expected: unsupported compilation for both new functions.
+
+- [ ] **Step 3: Register and implement shared date parts**
+
+Register:
+
+```python
+"MONTH": _phase2_definition("MONTH", 1, 1),
+"DAY": _phase2_definition("DAY", 1, 1),
+```
+
+Add and use:
+
+```python
+def _date_parts(
+    serial: float,
+    date_system: str,
+) -> tuple[int, int, int] | ScalarValue:
+    if not math.isfinite(serial) or serial < 0:
+        return ScalarValue.error("#NUM!")
+    whole_serial = math.floor(serial)
+    if date_system == "1900" and whole_serial == 0:
+        return 1900, 1, 0
+    if date_system == "1900" and whole_serial == 60:
+        return 1900, 2, 29
+    if date_system == "1904" and whole_serial == 0:
+        return 1904, 1, 1
+    epoch = CALENDAR_MAC_1904 if date_system == "1904" else CALENDAR_WINDOWS_1900
+    try:
+        converted = from_excel(whole_serial, epoch)
+        return converted.year, converted.month, converted.day
+    except (AttributeError, OverflowError, TypeError, ValueError):
+        return ScalarValue.error("#NUM!")
+```
+
+Dispatch `YEAR`, `MONTH`, and `DAY` through this helper and keep every existing
+YEAR assertion green.
+
+- [ ] **Step 4: Run date component regressions GREEN**
+
+Run the v4 file plus `tests/test_calculation_rule_evaluator.py` with `-k 'year or month or day or date'`.
+
+- [ ] **Step 5: Commit date components**
+
+```bash
+git add apps/api/app/calculation_rules/phase2_registry.py apps/api/app/calculation_rules/evaluator.py tests/test_calculation_engine_v2_compiler.py tests/test_calculation_engine_v4_excel_functions.py
+git commit -m "feat(calculation): add Excel date components"
+```
+
+---
+
+### Task 6B: Add Overflow-Compatible `DATE`
+
+**Files:**
+- Modify: `tests/test_calculation_engine_v4_excel_functions.py`
+- Modify: `tests/test_calculation_engine_v2_compiler.py`
+- Modify: `apps/api/app/calculation_rules/phase2_registry.py`
+- Modify: `apps/api/app/calculation_rules/evaluator.py`
+
+**Interfaces:**
+- Consumes: `_coerce_numeric`, `to_excel`, and workbook date-system epochs.
+- Produces: `DATE(3, 3)` and `_date_serial(year: float, month: float, day: float, date_system: str) -> ScalarValue`.
+
+- [ ] **Step 1: Add failing normalization and epoch tests**
+
+```python
+@pytest.mark.parametrize(
+    ("formula", "date_system", "expected"),
+    [
+        ("=DATE(2024,1,1)", "1900", 45292),
+        ("=DATE(2024,1,1)", "1904", 43830),
+        ("=DATE(2024,13,0)", "1900", 45657),
+        ("=DATE(1900,2,29)", "1900", 60),
+        ("=DATE(2024.9,1.9,1.9)", "1900", 45292),
+    ],
+)
+def test_date_normalizes_components_and_returns_the_workbook_serial(
+    formula: str,
+    date_system: str,
+    expected: int,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(formula, date_system=date_system)
+    assert execution is not None
+    assert execution.value == ScalarValue.date_serial(expected)
+```
+
+- [ ] **Step 2: Run DATE tests RED**
+
+Expected: every DATE formula is unsupported.
+
+- [ ] **Step 3: Register and implement DATE**
+
+Register `"DATE": _phase2_definition("DATE", 3, 3)`. Evaluate/coerce all three
+arguments and call:
+
+```python
+def _date_serial(
+    year: float,
+    month: float,
+    day: float,
+    date_system: str,
+) -> ScalarValue:
+    normalized_year = math.trunc(year)
+    normalized_month = math.trunc(month)
+    normalized_day = math.trunc(day)
+    if 0 <= normalized_year <= 1899:
+        normalized_year += 1900
+    total_months = normalized_year * 12 + normalized_month - 1
+    normalized_year, zero_based_month = divmod(total_months, 12)
+    if not 1 <= normalized_year <= 9999:
+        return ScalarValue.error("#NUM!")
+    epoch = CALENDAR_MAC_1904 if date_system == "1904" else CALENDAR_WINDOWS_1900
+    try:
+        first_day = date(normalized_year, zero_based_month + 1, 1)
+        serial = float(to_excel(first_day, epoch)) + normalized_day - 1
+    except (OverflowError, TypeError, ValueError):
+        return ScalarValue.error("#NUM!")
+    return ScalarValue.date_serial(serial) if serial >= 0 else ScalarValue.error("#NUM!")
+```
+
+- [ ] **Step 4: Run DATE/YEAR/MONTH/DAY tests GREEN**
+
+Run all date-named v4 tests and the existing static-date evaluator tests.
+
+- [ ] **Step 5: Commit DATE**
+
+```bash
+git add apps/api/app/calculation_rules/phase2_registry.py apps/api/app/calculation_rules/evaluator.py tests/test_calculation_engine_v2_compiler.py tests/test_calculation_engine_v4_excel_functions.py
+git commit -m "feat(calculation): add Excel DATE support"
+```
+
+---
+
+### Task 6C: Add Scalar Array-Form `INDEX`
+
+**Files:**
+- Modify: `tests/test_calculation_engine_v4_excel_functions.py`
+- Modify: `tests/test_calculation_engine_v2_compiler.py`
+- Modify: `apps/api/app/calculation_rules/phase2_registry.py`
+- Modify: `apps/api/app/calculation_rules/evaluator.py`
+
+**Interfaces:**
+- Consumes: `_RangeValue`, `_coerce_numeric`, and row-major range values.
+- Produces: `INDEX(2, 3)` returning one selected `ScalarValue`.
+
+- [ ] **Step 1: Add failing selection and bounds tests**
+
+```python
+@pytest.mark.parametrize(
+    ("formula", "values", "expected"),
+    [
+        ("=INDEX(Inputs!A1:A3,2)", {"A1": 10, "A2": 20, "A3": 30}, ScalarValue.number(20)),
+        ("=INDEX(Inputs!A1:C2,2,3)", {"A1": 1, "B1": 2, "C1": 3, "A2": 4, "B2": 5, "C2": 6}, ScalarValue.number(6)),
+        ("=INDEX(Inputs!A1:C1,1,2)", {"A1": 1, "B1": 2, "C1": 3}, ScalarValue.number(2)),
+        ("=INDEX(Inputs!A1:A2,3)", {"A1": 1, "A2": 2}, ScalarValue.error("#REF!")),
+    ],
+)
+def test_index_selects_one_based_array_values(
+    formula: str,
+    values: dict[str, object],
+    expected: ScalarValue,
+) -> None:
+    _compilation, execution = _compile_and_evaluate(formula, values)
+    assert execution is not None
+    assert execution.value == expected
+```
+
+- [ ] **Step 2: Run INDEX tests RED**
+
+Expected: INDEX compilation is unsupported.
+
+- [ ] **Step 3: Register and implement INDEX**
+
+Register `"INDEX": _phase2_definition("INDEX", 2, 3)` and add:
+
+```python
+if name == "INDEX":
+    array = self._evaluate_node(arguments[0], context, trace)
+    if not isinstance(array, _RangeValue):
+        return ScalarValue.error("#VALUE!")
+    row_value = self._evaluate_node(arguments[1], context, trace)
+    row_number = _coerce_numeric(row_value)
+    if isinstance(row_number, ScalarValue):
+        return row_number
+    column_number = 1.0
+    if len(arguments) == 3:
+        column_value = self._evaluate_node(arguments[2], context, trace)
+        column_number = _coerce_numeric(column_value)
+        if isinstance(column_number, ScalarValue):
+            return column_number
+    row = math.trunc(row_number)
+    column = math.trunc(column_number)
+    if row < 1 or column < 1 or row > array.rows or column > array.columns:
+        return ScalarValue.error("#REF!")
+    return array.values[(row - 1) * array.columns + column - 1]
+```
+
+- [ ] **Step 4: Run INDEX/MATCH and full v4 tests GREEN**
+
+Run the complete v4 test file and compiler contract tests.
+
+- [ ] **Step 5: Commit INDEX**
+
+```bash
+git add apps/api/app/calculation_rules/phase2_registry.py apps/api/app/calculation_rules/evaluator.py tests/test_calculation_engine_v2_compiler.py tests/test_calculation_engine_v4_excel_functions.py
+git commit -m "feat(calculation): add Excel INDEX support"
+```
+
+---
+
 ### Task 7: Prove the Exact Workbook Without Re-extraction
 
 **Files:**
@@ -992,7 +1252,7 @@ git commit -m "feat(calculation): add Excel XIRR support"
 
 **Interfaces:**
 - Consumes: `PF_WELL_ROUNDED_WORKBOOK_PATH`, the v4 compiler/graph/evaluator, and workbook cached values for comparison only.
-- Produces: opt-in read-only acceptance proving all six target functions compile and key downstream cells execute.
+- Produces: opt-in read-only acceptance proving all ten target functions compile and key downstream cells execute.
 
 - [ ] **Step 1: Add a whole-workbook execution helper**
 
@@ -1031,7 +1291,18 @@ def test_well_rounded_workbook_executes_the_new_function_pack() -> None:
 
     catalog, compilations, executions = _compile_and_evaluate_path(workbook_path)
     formula_by_id = {formula.id: formula for formula in catalog.formulas}
-    target_names = {"MOD", "OR", "YEAR", "MATCH", "XNPV", "XIRR"}
+    target_names = {
+        "MOD",
+        "OR",
+        "YEAR",
+        "MATCH",
+        "XNPV",
+        "XIRR",
+        "DATE",
+        "MONTH",
+        "DAY",
+        "INDEX",
+    }
     target_compilations = [
         compilation
         for compilation in compilations

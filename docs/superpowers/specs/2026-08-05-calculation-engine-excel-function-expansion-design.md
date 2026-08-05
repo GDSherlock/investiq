@@ -6,7 +6,7 @@
 
 ## Objective
 
-Add deterministic, Excel-compatible calculation support for the six function
+Add deterministic, Excel-compatible calculation support for the ten function
 families currently preventing the well-rounded project-finance workbook from
 executing:
 
@@ -16,6 +16,10 @@ executing:
 - `MATCH`
 - `XNPV`
 - `XIRR`
+- `DATE`
+- `MONTH`
+- `DAY`
+- `INDEX`
 
 The increment must make the functions executable through the existing typed
 calculation pipeline without changing workbook extraction behavior. Existing
@@ -46,8 +50,8 @@ calculation-engine compatibility gap, not an extraction-completeness failure.
 
 Use the existing registry-to-compiler-to-evaluator path:
 
-1. add six registry definitions with explicit arity and support metadata;
-2. add six evaluator dispatch handlers and focused private helpers;
+1. add ten registry definitions with explicit arity and support metadata;
+2. add ten evaluator dispatch handlers and focused private helpers;
 3. version the new registry and execution behavior as v4; and
 4. add semantic, compiler, graph, and real-workbook regression tests.
 
@@ -144,6 +148,30 @@ from its existing persisted workbook. Re-extraction is not required.
 
 Locale-dependent free-form date-string parsing is outside this increment.
 
+### `MONTH(serial_number)` and `DAY(serial_number)`
+
+- require one scalar date or numeric serial;
+- share `YEAR`'s workbook-specific 1900/1904 epoch conversion;
+- treat Windows-1900 serial `60` as the compatibility date 1900-02-29;
+- preserve serial-zero behavior (`MONTH(0) = 1`, `DAY(0) = 0`) for the
+  Windows-1900 system and 1904-01-01 behavior for the Mac-1904 system;
+- return `#NUM!` for negative or out-of-range serials and `#VALUE!` for an
+  invalid scalar; and
+- return integer month/day components without consulting cell formatting.
+
+### `DATE(year, month, day)`
+
+- require three numerically coercible scalar arguments and truncate fractional
+  components toward zero;
+- add 1900 to years from 0 through 1899, consistent with Excel compatibility;
+- normalize month overflow and underflow across years;
+- calculate day overflow and underflow from the normalized month's first-day
+  serial so Windows-1900 serial 60 remains representable;
+- emit a date serial in the workbook's 1900 or 1904 system;
+- return `#NUM!` when the normalized year or result serial is outside the
+  supported date domain; and
+- propagate upstream typed errors and use `#VALUE!` for non-numeric arguments.
+
 ### `MATCH(lookup_value, lookup_array, [match_type])`
 
 - accept one-dimensional row or column ranges only;
@@ -162,6 +190,18 @@ Locale-dependent free-form date-string parsing is outside this increment.
 
 Approximate-mode correctness assumes the workbook supplies values in the order
 required by Excel. The evaluator does not reorder or certify the input.
+
+### `INDEX(array, row_num, [column_num])`
+
+- support the array form over one rectangular `_RangeValue` only;
+- require positive, one-based row and column selectors;
+- default `column_num` to `1` when omitted;
+- return the selected typed scalar, including a selected blank or typed error;
+- return `#REF!` for an out-of-bounds selector;
+- return `#VALUE!` for a non-range first argument or a non-numeric selector;
+  and
+- exclude reference-form multi-area INDEX and row/column-zero array returns,
+  because the evaluator's function boundary returns one scalar.
 
 ### `XNPV(rate, values, dates)`
 
@@ -197,7 +237,7 @@ cases remain guess-sensitive, matching the purpose of Excel's optional guess.
 
 ## Error and Data-Flow Rules
 
-All six functions consume already-evaluated `ScalarValue` or range values and
+All ten functions consume already-evaluated `ScalarValue` or range values and
 return the engine's existing typed result shape. They do not read cells, files,
 canonical entities, cached formula results, or database records directly.
 
@@ -220,6 +260,9 @@ Implementation follows RED to GREEN in this order:
 4. `MATCH`
 5. `XNPV`
 6. `XIRR`
+7. `MONTH` and `DAY`
+8. `DATE`
+9. `INDEX`
 
 Each step first adds a failing semantic test, verifies the expected failure,
 implements the smallest handler, and reruns the focused test before proceeding.
@@ -240,8 +283,13 @@ implements the smallest handler, and reruns the focused test before proceeding.
 - positive and negative `MOD` combinations and zero divisor;
 - decisive and empty `OR` inputs;
 - 1900 and 1904 `YEAR` date systems and invalid serials;
+- 1900 and 1904 `MONTH`/`DAY` date components, including serial 0 and 60;
+- `DATE` month/day overflow, fractional truncation, epoch output, and invalid
+  domains;
 - all `MATCH` modes, row/column shape, wildcard escaping, no-match, and invalid
   shape/type cases;
+- `INDEX` one- and two-dimensional selection, default column, out-of-bounds,
+  selected typed errors, and rejected reference-form behavior;
 - irregular-date `XNPV`, mismatched dimensions, invalid dates, and invalid rate
   domains; and
 - `XIRR` default/supplied guesses, convergence, no-solution, mixed-sign
@@ -260,7 +308,7 @@ implements the smallest handler, and reruns the focused test before proceeding.
 Use the exact supplied workbook as a read-only integration fixture or local
 input. Acceptance requires:
 
-1. the six target function counts compile as supported under v4;
+1. all ten target function calls compile as supported under v4;
 2. no target function remains classified as unsupported;
 3. downstream graph nodes previously blocked solely by these functions become
    executable;
@@ -283,6 +331,20 @@ requests a different canonical semantic role can remain unavailable. That
 binding must be diagnosed and approved independently rather than folded into
 this engine change.
 
+## Approved Scope Extension Evidence
+
+After the initial six functions reached unit-level GREEN, the exact-workbook
+acceptance exposed 22 formulas that still compiled as unsupported. The compiler
+had previously stopped at the first unsupported nested call:
+
+- `YEAR` masked `MONTH`, `DATE`, and `DAY` in 21 date-axis formulas; and
+- `MATCH` masked `INDEX` in `Summary!B20`.
+
+A read-only full-workbook function-call scan found no other unregistered
+functions. The user approved adding these four functions on 2026-08-05. The
+engine-only file boundary, version identifiers, persistence behavior, and
+non-goals remain unchanged.
+
 ## Risks and Controls
 
 - **Date-system drift:** cover both workbook date systems and avoid locale/date
@@ -302,12 +364,11 @@ this engine change.
 
 This increment is complete only when:
 
-- all six functions are registered and evaluated with the specified semantics;
+- all ten functions are registered and evaluated with the specified semantics;
 - focused RED-to-GREEN evidence exists for every function;
 - focused and full backend tests pass, or unrelated baseline failures are
   explicitly identified with evidence;
-- the exact workbook has no remaining unsupported calls from the six target
-  functions;
+- the exact workbook has no remaining unsupported function calls;
 - workbook acceptance discrepancies are documented;
 - the production diff stays inside the permitted engine-only boundary; and
 - no extraction, persistence-schema, semantic-binding, API, or UI behavior was

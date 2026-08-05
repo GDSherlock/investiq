@@ -1210,7 +1210,7 @@ def _countif_match(
             if not math.isfinite(number):
                 return ScalarValue.error("#VALUE!")
             expected = ScalarValue.number(number)
-    if value.kind == "blank" and expected.kind in {"number", "date_serial"}:
+    if value.kind in {"blank", "text"} and expected.kind in {"number", "date_serial"}:
         return False
     compared = _compare(value, expected, operator)
     if compared.kind == "error":

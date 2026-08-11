@@ -30,7 +30,7 @@ from .calculation_rules.phase2_types import (
     PHASE2_ENGINE_VERSION,
     canonical_hash,
 )
-from .model_extraction_models import ModelParameter
+from .model_extraction_models import ModelParameter, ModelSemanticBinding
 from .monte_carlo_engine import (
     MONTE_CARLO_METHOD_VERSION,
     MonteCarloCancelled,
@@ -83,6 +83,36 @@ class MonteCarloService:
     ) -> None:
         self._session = session
         self._calculation_service = calculation_service
+
+    def _resolve_scalar_output(
+        self,
+        model_version_id: str,
+        outputs: Sequence[Any],
+        role: str,
+    ) -> Any | None:
+        binding = self._session.scalar(
+            select(ModelSemanticBinding).where(
+                ModelSemanticBinding.model_version_id == model_version_id,
+                ModelSemanticBinding.semantic_role == role,
+            )
+        )
+        if binding is None:
+            return resolve_analysis_output(
+                outputs,
+                role,
+                entity_kind="scalar",
+            )
+        if binding.canonical_output_id is None:
+            return None
+        return next(
+            (
+                output
+                for output in outputs
+                if output.entity_kind == "scalar"
+                and output.output_id == binding.canonical_output_id
+            ),
+            None,
+        )
 
     def input_catalog(
         self,
@@ -146,10 +176,10 @@ class MonteCarloService:
         definitions = self._calculation_service.list_outputs(
             model_version_id
         )
-        project_irr = resolve_analysis_output(
+        project_irr = self._resolve_scalar_output(
+            model_version_id,
             definitions.outputs,
             "project_irr",
-            entity_kind="scalar",
         )
         supported_outputs = ["project_irr"] if project_irr is not None else []
         return MonteCarloInputCatalogResponse(
@@ -776,17 +806,17 @@ class MonteCarloService:
             ),
         )
 
-    @staticmethod
     def _numeric_outputs(
+        self,
         projection: Any,
         roles: Sequence[str],
     ) -> dict[str, Decimal | None]:
         values: dict[str, Decimal | None] = {}
         for role in roles:
-            output = resolve_analysis_output(
+            output = self._resolve_scalar_output(
+                projection.model_version_id,
                 projection.outputs,
                 role,
-                entity_kind="scalar",
             )
             values[role] = (
                 _number_from_projected(output)

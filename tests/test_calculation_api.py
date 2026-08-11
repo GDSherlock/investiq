@@ -378,6 +378,41 @@ def test_monte_carlo_queue_is_idempotent_and_worker_persists_bounded_artifact(
             )
         )
         output.business_role = "project_irr"
+        output.label = "Project IRR"
+        session.add(
+            CanonicalOutput(
+                id=str(uuid.uuid4()),
+                model_version_id=model_id,
+                entity_kind="canonical_output",
+                label="Project IRR helper",
+                business_role="project_irr",
+                submitted_role="formula_output",
+                validated_role="formula_output",
+                raw_value_json=None,
+                unit="%",
+                scenario="base",
+                source_sheet="Calc",
+                source_cell="B2",
+                exact_formula="=B1*2",
+                formula_status="formula_no_cache",
+                source_validation_status="validated",
+                role_validation_status="validated",
+                validation_status="validated",
+                data_type="f",
+                number_format="0.00%",
+                validation_warnings_json=[],
+            )
+        )
+        session.add(
+            ModelSemanticBinding(
+                id=str(uuid.uuid4()),
+                model_version_id=model_id,
+                semantic_role="project_irr",
+                canonical_output_id=output.id,
+                binding_source="reviewed",
+                evidence_json={"selection_method": "test_review"},
+            )
+        )
         session.commit()
     baseline = client.post(
         f"/api/v1/models/{model_id}/calculations",
@@ -454,6 +489,12 @@ def test_monte_carlo_queue_is_idempotent_and_worker_persists_bounded_artifact(
         assert run_id == created.json()["monte_carlo_run_id"]
         service.process_claimed(run_id)
         after = session.scalar(select(func.count(CalculationRunRecord.id)))
+        artifact = session.scalar(
+            select(MonteCarloResultArtifactRecord).where(
+                MonteCarloResultArtifactRecord.monte_carlo_run_id == run_id
+            )
+        )
+        assert artifact.calibration_json["surrogates"][0]["intercept"] == 5.0
 
     completed = client.get(f"/api/v1/monte-carlo-runs/{run_id}")
     assert completed.status_code == 200

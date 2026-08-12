@@ -77,7 +77,6 @@ experiments/workbook_agent_poc/ Workbook extraction implementation used by the A
 libs/calc_engine/               Legacy calculation compatibility functions
 libs/tools/                     Workbook parsing and compatibility tools
 db/                             Bootstrap SQL
-infra/                          Azure Container Apps provisioning scripts
 tests/                          Backend unit, integration, and contract tests
 ```
 
@@ -86,7 +85,3 @@ tests/                          Backend unit, integration, and contract tests
 Canonical model-version and calculation-run APIs power the current analysis pages. Legacy scenario, report, assistant, debt-analysis, alerts, audit, market-data, and model endpoints remain registered for external consumers.
 
 OpenAPI documentation is available from a running API at `/docs`; health is available at `/health`.
-
-## Azure deployment
-
-`infra/deploy.sh` and `infra/deploy.ps1` provision Azure resources and Container Apps. Review their defaults and legacy compatibility resources before using them in an environment; running either script changes cloud resources.

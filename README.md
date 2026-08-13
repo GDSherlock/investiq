@@ -1,66 +1,87 @@
 # InvestIQ — Investment Capital Decision Intelligence
 
-Production-grade, multi-agent platform with auditable financial outputs deployed on Azure Container Apps.
+InvestIQ uploads and validates Excel financial models, persists workbook evidence, prepares a deterministic calculation graph, and presents auditable analysis from persisted calculation runs.
 
-## Architecture
+## Current capabilities
 
-- **M1** Web UI (Next.js/React) — `apps/ui`
-- **M2** API Gateway — Azure API Management
-- **M3** Backend API (FastAPI) — `apps/api`
-- **M4** Orchestration Engine (IOE) — `apps/orchestrator`
-- **M5** Agent Workers (8 services) — `apps/agents/*`
-- **M6** Tool Services — `libs/tools`
-- **M7** Async Job Runner — Azure Container Apps Jobs
-- **M8** PostgreSQL — `infra/`
-- **M9** Redis State/Cache
-- **M10–M16** Azure Services (Blob, AI Search, Entra ID, Key Vault, etc.)
+- Workbook upload, validation, extraction, and historical model selection
+- Formula inventory, compilation, dependency analysis, and persisted baseline or override runs
+- Canonical output discovery, reviewed semantic bindings, and unavailable-state diagnostics
+- Overview, cash-flow, sensitivity, and Monte Carlo analysis
+- Canonical reports, report chat, legacy report and assistant compatibility APIs, and DOCX export
 
-## Quick Start
+## Runtime architecture
+
+| Service | Source | Responsibility |
+| --- | --- | --- |
+| UI | `apps/ui` | Next.js upload and analysis experience |
+| API | `apps/api` | FastAPI routes, persistence, extraction, calculation, and analysis reads |
+| Analysis worker | `apps/api/app/analysis_worker.py` | Claims queued Monte Carlo and canonical report work |
+| PostgreSQL | `docker-compose.yml` | Durable application, workbook, calculation, and report records |
+| Redis | `docker-compose.yml` | Provisioned state/cache service retained for runtime compatibility |
+
+## Workbook-to-analysis flow
+
+1. `POST /api/v1/models/upload` validates and persists workbook evidence.
+2. `ModelUploadOrchestrationService` prepares the calculation inventory and graph after successful extraction.
+3. Calculation APIs create persisted baseline or override runs and expose canonical outputs.
+4. Presentation services resolve reviewed semantic bindings for Overview and Cash Flow.
+5. Sensitivity runs synchronously against persisted calculation inputs; Monte Carlo and canonical reports are claimed by `analysis-worker`.
+6. Missing, unsupported, or ambiguous results remain explicitly unavailable.
+
+## Local setup
 
 ### Backend
+
 ```bash
-cd apps/api
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r apps/api/requirements.txt
+uvicorn apps.api.app.main:app --reload
 ```
 
 ### Frontend
+
 ```bash
 cd apps/ui
 npm install
 npm run dev
 ```
 
-### Docker Compose (all services)
+### Full local stack
+
 ```bash
-docker-compose up --build
+cp .env.example .env
+docker compose up --build
 ```
 
-### Azure Deployment
+Compose starts the API, analysis worker, UI, PostgreSQL, and Redis. The API container applies Alembic migrations before starting Uvicorn.
+
+## Tests
+
 ```bash
-chmod +x infra/deploy.sh
-./infra/deploy.sh
+python -m pytest -q
+cd apps/ui && npm test
 ```
 
-## Project Structure
+## Configuration
+
+Use `.env.example` as the source for database, upload storage, frontend proxy, authentication, and optional Azure OpenAI settings. Never commit real credentials.
+
+## Repository structure
+
+```text
+apps/api/                       FastAPI application, migrations, and worker
+apps/ui/                        Next.js application
+experiments/workbook_agent_poc/ Workbook extraction implementation used by the API image
+libs/calc_engine/               Legacy calculation compatibility functions
+libs/tools/                     Workbook parsing and compatibility tools
+db/                             Bootstrap SQL
+tests/                          Backend unit, integration, and contract tests
 ```
-├── apps/
-│   ├── api/              # FastAPI backend (M3)
-│   ├── orchestrator/     # IOE LangGraph orchestrator (M4)
-│   ├── agents/           # 8 specialized agents (M5)
-│   │   ├── ingest/
-│   │   ├── sensitivity/
-│   │   ├── montecarlo/
-│   │   ├── cashflow/
-│   │   ├── debt/
-│   │   ├── monitor/
-│   │   ├── report/
-│   │   └── assistant/
-│   └── ui/               # Next.js frontend (M1)
-├── libs/
-│   ├── calc_engine/      # Financial formulas (IRR, NPV, DSCR, MC)
-│   └── tools/            # Tool registry (excel_parser, etc.)
-├── infra/                # Azure IaC & deployment scripts
-├── db/                   # Database migrations
-└── tests/                # Unit & integration tests
-```
+
+## API compatibility
+
+Canonical model-version and calculation-run APIs power the current analysis pages. Legacy scenario, report, assistant, debt-analysis, alerts, audit, market-data, and model endpoints remain registered for external consumers.
+
+OpenAPI documentation is available from a running API at `/docs`; health is available at `/health`.

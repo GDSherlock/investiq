@@ -67,21 +67,6 @@ services:
       api:
         condition: service_healthy
 
-  # M4: Orchestrator (IOE)
-  orchestrator:
-    build:
-      context: .
-      dockerfile: apps/orchestrator/Dockerfile
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://investiq:investiq@postgres:5432/investiq
-    depends_on:
-      - postgres
-      - redis
-
   # M8: PostgreSQL with pgvector
   postgres:
     image: pgvector/pgvector:pg16
